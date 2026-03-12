@@ -1,0 +1,693 @@
+/* ════════════════════════════════════════════════════════════
+   ExitNote — Minimalist Dark Theme
+   ════════════════════════════════════════════════════════════ */
+
+/* ── Reset & Tokens ──────────────────────────────────────── */
+:root {
+    /* Palette — cool slate + accent teal */
+    --bg-body: #0f1117;
+    --bg-sidebar: #161822;
+    --bg-sidebar-hover: #1e2030;
+    --bg-surface: #1a1c2a;
+    --bg-editor: #12131e;
+    --bg-input: #1e2030;
+    --bg-modal: #1c1e2e;
+
+    --border: #2a2d3e;
+    --border-light: #353850;
+
+    --text-primary: #e2e4f0;
+    --text-secondary: #8b8faa;
+    --text-muted: #5c5f78;
+
+    --accent: #4fd1c5;
+    --accent-hover: #38b2ac;
+    --accent-glow: rgba(79, 209, 197, 0.15);
+    --accent-subtle: rgba(79, 209, 197, 0.08);
+
+    --danger: #f56565;
+    --danger-hover: #e53e3e;
+
+    --success: #68d391;
+    --warning: #f6ad55;
+
+    /* Typography */
+    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
+
+    /* Spacing */
+    --sidebar-width: 280px;
+    --radius: 8px;
+    --radius-sm: 6px;
+
+    /* Transitions */
+    --transition: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+*,
+*::before,
+*::after {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html,
+body {
+    height: 100%;
+    font-family: var(--font-sans);
+    font-size: 14px;
+    color: var(--text-primary);
+    background: var(--bg-body);
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+}
+
+body {
+    display: flex;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+    width: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--border-light);
+}
+
+
+/* ── Sidebar ─────────────────────────────────────────────── */
+.sidebar {
+    width: var(--sidebar-width);
+    min-width: var(--sidebar-width);
+    height: 100vh;
+    background: var(--bg-sidebar);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.sidebar-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 20px 16px 12px;
+    border-bottom: 1px solid var(--border);
+}
+
+.logo {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--text-primary);
+}
+
+.logo-icon {
+    font-size: 20px;
+}
+
+.sidebar-search {
+    padding: 12px 16px;
+}
+
+.sidebar-search input {
+    width: 100%;
+    padding: 8px 12px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: 13px;
+    font-family: var(--font-sans);
+    outline: none;
+    transition: border-color var(--transition);
+}
+
+.sidebar-search input::placeholder {
+    color: var(--text-muted);
+}
+
+.sidebar-search input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.notebook-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 0;
+}
+
+
+/* ── Notebook Accordion ──────────────────────────────────── */
+.notebook-item {
+    margin: 0 8px 2px;
+}
+
+.notebook-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 10px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-weight: 500;
+    transition: all var(--transition);
+    user-select: none;
+}
+
+.notebook-header:hover {
+    background: var(--bg-sidebar-hover);
+    color: var(--text-primary);
+}
+
+.notebook-header.active {
+    color: var(--accent);
+    background: var(--accent-subtle);
+}
+
+.notebook-chevron {
+    transition: transform var(--transition);
+    flex-shrink: 0;
+    opacity: 0.5;
+}
+
+.notebook-header.expanded .notebook-chevron {
+    transform: rotate(90deg);
+}
+
+.notebook-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.notebook-count {
+    font-size: 11px;
+    color: var(--text-muted);
+    background: var(--bg-input);
+    padding: 1px 6px;
+    border-radius: 10px;
+    font-weight: 400;
+}
+
+.notebook-add-note {
+    opacity: 0;
+    transition: opacity var(--transition);
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 2px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+}
+
+.notebook-header:hover .notebook-add-note {
+    opacity: 1;
+}
+
+.notebook-add-note:hover {
+    color: var(--accent);
+    background: var(--accent-glow);
+}
+
+.note-list {
+    overflow: hidden;
+    max-height: 0;
+    transition: max-height 0.3s ease-out;
+}
+
+.note-list.expanded {
+    max-height: 2000px;
+    transition: max-height 0.5s ease-in;
+}
+
+.note-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px 6px 32px;
+    margin: 1px 8px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    color: var(--text-secondary);
+    font-size: 13px;
+    transition: all var(--transition);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.note-item:hover {
+    background: var(--bg-sidebar-hover);
+    color: var(--text-primary);
+}
+
+.note-item.active {
+    background: var(--accent-subtle);
+    color: var(--accent);
+    font-weight: 500;
+}
+
+.note-item-icon {
+    opacity: 0.4;
+    flex-shrink: 0;
+    font-size: 12px;
+}
+
+
+/* ── Main Pane ───────────────────────────────────────────── */
+.main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--bg-body);
+}
+
+.empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: var(--text-muted);
+    text-align: center;
+    padding: 40px;
+    animation: fadeIn 0.5s ease;
+}
+
+.empty-icon {
+    font-size: 64px;
+    margin-bottom: 16px;
+    opacity: 0.6;
+}
+
+.empty-state h2 {
+    font-size: 22px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+}
+
+.empty-state p {
+    font-size: 14px;
+    max-width: 320px;
+    line-height: 1.5;
+}
+
+
+/* ── Editor ──────────────────────────────────────────────── */
+.editor-container {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    animation: fadeIn 0.3s ease;
+}
+
+.editor-toolbar-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-surface);
+    backdrop-filter: blur(8px);
+}
+
+.note-breadcrumb {
+    font-size: 13px;
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+.editor-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.save-status {
+    font-size: 12px;
+    color: var(--text-muted);
+    transition: all var(--transition);
+    padding-right: 4px;
+}
+
+.save-status.saved {
+    color: var(--success);
+}
+
+/* Editor area fills remaining space */
+.editor-container .EasyMDEContainer {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+.editor-container .EasyMDEContainer .CodeMirror {
+    flex: 1;
+    background: var(--bg-editor);
+    color: var(--text-primary);
+    border: none;
+    border-radius: 0;
+    font-family: var(--font-mono);
+    font-size: 14px;
+    line-height: 1.7;
+    padding: 20px;
+}
+
+.editor-container .EasyMDEContainer .CodeMirror-cursor {
+    border-left-color: var(--accent);
+}
+
+.editor-container .EasyMDEContainer .CodeMirror-selected {
+    background: var(--accent-glow) !important;
+}
+
+.editor-container .EasyMDEContainer .CodeMirror-focused .CodeMirror-selected {
+    background: rgba(79, 209, 197, 0.25) !important;
+}
+
+/* EasyMDE toolbar override */
+.editor-container .editor-toolbar {
+    background: var(--bg-surface);
+    border-top: none;
+    border-bottom: 1px solid var(--border);
+    border-left: none;
+    border-right: none;
+    padding: 4px 12px;
+    opacity: 1;
+}
+
+.editor-container .editor-toolbar button {
+    color: var(--text-secondary) !important;
+    border: none !important;
+    border-radius: var(--radius-sm) !important;
+    transition: all var(--transition);
+}
+
+.editor-container .editor-toolbar button:hover {
+    background: var(--bg-sidebar-hover) !important;
+    color: var(--accent) !important;
+}
+
+.editor-container .editor-toolbar button.active {
+    background: var(--accent-subtle) !important;
+    color: var(--accent) !important;
+}
+
+.editor-container .editor-toolbar i.separator {
+    border-left-color: var(--border) !important;
+}
+
+/* EasyMDE status bar */
+.editor-container .editor-statusbar {
+    background: var(--bg-surface);
+    border-top: 1px solid var(--border);
+    color: var(--text-muted);
+    padding: 6px 12px;
+}
+
+/* EasyMDE preview */
+.editor-container .editor-preview {
+    background: var(--bg-editor);
+    color: var(--text-primary);
+    padding: 24px;
+    font-family: var(--font-sans);
+}
+
+.editor-container .editor-preview pre {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    overflow-x: auto;
+}
+
+.editor-container .editor-preview code {
+    font-family: var(--font-mono);
+    font-size: 13px;
+}
+
+.editor-container .editor-preview h1,
+.editor-container .editor-preview h2,
+.editor-container .editor-preview h3 {
+    color: var(--text-primary);
+    border-bottom-color: var(--border);
+}
+
+.editor-container .editor-preview a {
+    color: var(--accent);
+}
+
+.editor-container .editor-preview blockquote {
+    border-left: 3px solid var(--accent);
+    color: var(--text-secondary);
+    padding-left: 16px;
+}
+
+
+/* ── Buttons ─────────────────────────────────────────────── */
+.btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    border: none;
+    border-radius: var(--radius-sm);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all var(--transition);
+    white-space: nowrap;
+}
+
+.btn-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all var(--transition);
+}
+
+.btn-icon:hover {
+    background: var(--bg-sidebar-hover);
+    color: var(--accent);
+}
+
+.btn-save {
+    background: var(--accent);
+    color: var(--bg-body);
+}
+
+.btn-save:hover {
+    background: var(--accent-hover);
+    box-shadow: 0 2px 12px var(--accent-glow);
+}
+
+.btn-danger {
+    background: transparent;
+    color: var(--text-muted);
+}
+
+.btn-danger:hover {
+    background: rgba(245, 101, 101, 0.1);
+    color: var(--danger);
+}
+
+.btn-primary {
+    background: var(--accent);
+    color: var(--bg-body);
+}
+
+.btn-primary:hover {
+    background: var(--accent-hover);
+}
+
+.btn-ghost {
+    background: transparent;
+    color: var(--text-secondary);
+}
+
+.btn-ghost:hover {
+    background: var(--bg-sidebar-hover);
+    color: var(--text-primary);
+}
+
+
+/* ── Modal ───────────────────────────────────────────────── */
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    animation: fadeIn 0.15s ease;
+}
+
+.modal {
+    background: var(--bg-modal);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    width: 380px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+    animation: slideUp 0.2s ease;
+}
+
+.modal h3 {
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    color: var(--text-primary);
+}
+
+.modal input {
+    width: 100%;
+    padding: 10px 12px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: 14px;
+    font-family: var(--font-sans);
+    outline: none;
+    transition: border-color var(--transition);
+    margin-bottom: 20px;
+}
+
+.modal input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+
+/* ── Sidebar Footer / Sync ───────────────────────────────── */
+.sidebar-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 16px;
+    border-top: 1px solid var(--border);
+    background: var(--bg-sidebar);
+}
+
+.sync-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.sync-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    transition: background var(--transition);
+}
+
+.sync-dot.sync-ok {
+    background: var(--success);
+    box-shadow: 0 0 6px rgba(104, 211, 145, 0.4);
+}
+
+.sync-dot.sync-syncing {
+    background: var(--accent);
+    animation: pulse 1s ease-in-out infinite;
+}
+
+.sync-dot.sync-warn {
+    background: var(--warning);
+}
+
+.sync-dot.sync-error {
+    background: var(--danger);
+    box-shadow: 0 0 6px rgba(245, 101, 101, 0.4);
+}
+
+.sync-dot.sync-conflict {
+    background: var(--danger);
+    animation: pulse 0.6s ease-in-out infinite;
+}
+
+.sync-dot.sync-off {
+    background: var(--text-muted);
+}
+
+.sync-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+@keyframes pulse {
+
+    0%,
+    100% {
+        opacity: 1;
+    }
+
+    50% {
+        opacity: 0.3;
+    }
+}
+
+
+/* ── Animations ──────────────────────────────────────────── */
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+    }
+
+    to {
+        opacity: 1;
+    }
+}
+
+@keyframes slideUp {
+    from {
+        opacity: 0;
+        transform: translateY(12px) scale(0.97);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
