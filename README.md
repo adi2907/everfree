@@ -14,7 +14,7 @@ The Ecosystem:
 - **Web:** A Chrome Extension that edits your GitHub notes directly from the browser (no hosting required).
 - **Mobile:** Access your data via any Git-backed mobile app (e.g., GitJournal).
 
-## 🚀 Quick Start (Development)
+## Quick Start (Development)
 
 Notes are plain `.md` files organized in folders (notebooks) under `~/Documents/ExitNote`.
 
@@ -32,7 +32,7 @@ python run.py
 
 The app runs at [http://localhost:52321](http://localhost:52321) and auto-opens in your default browser.
 
-## 📦 Evernote Migration & Setup
+## Evernote Migration & Setup
 
 ExitNote has a built-in onboarding wizard, but you can also run the migration manually.
 
@@ -46,7 +46,7 @@ chmod +x scripts/export_evernote.sh
 
 Runs: `init-db` → `sync` → `export` → `evernote2md` → `git init` → `git push`.
 
-## 🔄 Git-Backed Sync
+## Git-Backed Sync
 
 Every save, create, and delete auto-commits and pushes to GitHub. On startup, the server pulls the latest changes. If setting up manually:
 
@@ -59,7 +59,7 @@ git add . && git commit -m "init" && git push -u origin main
 
 ⚠️ Make sure your GitHub repo is **PRIVATE**.
 
-## 🍏 Build macOS `.dmg`
+## Build macOS `.dmg`
 
 To package the app for distribution to other users:
 
@@ -72,7 +72,7 @@ chmod +x packaging/build_dmg.sh
 
 Output: `dist/ExitNote.dmg`
 
-## 📂 Project Structure
+## Project Structure
 
 ```text
 ExitNote/
@@ -85,13 +85,13 @@ ExitNote/
 └── README.md
 ```
 
-## ⚙️ Configuration
+## Configuration
 
 | Variable | Default | Description |
 |---|---|---|
 | `EXITNOTE_DIR` | `~/Documents/ExitNote` | Notes directory |
 | `EXITNOTE_PORT` | `52321` | Server port |
 
-## 🤝 Contributing
+## Contributing
 
 This is an open-source alternative to SaaS monopolies. We want people to contribute and help build a completely different, community-driven note-taking ecosystem. Pull requests for the Python backend, UI, and Chrome extension are welcome!
