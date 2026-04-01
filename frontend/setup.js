@@ -5,6 +5,9 @@
 (() => {
     "use strict";
 
+    const EVERNOTE_POLL_INTERVAL_MS = 5000;
+    const EVERNOTE_POLL_RETRY_INTERVAL_MS = 7000;
+
     // ── State ───────────────────────────────────────────────
     let currentStep = 1;
     let skipEvernote = false;
@@ -106,7 +109,7 @@
 
             if (data.status === "running") {
                 $enDetail.textContent = data.detail || "Check your browser to authorize";
-                setTimeout(pollEvernote, 1500);
+                setTimeout(pollEvernote, EVERNOTE_POLL_INTERVAL_MS);
             } else if (data.status === "done") {
                 showEnState("done");
                 $enDoneDetail.textContent = data.detail || "Notes imported";
@@ -117,7 +120,7 @@
                 $enErrDetail.textContent = data.error || "Unknown error";
             }
         } catch {
-            setTimeout(pollEvernote, 2000);
+            setTimeout(pollEvernote, EVERNOTE_POLL_RETRY_INTERVAL_MS);
         }
     }
 

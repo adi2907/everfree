@@ -28,6 +28,10 @@ from fastapi.staticfiles import StaticFiles
 # ── Configuration ────────────────────────────────────────────
 NOTES_DIR = Path(os.environ.get("EXITNOTE_DIR", Path.home() / "Documents" / "ExitNote"))
 PORT = int(os.environ.get("EXITNOTE_PORT", 52321))
+EVERNOTE_SYNC_TIMEOUT = int(os.environ.get("EXITNOTE_EVERNOTE_SYNC_TIMEOUT", 3600))
+EVERNOTE_SYNC_MAX_DOWNLOAD_WORKERS = int(
+    os.environ.get("EXITNOTE_EVERNOTE_SYNC_MAX_DOWNLOAD_WORKERS", 10)
+)
 if os.environ.get("RESOURCEPATH"):
     FRONTEND_DIR = Path(os.environ["RESOURCEPATH"]) / "frontend"
 else:
@@ -325,14 +329,23 @@ def _evernote_sync_pipeline():
         evernote_auth_state["detail"] = "Initializing database..."
         subprocess.run(
             [evernote_backup_bin, "init-db", "--database", db_path],
-            cwd=tmp_dir, env=env, check=True, capture_output=True, text=True,
+            # OAuth in evernote-backup aborts if stdout is not a TTY.
+            # Let it inherit the parent terminal instead of piping output.
+            cwd=tmp_dir, env=env, check=True,
         )
 
         evernote_auth_state["detail"] = "Authenticating & syncing (check your browser)..."
         # evernote-backup sync will open the browser for OAuth automatically
         subprocess.run(
-            [evernote_backup_bin, "sync", "--database", db_path],
-            cwd=tmp_dir, env=env, check=True, capture_output=True, text=True, timeout=600,
+            [
+                evernote_backup_bin,
+                "sync",
+                "--database",
+                db_path,
+                "--max-download-workers",
+                str(EVERNOTE_SYNC_MAX_DOWNLOAD_WORKERS),
+            ],
+            cwd=tmp_dir, env=env, check=True, timeout=EVERNOTE_SYNC_TIMEOUT,
         )
 
         evernote_auth_state["detail"] = "Exporting .enex files..."
@@ -361,7 +374,7 @@ def _evernote_sync_pipeline():
     except subprocess.CalledProcessError as e:
         evernote_auth_state.update({
             "status": "error",
-            "error": f"{' '.join(e.cmd)}: {e.stderr}",
+            "error": f"{' '.join(e.cmd)}: {(e.stderr or str(e)).strip()}",
         })
     except Exception as e:
         evernote_auth_state.update({"status": "error", "error": str(e)})
