@@ -35,12 +35,9 @@
     const $ghPending     = $("github-pending");
     const $ghAuthorized  = $("github-authorized");
     const $ghError       = $("github-error");
-    const $ghClientId    = $("github-client-id");
     const $ghUsername    = $("github-username");
     const $ghRepo        = $("github-repo");
     const $ghErrDetail   = $("github-error-detail");
-    const $deviceCode    = $("device-code");
-    const $deviceLink    = $("device-flow-link");
 
     // Progress
     const $progressIcon    = $("progress-icon");
@@ -146,33 +143,25 @@
     }
 
     $btnGhSignin.addEventListener("click", async () => {
-        const clientId = $ghClientId.value.trim();
-        if (!clientId) {
-            $ghClientId.focus();
-            return alert("Please enter your GitHub OAuth App Client ID first.");
-        }
+        // Open popup synchronously (must happen before any async call or browser blocks it)
+        const popup = window.open("about:blank", "github_auth", "width=600,height=720,scrollbars=yes,resizable=yes");
 
         try {
-            const resp = await fetch("/api/auth/github/start", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ client_id: clientId }),
-            });
+            const resp = await fetch("/api/auth/github/start", { method: "POST" });
 
             if (!resp.ok) {
                 const err = await resp.json();
+                if (popup) popup.close();
                 throw new Error(err.detail || "Failed to start auth");
             }
 
             const data = await resp.json();
-            $deviceCode.textContent = data.user_code;
-            $deviceLink.href = data.verification_uri;
             showGhState("pending");
 
-            // Auto-open GitHub in new tab
-            window.open(data.verification_uri, "_blank");
+            // Navigate the already-open popup to the GitHub auth URL
+            if (popup) popup.location.href = data.auth_url;
 
-            // Start polling
+            // Poll status until GitHub redirects back and we capture the token
             startGitHubPoll();
         } catch (e) {
             showGhState("error");
@@ -184,7 +173,7 @@
         if (githubPollTimer) clearInterval(githubPollTimer);
         githubPollTimer = setInterval(async () => {
             try {
-                const resp = await fetch("/api/auth/github/poll", { method: "POST" });
+                const resp = await fetch("/api/auth/github/status");
                 const data = await resp.json();
 
                 if (data.status === "authorized") {
@@ -200,7 +189,7 @@
             } catch {
                 // network error, keep polling
             }
-        }, 5000);
+        }, 2000);
     }
 
     $btnGhRetry.addEventListener("click", () => showGhState("setup"));
@@ -336,7 +325,13 @@
         try {
             const resp = await fetch("/api/setup/status");
             const data = await resp.json();
-            if (data.configured) window.location.href = "/";
+            if (data.configured) {
+                window.location.href = "/";
+            } else if (data.evernote_synced) {
+                // Notes already imported — skip straight to GitHub step
+                skipEvernote = true;
+                goToStep(2);
+            }
         } catch { /* proceed with setup */ }
     })();
 })();

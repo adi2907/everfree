@@ -5,12 +5,14 @@ On startup:
   - If ~/Documents/ExitNote exists and is a git repo → boot normally
   - Otherwise → serve setup.html onboarding wizard
 
-Setup wizard orchestrates Evernote OAuth → GitHub Device Flow → repo creation,
+Setup wizard orchestrates Evernote OAuth → GitHub OAuth → repo creation,
 all without the user ever touching a terminal or pasting tokens.
 """
 
 import os
 import re
+import sys
+import secrets
 import shutil
 import asyncio
 import logging
@@ -39,6 +41,8 @@ else:
 
 logger = logging.getLogger("exitnote")
 
+AUTH_FILE = Path.home() / ".exitnote_auth.json"
+
 # ── Shared state ─────────────────────────────────────────────
 setup_progress = {
     "running": False,
@@ -49,15 +53,42 @@ setup_progress = {
 }
 
 github_auth_state = {
-    "device_code": None,
-    "user_code": None,
-    "verification_uri": None,
-    "interval": 5,
     "access_token": None,
     "username": None,
     "status": "idle",  # idle | pending | authorized | error
     "error": None,
+    "client_id": None,
+    "client_secret": None,
+    "oauth_state": None,  # CSRF token
 }
+
+# Restore a previously saved GitHub token so restarts don't lose auth
+def _load_saved_auth() -> None:
+    try:
+        if AUTH_FILE.exists():
+            import json
+            data = json.loads(AUTH_FILE.read_text())
+            if data.get("access_token") and data.get("username"):
+                github_auth_state.update({
+                    "access_token": data["access_token"],
+                    "username": data["username"],
+                    "status": "authorized",
+                })
+    except Exception:
+        pass
+
+def _save_auth() -> None:
+    try:
+        import json
+        AUTH_FILE.write_text(json.dumps({
+            "access_token": github_auth_state["access_token"],
+            "username": github_auth_state["username"],
+        }))
+        AUTH_FILE.chmod(0o600)
+    except Exception:
+        pass
+
+_load_saved_auth()
 
 evernote_auth_state = {
     "status": "idle",  # idle | running | done | error
@@ -71,6 +102,11 @@ def _is_configured() -> bool:
     return NOTES_DIR.is_dir() and (NOTES_DIR / ".git").is_dir()
 
 
+def _is_evernote_synced() -> bool:
+    """Notes have already been imported from Evernote (dir exists with content)."""
+    return NOTES_DIR.is_dir() and any(NOTES_DIR.iterdir())
+
+
 def _get_subprocess_env() -> dict[str, str]:
     """
     Returns an environment dict with standard macOS paths appended.
@@ -80,6 +116,8 @@ def _get_subprocess_env() -> dict[str, str]:
     env = os.environ.copy()
     current_path = env.get("PATH", "")
     paths_to_add = [
+        # Prefer the bin dir of the running Python (works in any venv or install)
+        str(Path(sys.executable).parent),
         "/opt/homebrew/bin",
         "/usr/local/bin",
         "/usr/bin",
@@ -166,117 +204,111 @@ app = FastAPI(title="ExitNote", version="4.0.0", lifespan=lifespan)
 
 
 # ══════════════════════════════════════════════════════════════
-#  GITHUB DEVICE FLOW OAUTH
+#  GITHUB OAUTH (redirect flow)
 # ══════════════════════════════════════════════════════════════
 
 @app.post("/api/auth/github/start")
-async def github_auth_start(request: Request):
-    """
-    Start the GitHub Device Flow.
-    Requires: { "client_id": "Ox..." } from user's registered OAuth App.
-    Returns the user_code and verification_uri for the user to authorize.
-    """
-    body = await request.json()
-    client_id = body.get("client_id", "").strip()
-    if not client_id:
-        raise HTTPException(status_code=400, detail="GitHub OAuth App client_id is required")
-
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            "https://github.com/login/device/code",
-            data={"client_id": client_id, "scope": "repo"},
-            headers={"Accept": "application/json"},
-        )
-
-    if resp.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"GitHub API error: {resp.text}")
-
-    data = resp.json()
-    if "error" in data:
-        raise HTTPException(status_code=400, detail=data.get("error_description", data["error"]))
-
+async def github_auth_start():
+    """Start the GitHub OAuth redirect flow using the app's built-in credentials."""
+    state = secrets.token_hex(16)
     github_auth_state.update({
-        "device_code": data["device_code"],
-        "user_code": data["user_code"],
-        "verification_uri": data.get("verification_uri", "https://github.com/login/device"),
-        "interval": data.get("interval", 5),
         "access_token": None,
         "username": None,
         "status": "pending",
         "error": None,
-        "client_id": client_id,
+        "client_id": GITHUB_CLIENT_ID,
+        "client_secret": GITHUB_CLIENT_SECRET,
+        "oauth_state": state,
     })
 
-    return {
-        "user_code": data["user_code"],
-        "verification_uri": data.get("verification_uri", "https://github.com/login/device"),
-        "expires_in": data.get("expires_in", 900),
-    }
+    auth_url = (
+        "https://github.com/login/oauth/authorize"
+        f"?client_id={GITHUB_CLIENT_ID}"
+        f"&redirect_uri=http://localhost:{PORT}/api/auth/github/callback"
+        f"&scope=repo"
+        f"&state={state}"
+    )
+    return {"auth_url": auth_url}
 
 
-@app.post("/api/auth/github/poll")
-async def github_auth_poll():
-    """
-    Poll GitHub to check if the user has authorized the device.
-    Call this repeatedly from the frontend until status is 'authorized' or 'error'.
-    """
-    if github_auth_state["status"] != "pending":
-        return {
-            "status": github_auth_state["status"],
-            "username": github_auth_state.get("username"),
-        }
+@app.get("/api/auth/github/callback")
+async def github_auth_callback(code: str = None, state: str = None, error: str = None):
+    """Handle the redirect from GitHub after the user authorizes (or denies)."""
 
-    client_id = github_auth_state.get("client_id", "")
-    device_code = github_auth_state["device_code"]
+    def _close_popup(message: str, success: bool = False) -> HTMLResponse:
+        color = "#2da44e" if success else "#d1242f"
+        icon = "✓" if success else "✗"
+        return HTMLResponse(f"""<!DOCTYPE html>
+<html>
+<head>
+  <title>ExitNote — GitHub Auth</title>
+  <style>
+    body {{ font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+           display: flex; align-items: center; justify-content: center;
+           height: 100vh; margin: 0; background: #f6f8fa; }}
+    .box {{ text-align: center; padding: 40px 48px; background: #fff;
+            border-radius: 12px; box-shadow: 0 2px 16px rgba(0,0,0,.12); }}
+    .icon {{ font-size: 48px; color: {color}; margin-bottom: 12px; }}
+    p {{ color: #57606a; margin: 8px 0 0; }}
+  </style>
+</head>
+<body>
+  <div class="box">
+    <div class="icon">{icon}</div>
+    <h2 style="margin:0">{message}</h2>
+    <p>You can close this window and return to ExitNote.</p>
+  </div>
+  <script>setTimeout(() => {{ try {{ window.close(); }} catch(e) {{}} }}, 1500);</script>
+</body>
+</html>""")
 
+    if error:
+        github_auth_state.update({"status": "error", "error": f"GitHub authorization denied: {error}"})
+        return _close_popup("Authorization denied")
+
+    if not state or state != github_auth_state.get("oauth_state"):
+        github_auth_state.update({"status": "error", "error": "Invalid state — possible CSRF. Please try again."})
+        return _close_popup("Security error — please try again")
+
+    if not code:
+        github_auth_state.update({"status": "error", "error": "No authorization code received from GitHub."})
+        return _close_popup("Authorization failed")
+
+    # Exchange code → access token
     async with httpx.AsyncClient() as client:
         resp = await client.post(
             "https://github.com/login/oauth/access_token",
             data={
-                "client_id": client_id,
-                "device_code": device_code,
-                "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+                "client_id": github_auth_state["client_id"],
+                "client_secret": github_auth_state["client_secret"],
+                "code": code,
+                "redirect_uri": f"http://localhost:{PORT}/api/auth/github/callback",
             },
             headers={"Accept": "application/json"},
         )
 
     data = resp.json()
+    if "error" in data:
+        msg = data.get("error_description", data["error"])
+        github_auth_state.update({"status": "error", "error": msg})
+        return _close_popup("Authorization failed")
 
-    if "access_token" in data:
-        token = data["access_token"]
-        # Fetch username
-        async with httpx.AsyncClient() as client:
-            user_resp = await client.get(
-                "https://api.github.com/user",
-                headers={"Authorization": f"token {token}"},
-            )
-        username = user_resp.json().get("login", "unknown") if user_resp.status_code == 200 else "unknown"
+    token = data.get("access_token")
+    if not token:
+        github_auth_state.update({"status": "error", "error": "No access token received from GitHub."})
+        return _close_popup("Authorization failed")
 
-        github_auth_state.update({
-            "access_token": token,
-            "username": username,
-            "status": "authorized",
-        })
-        return {"status": "authorized", "username": username}
+    # Fetch GitHub username
+    async with httpx.AsyncClient() as client:
+        user_resp = await client.get(
+            "https://api.github.com/user",
+            headers={"Authorization": f"token {token}"},
+        )
+    username = user_resp.json().get("login", "unknown") if user_resp.status_code == 200 else "unknown"
 
-    error = data.get("error", "")
-    if error == "authorization_pending":
-        return {"status": "pending"}
-    elif error == "slow_down":
-        github_auth_state["interval"] = data.get("interval", github_auth_state["interval"] + 5)
-        return {"status": "pending", "slow_down": True}
-    elif error == "expired_token":
-        github_auth_state["status"] = "error"
-        github_auth_state["error"] = "Authorization expired. Please try again."
-        return {"status": "error", "detail": "Authorization expired"}
-    elif error == "access_denied":
-        github_auth_state["status"] = "error"
-        github_auth_state["error"] = "Access denied by user."
-        return {"status": "error", "detail": "Access denied"}
-    else:
-        github_auth_state["status"] = "error"
-        github_auth_state["error"] = data.get("error_description", error)
-        return {"status": "error", "detail": github_auth_state["error"]}
+    github_auth_state.update({"access_token": token, "username": username, "status": "authorized"})
+    _save_auth()
+    return _close_popup(f"Signed in as {username}!", success=True)
 
 
 @app.get("/api/auth/github/status")
@@ -284,20 +316,22 @@ async def github_auth_status():
     return {
         "status": github_auth_state["status"],
         "username": github_auth_state.get("username"),
-        "user_code": github_auth_state.get("user_code"),
+        "detail": github_auth_state.get("error"),
     }
 
 
 # ══════════════════════════════════════════════════════════════
-#  EVERNOTE AUTH (via evernote-backup's built-in OAuth)
+#  EVERNOTE AUTH + SYNC
 # ══════════════════════════════════════════════════════════════
+
+EVERNOTE_OAUTH_PORT = int(os.environ.get("EXITNOTE_EVERNOTE_OAUTH_PORT", 10500))
+GITHUB_CLIENT_ID = os.environ.get("EXITNOTE_GITHUB_CLIENT_ID", "Ov23liunA4WFlhQQO9KG")
+GITHUB_CLIENT_SECRET = os.environ.get("EXITNOTE_GITHUB_CLIENT_SECRET", "3e1d44c20bb5a5158f63529fbe239154c01c6cb5")
+
 
 @app.post("/api/auth/evernote/start")
 async def evernote_auth_start():
-    """
-    Start the Evernote sync process. evernote-backup handles OAuth
-    by opening the user's browser automatically.
-    """
+    """Start Evernote OAuth + full sync pipeline in a background thread."""
     if evernote_auth_state["status"] == "running":
         return {"status": "running", "detail": "Already running"}
 
@@ -310,9 +344,23 @@ async def evernote_auth_start():
 
 
 def _evernote_sync_pipeline():
-    """Run evernote-backup init + sync + export + convert in background."""
+    """
+    Full pipeline:
+      1. OAuth via evernote-backup's Python API (no TTY needed)
+      2. evernote-backup init-db --token <token>
+      3. evernote-backup sync
+      4. evernote-backup export
+      5. evernote2md convert
+    """
     global evernote_auth_state
     try:
+        from evernote_backup.evernote_client_oauth import (
+            EvernoteOAuthCallbackHandler,
+            EvernoteOAuthClient,
+            OAuthDeclinedError,
+        )
+        from evernote_backup.cli_app_util import get_api_data
+
         tmp_dir = tempfile.mkdtemp(prefix="exitnote_en_")
         db_path = os.path.join(tmp_dir, "en_backup.db")
         enex_dir = os.path.join(tmp_dir, "enex_export")
@@ -326,28 +374,46 @@ def _evernote_sync_pipeline():
         if not evernote2md_bin:
             raise FileNotFoundError("evernote2md is not installed or not found in PATH")
 
+        # Step 1: OAuth — use the Python API directly so no TTY is required
+        evernote_auth_state["detail"] = "Opening Evernote login in your browser..."
+        consumer_key, consumer_secret = get_api_data("evernote", None)
+        oauth_client = EvernoteOAuthClient(
+            backend="evernote",
+            consumer_key=consumer_key,
+            consumer_secret=consumer_secret,
+        )
+        oauth_handler = EvernoteOAuthCallbackHandler(
+            oauth_client, EVERNOTE_OAUTH_PORT, "localhost"
+        )
+        oauth_url = oauth_handler.get_oauth_url()
+        webbrowser.open(oauth_url)
+
+        evernote_auth_state["detail"] = "Waiting for Evernote authorization (check your browser)..."
+        try:
+            token = oauth_handler.wait_for_token()
+        except OAuthDeclinedError:
+            raise RuntimeError("Evernote authorization was declined.")
+
+        # Step 2: init-db with the token we just obtained (bypasses TTY check)
         evernote_auth_state["detail"] = "Initializing database..."
         subprocess.run(
-            [evernote_backup_bin, "init-db", "--database", db_path],
-            # OAuth in evernote-backup aborts if stdout is not a TTY.
-            # Let it inherit the parent terminal instead of piping output.
-            cwd=tmp_dir, env=env, check=True,
+            [evernote_backup_bin, "init-db", "--database", db_path, "--token", token],
+            cwd=tmp_dir, env=env, check=True, capture_output=True, text=True,
         )
 
-        evernote_auth_state["detail"] = "Authenticating & syncing (check your browser)..."
-        # evernote-backup sync will open the browser for OAuth automatically
+        # Step 3: sync
+        evernote_auth_state["detail"] = "Syncing notes from Evernote..."
         subprocess.run(
             [
-                evernote_backup_bin,
-                "sync",
-                "--database",
-                db_path,
-                "--max-download-workers",
-                str(EVERNOTE_SYNC_MAX_DOWNLOAD_WORKERS),
+                evernote_backup_bin, "sync",
+                "--database", db_path,
+                "--max-download-workers", str(EVERNOTE_SYNC_MAX_DOWNLOAD_WORKERS),
             ],
             cwd=tmp_dir, env=env, check=True, timeout=EVERNOTE_SYNC_TIMEOUT,
+            capture_output=True, text=True,
         )
 
+        # Step 4: export to .enex
         evernote_auth_state["detail"] = "Exporting .enex files..."
         os.makedirs(enex_dir, exist_ok=True)
         subprocess.run(
@@ -355,6 +421,7 @@ def _evernote_sync_pipeline():
             cwd=tmp_dir, env=env, check=True, capture_output=True, text=True,
         )
 
+        # Step 5: convert to Markdown
         evernote_auth_state["detail"] = "Converting to Markdown..."
         NOTES_DIR.mkdir(parents=True, exist_ok=True)
         enex_files = list(Path(enex_dir).glob("*.enex"))
@@ -369,7 +436,10 @@ def _evernote_sync_pipeline():
             )
 
         shutil.rmtree(tmp_dir, ignore_errors=True)
-        evernote_auth_state.update({"status": "done", "detail": f"Imported {len(enex_files)} notebook(s)"})
+        evernote_auth_state.update({
+            "status": "done",
+            "detail": f"Imported {len(enex_files)} notebook(s)",
+        })
 
     except subprocess.CalledProcessError as e:
         evernote_auth_state.update({
@@ -391,7 +461,11 @@ async def evernote_auth_status():
 
 @app.get("/api/setup/status")
 async def get_setup_status():
-    return {"configured": _is_configured(), "notes_dir": str(NOTES_DIR)}
+    return {
+        "configured": _is_configured(),
+        "evernote_synced": _is_evernote_synced(),
+        "notes_dir": str(NOTES_DIR),
+    }
 
 
 @app.get("/api/setup/progress")
