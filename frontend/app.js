@@ -9,7 +9,7 @@
     let notebooks = [];
     let currentNotebook = null;
     let currentNote = null;
-    let easyMDE = null;
+    let editor = null;
     let isDirty = false;
 
     // ── DOM References ──────────────────────────────────────
@@ -21,6 +21,7 @@
     const $btnSave = document.getElementById("btn-save");
     const $btnDeleteNote = document.getElementById("btn-delete-note");
     const $btnNewNotebook = document.getElementById("btn-new-notebook");
+    const $btnTheme = document.getElementById("btn-theme");
     const $btnSync = document.getElementById("btn-sync");
     const $syncIndicator = document.getElementById("sync-indicator");
     const $syncText = document.getElementById("sync-text");
@@ -241,13 +242,12 @@
             $breadcrumb.textContent = `${notebook} / ${note.replace(/\.md$/, "")}`;
             $saveStatus.textContent = "";
 
-            if (easyMDE) {
-                easyMDE.toTextArea();
-                easyMDE = null;
+            if (editor) {
+                editor.destroy();
+                editor = null;
             }
 
-            document.getElementById("editor").value = data.content;
-            initEditor();
+            initEditor(data.content);
             renderSidebar($searchInput.value);
         } catch (err) {
             console.error("Failed to open note:", err);
@@ -255,29 +255,22 @@
         }
     }
 
-    // ── Initialize EasyMDE ──────────────────────────────────
-    function initEditor() {
-        easyMDE = new EasyMDE({
-            element: document.getElementById("editor"),
-            spellChecker: false,
-            autofocus: true,
-            status: ["lines", "words", "cursor"],
+    // ── Initialize Toast UI Editor (WYSIWYG) ─────────────────
+    function initEditor(content = "") {
+        editor = new toastui.Editor({
+            el: document.getElementById("editor"),
+            height: "100%",
+            initialEditType: "wysiwyg",
+            initialValue: content,
             placeholder: "Start writing…",
-            tabSize: 4,
-            renderingConfig: {
-                codeSyntaxHighlighting: true,
-                hljs: window.hljs,
-            },
-            toolbar: [
-                "bold", "italic", "heading", "|",
-                "code", "quote", "unordered-list", "ordered-list", "|",
-                "link", "image", "table", "horizontal-rule", "|",
-                "preview", "side-by-side", "fullscreen", "|",
-                "guide"
-            ],
         });
 
-        easyMDE.codemirror.on("change", () => {
+        // Apply current theme to the newly created editor
+        const isDark = (localStorage.getItem("exitnote-theme") || "dark") === "dark";
+        const tuiWrapper = document.querySelector(".toastui-editor-defaultUI");
+        if (tuiWrapper) tuiWrapper.classList.toggle("toastui-editor-dark", isDark);
+
+        editor.on("change", () => {
             if (!isDirty) {
                 isDirty = true;
                 $saveStatus.textContent = "Unsaved changes";
@@ -288,7 +281,7 @@
 
     // ── Save Note ───────────────────────────────────────────
     async function saveNote() {
-        if (!currentNotebook || !currentNote || !easyMDE) return;
+        if (!currentNotebook || !currentNote || !editor) return;
 
         try {
             $saveStatus.textContent = "Saving…";
@@ -297,7 +290,7 @@
 
             await API.put(
                 `/api/notebooks/${encodeURIComponent(currentNotebook)}/notes/${encodeURIComponent(currentNote)}`,
-                { content: easyMDE.value() }
+                { content: editor.getMarkdown() }
             );
 
             isDirty = false;
@@ -334,9 +327,9 @@
                 `/api/notebooks/${encodeURIComponent(currentNotebook)}/notes/${encodeURIComponent(currentNote)}`
             );
 
-            if (easyMDE) {
-                easyMDE.toTextArea();
-                easyMDE = null;
+            if (editor) {
+                editor.destroy();
+                editor = null;
             }
             currentNote = null;
             isDirty = false;
@@ -404,6 +397,29 @@
     function escapeAttr(str) {
         return str.replace(/"/g, "&quot;").replace(/'/g, "&#39;");
     }
+
+    // ── Theme ────────────────────────────────────────────────
+    const $tuiDarkCss = document.getElementById("tui-dark-css");
+
+    function applyTheme(theme) {
+        document.documentElement.setAttribute("data-theme", theme);
+        const isDark = theme === "dark";
+        $tuiDarkCss.disabled = !isDark;
+        // Toast UI Editor dark mode requires this class on its wrapper
+        const tuiWrapper = document.querySelector(".toastui-editor-defaultUI");
+        if (tuiWrapper) tuiWrapper.classList.toggle("toastui-editor-dark", isDark);
+        document.getElementById("theme-icon-dark").style.display = isDark ? "block" : "none";
+        document.getElementById("theme-icon-light").style.display = isDark ? "none" : "block";
+        localStorage.setItem("exitnote-theme", theme);
+    }
+
+    $btnTheme.addEventListener("click", () => {
+        const current = document.documentElement.getAttribute("data-theme") || "dark";
+        applyTheme(current === "dark" ? "light" : "dark");
+    });
+
+    // Apply saved theme on load (default: dark)
+    applyTheme(localStorage.getItem("exitnote-theme") || "dark");
 
     // ── Event Bindings ──────────────────────────────────────
     $btnSave.addEventListener("click", saveNote);

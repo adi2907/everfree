@@ -44,6 +44,34 @@
     --transition: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+/* ── Light Theme ─────────────────────────────────────────── */
+[data-theme="light"] {
+    --bg-body: #f5f6fa;
+    --bg-sidebar: #ffffff;
+    --bg-sidebar-hover: #f0f1f5;
+    --bg-surface: #ffffff;
+    --bg-editor: #ffffff;
+    --bg-input: #f0f1f5;
+    --bg-modal: #ffffff;
+
+    --border: #e2e4ec;
+    --border-light: #d0d3df;
+
+    --text-primary: #1a1c2a;
+    --text-secondary: #5c5f78;
+    --text-muted: #9b9eb8;
+
+    --accent: #0d9488;
+    --accent-hover: #0f766e;
+    --accent-glow: rgba(13, 148, 136, 0.12);
+    --accent-subtle: rgba(13, 148, 136, 0.07);
+
+    --danger: #dc2626;
+    --danger-hover: #b91c1c;
+    --success: #16a34a;
+    --warning: #d97706;
+}
+
 *,
 *::before,
 *::after {
@@ -357,113 +385,94 @@ body {
     color: var(--success);
 }
 
-/* Editor area fills remaining space */
-.editor-container .EasyMDEContainer {
+/* ── Toast UI Editor ─────────────────────────────────────── */
+
+/* Fill remaining space */
+.editor-container .toastui-editor-defaultUI {
     flex: 1;
     display: flex;
     flex-direction: column;
-}
-
-.editor-container .EasyMDEContainer .CodeMirror {
-    flex: 1;
-    background: var(--bg-editor);
-    color: var(--text-primary);
     border: none;
-    border-radius: 0;
-    font-family: var(--font-mono);
-    font-size: 14px;
-    line-height: 1.7;
-    padding: 20px;
-}
-
-.editor-container .EasyMDEContainer .CodeMirror-cursor {
-    border-left-color: var(--accent);
-}
-
-.editor-container .EasyMDEContainer .CodeMirror-selected {
-    background: var(--accent-glow) !important;
-}
-
-.editor-container .EasyMDEContainer .CodeMirror-focused .CodeMirror-selected {
-    background: rgba(79, 209, 197, 0.25) !important;
-}
-
-/* EasyMDE toolbar override */
-.editor-container .editor-toolbar {
-    background: var(--bg-surface);
-    border-top: none;
-    border-bottom: 1px solid var(--border);
-    border-left: none;
-    border-right: none;
-    padding: 4px 12px;
-    opacity: 1;
-}
-
-.editor-container .editor-toolbar button {
-    color: var(--text-secondary) !important;
-    border: none !important;
-    border-radius: var(--radius-sm) !important;
-    transition: all var(--transition);
-}
-
-.editor-container .editor-toolbar button:hover {
-    background: var(--bg-sidebar-hover) !important;
-    color: var(--accent) !important;
-}
-
-.editor-container .editor-toolbar button.active {
-    background: var(--accent-subtle) !important;
-    color: var(--accent) !important;
-}
-
-.editor-container .editor-toolbar i.separator {
-    border-left-color: var(--border) !important;
-}
-
-/* EasyMDE status bar */
-.editor-container .editor-statusbar {
-    background: var(--bg-surface);
-    border-top: 1px solid var(--border);
-    color: var(--text-muted);
-    padding: 6px 12px;
-}
-
-/* EasyMDE preview */
-.editor-container .editor-preview {
     background: var(--bg-editor);
-    color: var(--text-primary);
-    padding: 24px;
-    font-family: var(--font-sans);
 }
 
-.editor-container .editor-preview pre {
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 16px;
-    overflow-x: auto;
+.editor-container .toastui-editor-main {
+    flex: 1;
 }
 
-.editor-container .editor-preview code {
-    font-family: var(--font-mono);
-    font-size: 13px;
+/* Hide the markdown/wysiwyg tab switcher */
+.toastui-editor-mode-switch {
+    display: none !important;
 }
 
-.editor-container .editor-preview h1,
-.editor-container .editor-preview h2,
-.editor-container .editor-preview h3 {
-    color: var(--text-primary);
-    border-bottom-color: var(--border);
+/* Toolbar */
+.toastui-editor-defaultUI .toastui-editor-toolbar {
+    background: var(--bg-surface) !important;
+    border-bottom: 1px solid var(--border) !important;
 }
 
-.editor-container .editor-preview a {
-    color: var(--accent);
+.toastui-editor-defaultUI .toastui-editor-toolbar-icons {
+    background-color: transparent !important;
+    border: none !important;
 }
 
-.editor-container .editor-preview blockquote {
-    border-left: 3px solid var(--accent);
-    color: var(--text-secondary);
-    padding-left: 16px;
+.toastui-editor-defaultUI .toastui-editor-toolbar-icons:hover {
+    background-color: var(--bg-sidebar-hover) !important;
+}
+
+.toastui-editor-defaultUI .toastui-editor-toolbar-icons.active {
+    background-color: var(--accent-subtle) !important;
+}
+
+/* WYSIWYG content area */
+.toastui-editor-ww-container,
+.toastui-editor-ww-container .toastui-editor {
+    background: var(--bg-editor) !important;
+}
+
+.toastui-editor-contents,
+.toastui-editor-ww-container .ProseMirror {
+    background: var(--bg-editor) !important;
+    color: var(--text-primary) !important;
+    font-family: var(--font-sans) !important;
+    font-size: 15px !important;
+    line-height: 1.75 !important;
+}
+
+/* Ensure all text nodes inside editor inherit the correct color */
+.toastui-editor-contents p,
+.toastui-editor-contents li,
+.toastui-editor-contents h1,
+.toastui-editor-contents h2,
+.toastui-editor-contents h3,
+.toastui-editor-contents h4,
+.toastui-editor-contents h5,
+.toastui-editor-contents h6 {
+    color: var(--text-primary) !important;
+}
+
+/* Code blocks */
+.toastui-editor-contents pre {
+    background: var(--bg-surface) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: var(--radius) !important;
+}
+
+.toastui-editor-contents code {
+    background: var(--bg-surface) !important;
+    color: var(--accent) !important;
+    font-family: var(--font-mono) !important;
+}
+
+/* Blockquote */
+.toastui-editor-contents blockquote {
+    border-left: 3px solid var(--accent) !important;
+    color: var(--text-secondary) !important;
+}
+
+/* Links */
+.toastui-editor-contents a {
+    color: var(--accent) !important;
 }
 
 
