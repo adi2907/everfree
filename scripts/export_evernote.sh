@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────
-# ExitNote — Evernote → Markdown → Git Migration Pipeline
+# EverFree — Evernote → Markdown → Git Migration Pipeline
 #
 # Prerequisites:
 #   pip install evernote-backup
@@ -15,12 +15,12 @@
 set -euo pipefail
 
 # ── Configuration ────────────────────────────────────────────
-NOTES_DIR="${EXITNOTE_DIR:-$HOME/Documents/ExitNote}"
+NOTES_DIR="${EVERFREE_DIR:-$HOME/Documents/EverFree}"
 DB_FILE="en_backup.db"
 ENEX_EXPORT_DIR="enex_export"
 
 echo "╔══════════════════════════════════════════════════╗"
-echo "║    ExitNote — Evernote → Git Migration Pipeline  ║"
+echo "║    EverFree — Evernote → Git Migration Pipeline  ║"
 echo "╚══════════════════════════════════════════════════╝"
 echo ""
 echo "Notes will be saved to: $NOTES_DIR"
@@ -150,5 +150,5 @@ echo "║                                                  ║"
 echo "║  Notes: $NOTES_DIR"
 echo "║  Git:   Synced to GitHub (private repo)          ║"
 echo "║                                                  ║"
-echo "║  Run 'python run.py' to start ExitNote.          ║"
+echo "║  Run 'python run.py' to start EverFree.          ║"
 echo "╚══════════════════════════════════════════════════╝"

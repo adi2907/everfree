@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────
-# ExitNote — Build macOS .app and .dmg
+# EverFree — Build macOS .app and .dmg
 #
 # Prerequisites:
 #   brew install create-dmg
@@ -16,11 +16,11 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$PROJECT_DIR/build"
 DIST_DIR="$PROJECT_DIR/dist"
-APP_NAME="ExitNote"
+APP_NAME="EverFree"
 DMG_NAME="${APP_NAME}.dmg"
 
 echo "╔══════════════════════════════════════════════════╗"
-echo "║      ExitNote — macOS Build Pipeline              ║"
+echo "║      EverFree — macOS Build Pipeline              ║"
 echo "╚══════════════════════════════════════════════════╝"
 echo ""
 

@@ -1,5 +1,5 @@
 /* ════════════════════════════════════════════════════════════
-   ExitNote — Setup Wizard Styles (OAuth Flows)
+   EverFree — Setup Wizard Styles (OAuth Flows)
    ════════════════════════════════════════════════════════════ */
 
 :root {
@@ -140,7 +140,10 @@ code { font-family: var(--font-mono); font-size: 12px; background: var(--bg-inpu
     background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius);
 }
 .device-flow-instruction { color: var(--text-secondary); font-size: 14px; margin-bottom: 12px; }
+.device-flow-label { color: var(--text-secondary); font-size: 14px; margin-bottom: 12px; }
+.device-flow-label a { color: var(--accent); }
 
+.device-flow-code,
 .device-code {
     font-family: var(--font-mono); font-size: 32px; font-weight: 700;
     letter-spacing: 4px; color: var(--accent);

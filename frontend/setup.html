@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ExitNote — Setup</title>
-    <meta name="description" content="ExitNote setup wizard: connect Evernote and GitHub.">
+    <title>EverFree — Setup</title>
+    <meta name="description" content="EverFree setup wizard: connect Evernote and GitHub.">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -16,7 +16,7 @@
         <header class="setup-header">
             <div class="logo">
                 <span class="logo-icon">📝</span>
-                <span class="logo-text">ExitNote</span>
+                <span class="logo-text">EverFree</span>
             </div>
             <p class="setup-subtitle">Let's get your notes set up</p>
         </header>
@@ -122,12 +122,14 @@
                     </div>
                 </div>
 
-                <!-- Waiting for popup authorization -->
+                <!-- Waiting for device authorization -->
                 <div id="github-pending" class="hidden">
                     <div class="device-flow-card">
+                        <p class="device-flow-label">Enter this code at <a id="github-verification-uri" href="https://github.com/login/device" target="_blank">github.com/login/device</a></p>
+                        <div class="device-flow-code" id="github-user-code">––––</div>
                         <p class="device-flow-waiting">
                             <span class="spinner spinner-sm"></span>
-                            A GitHub window has opened — authorize ExitNote there, then return here.
+                            Waiting for authorization…
                         </p>
                     </div>
                 </div>
@@ -145,8 +147,8 @@
                     <div class="form-group" style="margin-top: 20px;">
                         <label for="github-repo">Repository Name</label>
                         <input type="text" id="github-repo"
-                               placeholder="exitnote-notes"
-                               value="exitnote-notes"
+                               placeholder="everfree-notes"
+                               value="everfree-notes"
                                autocomplete="off">
                         <p class="field-hint">This private repo will be created in your GitHub account.</p>
                     </div>

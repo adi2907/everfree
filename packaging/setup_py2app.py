@@ -1,5 +1,5 @@
 """
-ExitNote — py2app Configuration
+EverFree — py2app Configuration
 Bundles the FastAPI server + frontend into a standalone macOS .app.
 
 Usage:
@@ -52,9 +52,9 @@ OPTIONS = {
         "uvicorn.lifespan.on",
     ],
     "plist": {
-        "CFBundleName": "ExitNote",
-        "CFBundleDisplayName": "ExitNote",
-        "CFBundleIdentifier": "com.exitnote.app",
+        "CFBundleName": "EverFree",
+        "CFBundleDisplayName": "EverFree",
+        "CFBundleIdentifier": "com.everfree.app",
         "CFBundleVersion": "1.0.0",
         "CFBundleShortVersionString": "1.0.0",
         "LSMinimumSystemVersion": "11.0",
@@ -63,7 +63,7 @@ OPTIONS = {
 }
 
 setup(
-    name="ExitNote",
+    name="EverFree",
     app=APP,
     data_files=DATA_FILES,
     options={"py2app": OPTIONS},

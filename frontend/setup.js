@@ -1,5 +1,5 @@
 /* ════════════════════════════════════════════════════════════
-   ExitNote — Setup Wizard (OAuth Flows)
+   EverFree — Setup Wizard (OAuth Flows)
    ════════════════════════════════════════════════════════════ */
 
 (() => {
@@ -143,25 +143,26 @@
     }
 
     $btnGhSignin.addEventListener("click", async () => {
-        // Open popup synchronously (must happen before any async call or browser blocks it)
-        const popup = window.open("about:blank", "github_auth", "width=600,height=720,scrollbars=yes,resizable=yes");
-
         try {
             const resp = await fetch("/api/auth/github/start", { method: "POST" });
 
             if (!resp.ok) {
                 const err = await resp.json();
-                if (popup) popup.close();
                 throw new Error(err.detail || "Failed to start auth");
             }
 
             const data = await resp.json();
+
+            if (!data.user_code) throw new Error("No user code returned from GitHub. Is Device Flow enabled for your OAuth App?");
+
             showGhState("pending");
 
-            // Navigate the already-open popup to the GitHub auth URL
-            if (popup) popup.location.href = data.auth_url;
+            // Set after revealing — Safari doesn't re-render text set on hidden elements
+            $("github-user-code").textContent = data.user_code;
+            const uriEl = $("github-verification-uri");
+            uriEl.href = data.verification_uri;
+            uriEl.textContent = data.verification_uri;
 
-            // Poll status until GitHub redirects back and we capture the token
             startGitHubPoll();
         } catch (e) {
             showGhState("error");

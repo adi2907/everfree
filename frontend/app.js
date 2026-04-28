@@ -1,5 +1,5 @@
 /* ════════════════════════════════════════════════════════════
-   ExitNote — Frontend Application Logic (Git-Backed)
+   EverFree — Frontend Application Logic (Git-Backed)
    ════════════════════════════════════════════════════════════ */
 
 (() => {
@@ -86,7 +86,7 @@
     }
 
     function showConflictAlert(detail) {
-        const msg = `⚠️ Git Conflict Detected\n\n${detail}\n\nPlease resolve manually in your terminal:\n  cd ~/Documents/ExitNote\n  git status\n  git diff\n\nOr force push with:\n  git add . && git commit -m "resolve" && git push --force origin main`;
+        const msg = `⚠️ Git Conflict Detected\n\n${detail}\n\nPlease resolve manually in your terminal:\n  cd ~/Documents/EverFree\n  git status\n  git diff\n\nOr force push with:\n  git add . && git commit -m "resolve" && git push --force origin main`;
         alert(msg);
         setSyncStatus("conflict", "Conflict — resolve manually");
     }
@@ -266,7 +266,7 @@
         });
 
         // Apply current theme to the newly created editor
-        const isDark = (localStorage.getItem("exitnote-theme") || "dark") === "dark";
+        const isDark = (localStorage.getItem("everfree-theme") || "dark") === "dark";
         const tuiWrapper = document.querySelector(".toastui-editor-defaultUI");
         if (tuiWrapper) tuiWrapper.classList.toggle("toastui-editor-dark", isDark);
 
@@ -410,7 +410,7 @@
         if (tuiWrapper) tuiWrapper.classList.toggle("toastui-editor-dark", isDark);
         document.getElementById("theme-icon-dark").style.display = isDark ? "block" : "none";
         document.getElementById("theme-icon-light").style.display = isDark ? "none" : "block";
-        localStorage.setItem("exitnote-theme", theme);
+        localStorage.setItem("everfree-theme", theme);
     }
 
     $btnTheme.addEventListener("click", () => {
@@ -419,7 +419,7 @@
     });
 
     // Apply saved theme on load (default: dark)
-    applyTheme(localStorage.getItem("exitnote-theme") || "dark");
+    applyTheme(localStorage.getItem("everfree-theme") || "dark");
 
     // ── Event Bindings ──────────────────────────────────────
     $btnSave.addEventListener("click", saveNote);

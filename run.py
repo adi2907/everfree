@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ExitNote — Application Entry Point
+EverFree — Application Entry Point
 Starts the uvicorn server. Browser auto-opens via FastAPI lifespan.
 """
 
@@ -10,7 +10,7 @@ from server.app import app
 
 
 def main():
-    port = int(os.environ.get("EXITNOTE_PORT", 52321))
+    port = int(os.environ.get("EVERFREE_PORT", 52321))
     uvicorn.run(
         app,
         host="127.0.0.1",
