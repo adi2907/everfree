@@ -120,10 +120,52 @@
             if (repoFull) {
                 await enterApp();
             } else {
-                await showRepoPicker();
+                await autoConnectRepo();
             }
         } catch (err) {
             showSigninError("Failed to fetch user: " + err.message);
+        }
+    }
+
+    async function autoConnectRepo() {
+        const repoName = "everfree-notes";
+        try {
+            const repo = await gh("GET", `/repos/${user}/${repoName}`);
+            repoFull = repo.full_name;
+            defaultBranch = repo.default_branch || "main";
+            localStorage.setItem(LS_REPO, repoFull);
+            await enterApp();
+        } catch (err) {
+            if (/404|Not Found/i.test(err.message)) {
+                await createAndEnterDefaultRepo(repoName);
+            } else {
+                await showRepoPicker();
+            }
+        }
+    }
+
+    async function createAndEnterDefaultRepo(repoName) {
+        try {
+            const repo = await gh("POST", "/user/repos", {
+                name: repoName,
+                private: true,
+                description: "EverFree — Git-backed Markdown notes",
+                auto_init: true,
+            });
+            repoFull = repo.full_name;
+            defaultBranch = repo.default_branch || "main";
+            localStorage.setItem(LS_REPO, repoFull);
+            await enterApp();
+        } catch (err) {
+            if (/422/.test(err.message)) {
+                const repo = await gh("GET", `/repos/${user}/${repoName}`);
+                repoFull = repo.full_name;
+                defaultBranch = repo.default_branch || "main";
+                localStorage.setItem(LS_REPO, repoFull);
+                await enterApp();
+            } else {
+                await showRepoPicker();
+            }
         }
     }
 
@@ -655,7 +697,7 @@
         if (repoFull) {
             enterApp();
         } else {
-            showRepoPicker();
+            autoConnectRepo().catch(() => showView("signin"));
         }
     } else {
         showView("signin");

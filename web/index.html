@@ -5,6 +5,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>EverFree — Markdown Notes</title>
+    <script>
+        (function () {
+            var params = new URLSearchParams(location.search);
+            if (params.get('desktop') === '1') return;
+            var isMobile = window.innerWidth <= 768 || /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+            if (isMobile) window.location.replace('/mobile/');
+        })();
+    </script>
     <meta name="description" content="EverFree: A free, open-source, GitHub-backed Markdown note-taking app.">
 
     <!-- Toast UI Editor -->

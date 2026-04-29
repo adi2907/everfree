@@ -1,5 +1,7 @@
 {
   "rewrites": [
-    { "source": "/((?!api/).*)", "destination": "/index.html" }
+    { "source": "/mobile", "destination": "/mobile/index.html" },
+    { "source": "/mobile/", "destination": "/mobile/index.html" },
+    { "source": "/((?!api/|mobile).*)", "destination": "/index.html" }
   ]
 }
