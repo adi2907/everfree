@@ -144,8 +144,12 @@ body {
     color: var(--text-primary);
 }
 
-.logo-icon {
-    font-size: 20px;
+.logo-mark {
+    width: 24px;
+    height: 24px;
+    border-radius: 7px;
+    flex-shrink: 0;
+    box-shadow: 0 0 16px var(--accent-glow);
 }
 
 .sidebar-search {
@@ -302,6 +306,40 @@ body {
     font-size: 12px;
 }
 
+.search-results-header {
+    padding: 10px 16px 6px;
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.search-result-item {
+    align-items: flex-start;
+    white-space: normal;
+}
+
+.search-result-body {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.search-result-meta {
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 400;
+}
+
+.search-result-snippet {
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 400;
+    line-height: 1.35;
+}
+
 
 /* ── Main Pane ───────────────────────────────────────────── */
 .main {
@@ -324,10 +362,13 @@ body {
     animation: fadeIn 0.5s ease;
 }
 
-.empty-icon {
-    font-size: 64px;
+.empty-logo {
+    width: 84px;
+    height: 84px;
+    border-radius: 22px;
     margin-bottom: 16px;
-    opacity: 0.6;
+    opacity: 0.9;
+    box-shadow: 0 18px 52px rgba(0, 0, 0, 0.28), 0 0 34px var(--accent-glow);
 }
 
 .empty-state h2 {

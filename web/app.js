@@ -22,10 +22,12 @@
     let notebooks = [];
     let notesByNotebook = {}; // notebook -> [{name, sha}]
     let fileShas = {}; // "notebook/note.md" -> sha
+    let noteContentCache = {}; // "notebook/note.md" -> markdown
     let currentNotebook = null;
     let currentNote = null;
     let editor = null;
     let isDirty = false;
+    let searchSeq = 0;
 
     let devicePollTimer = null;
 
@@ -217,6 +219,9 @@
     }
 
     function rememberRepo(repo) {
+        if (repoFull && repoFull !== repo.full_name) {
+            resetRepoData();
+        }
         repoFull = repo.full_name;
         defaultBranch = repo.default_branch || "main";
         localStorage.setItem(LS_REPO, repoFull);
@@ -226,6 +231,16 @@
         repoFull = null;
         defaultBranch = "main";
         localStorage.removeItem(LS_REPO);
+        resetRepoData();
+    }
+
+    function resetRepoData() {
+        notebooks = [];
+        notesByNotebook = {};
+        fileShas = {};
+        noteContentCache = {};
+        currentNotebook = null;
+        currentNote = null;
     }
 
     function isNotFoundError(err) {
@@ -320,6 +335,7 @@
         localStorage.removeItem(LS_USER);
         localStorage.removeItem(LS_REPO);
         if (devicePollTimer) { clearTimeout(devicePollTimer); devicePollTimer = null; }
+        resetRepoData();
         signinIdle.classList.remove("hidden");
         signinPending.classList.add("hidden");
         signinError.classList.add("hidden");
@@ -360,6 +376,7 @@
         const data = await gh("GET", `/repos/${repoFull}/contents/${encodeURI(path)}?ref=${defaultBranch}`);
         const content = b64DecodeUnicode(data.content.replace(/\n/g, ""));
         fileShas[path] = data.sha;
+        noteContentCache[path] = content;
         return { content, sha: data.sha };
     }
 
@@ -372,6 +389,7 @@
         if (fileShas[path]) body.sha = fileShas[path];
         const data = await gh("PUT", `/repos/${repoFull}/contents/${encodeURI(path)}`, body);
         if (data && data.content) fileShas[path] = data.content.sha;
+        noteContentCache[path] = content;
         return data;
     }
 
@@ -388,6 +406,7 @@
             branch: defaultBranch,
         });
         delete fileShas[path];
+        delete noteContentCache[path];
     }
 
     // ── Base64 (UTF-8 safe) ─────────────────────────────────
@@ -422,7 +441,7 @@
                 notesByNotebook[nb] = notes;
             }));
 
-            renderSidebar();
+            renderSidebar($("search-input").value);
             setSyncStatus("ok", repoFull);
         } catch (err) {
             console.error("Failed to load notebooks:", err);
@@ -431,20 +450,19 @@
     }
 
     // ── Render Sidebar ──────────────────────────────────────
-    function renderSidebar(filter = "") {
+    async function renderSidebar(filter = "") {
+        const query = filter.trim();
+        if (query) {
+            await renderSearchResults(query);
+            return;
+        }
+
+        searchSeq += 1;
         const $list = $("notebook-list");
         $list.innerHTML = "";
-        const lowerFilter = filter.toLowerCase();
 
         for (const nb of notebooks) {
             const notes = notesByNotebook[nb] || [];
-            const filteredNotes = lowerFilter
-                ? notes.filter(n => n.toLowerCase().includes(lowerFilter))
-                : notes;
-
-            if (lowerFilter && filteredNotes.length === 0 && !nb.toLowerCase().includes(lowerFilter)) {
-                continue;
-            }
 
             const $item = document.createElement("div");
             $item.className = "notebook-item";
@@ -472,7 +490,7 @@
             $noteList.className = "note-list";
             if (currentNotebook === nb) $noteList.classList.add("expanded");
 
-            for (const note of filteredNotes) {
+            for (const note of notes) {
                 const $note = document.createElement("div");
                 $note.className = "note-item";
                 if (currentNotebook === nb && currentNote === note) {
@@ -508,6 +526,97 @@
         if (notebooks.length === 0) {
             $list.innerHTML = '<div class="notebook-loading">No notebooks yet. Click + to create one.</div>';
         }
+    }
+
+    async function renderSearchResults(query) {
+        const seq = ++searchSeq;
+        const $list = $("notebook-list");
+        $list.innerHTML = '<div class="notebook-loading">Searching note contents…</div>';
+
+        try {
+            const results = await searchNotes(query);
+            if (seq !== searchSeq) return;
+
+            if (results.length === 0) {
+                $list.innerHTML = '<div class="notebook-loading">No matching notes.</div>';
+                return;
+            }
+
+            $list.innerHTML = "";
+            const $header = document.createElement("div");
+            $header.className = "search-results-header";
+            $header.textContent = `${results.length} result${results.length === 1 ? "" : "s"}`;
+            $list.appendChild($header);
+
+            for (const result of results) {
+                const $note = document.createElement("div");
+                $note.className = "note-item search-result-item";
+                if (currentNotebook === result.notebook && currentNote === result.note) {
+                    $note.classList.add("active");
+                }
+                $note.innerHTML = `
+                    <span class="note-item-icon">📄</span>
+                    <span class="search-result-body">
+                        <span>${escapeHtml(result.title)}</span>
+                        <span class="search-result-meta">${escapeHtml(result.notebook)}</span>
+                        ${result.snippet ? `<span class="search-result-snippet">${escapeHtml(result.snippet)}</span>` : ""}
+                    </span>
+                `;
+                $note.addEventListener("click", () => openNote(result.notebook, result.note));
+                $list.appendChild($note);
+            }
+        } catch (err) {
+            if (seq !== searchSeq) return;
+            console.error("Search failed:", err);
+            $list.innerHTML = '<div class="notebook-loading">Search failed.</div>';
+        }
+    }
+
+    async function searchNotes(query) {
+        const results = [];
+        const lowerQuery = query.toLowerCase();
+
+        for (const nb of notebooks) {
+            for (const note of notesByNotebook[nb] || []) {
+                const path = `${nb}/${note}`;
+                const title = note.replace(/\.md$/, "");
+                const content = await getCachedFileContent(path);
+                const titleMatch = title.toLowerCase().includes(lowerQuery);
+                const notebookMatch = nb.toLowerCase().includes(lowerQuery);
+                const contentMatch = content.toLowerCase().includes(lowerQuery);
+
+                if (!titleMatch && !notebookMatch && !contentMatch) continue;
+
+                results.push({
+                    notebook: nb,
+                    note,
+                    title,
+                    snippet: makeSnippet(content, query),
+                });
+                if (results.length >= 100) return results;
+            }
+        }
+
+        return results;
+    }
+
+    async function getCachedFileContent(path) {
+        if (Object.prototype.hasOwnProperty.call(noteContentCache, path)) {
+            return noteContentCache[path];
+        }
+        const { content } = await getFile(path);
+        return content;
+    }
+
+    function makeSnippet(content, query, size = 140) {
+        const idx = content.toLowerCase().indexOf(query.toLowerCase());
+        if (idx < 0) return "";
+        const start = Math.max(0, idx - Math.floor(size / 2));
+        const end = Math.min(content.length, idx + query.length + Math.floor(size / 2));
+        let snippet = content.slice(start, end).replace(/\s+/g, " ").trim();
+        if (start > 0) snippet = "..." + snippet;
+        if (end < content.length) snippet += "...";
+        return snippet;
     }
 
     // ── Open Note ───────────────────────────────────────────

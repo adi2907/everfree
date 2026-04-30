@@ -95,6 +95,12 @@ evernote_auth_state = {
     "error": None,
 }
 
+import_tool_install_state = {
+    "running": False,
+    "detail": "",
+    "error": None,
+}
+
 
 def _is_configured() -> bool:
     """EverFree is fully set up: directory exists AND is a git repo."""
@@ -110,7 +116,7 @@ def _get_subprocess_env() -> dict[str, str]:
     """
     Returns an environment dict with standard macOS paths appended.
     Crucial for py2app bundles, which lack the user's $PATH, to find
-    tools like 'evernote-backup' or 'git' installed via Homebrew.
+    tools like 'evernote2md' or 'git' installed via Homebrew / Xcode tools.
     """
     env = os.environ.copy()
     current_path = env.get("PATH", "")
@@ -312,11 +318,96 @@ EVERNOTE_OAUTH_PORT = int(os.environ.get("EVERFREE_EVERNOTE_OAUTH_PORT", 10500))
 GITHUB_CLIENT_ID = os.environ.get("EVERFREE_GITHUB_CLIENT_ID", "Ov23liunA4WFlhQQO9KG")
 
 
+def _find_tool(name: str) -> str | None:
+    env = _get_subprocess_env()
+    return shutil.which(name, path=env["PATH"])
+
+
+def _get_import_tools_status() -> dict:
+    evernote2md_path = _find_tool("evernote2md")
+    brew_path = _find_tool("brew")
+    return {
+        "evernote2md": {
+            "installed": bool(evernote2md_path),
+            "path": evernote2md_path,
+        },
+        "homebrew": {
+            "installed": bool(brew_path),
+            "path": brew_path,
+        },
+        "install": import_tool_install_state.copy(),
+    }
+
+
+@app.get("/api/setup/import-tools/status")
+async def import_tools_status():
+    return _get_import_tools_status()
+
+
+@app.post("/api/setup/import-tools/install")
+async def install_import_tools():
+    """Install the Evernote ENEX -> Markdown converter after explicit user action."""
+    if _find_tool("evernote2md"):
+        return {"status": "installed", **_get_import_tools_status()}
+    if import_tool_install_state["running"]:
+        return {"status": "running", **_get_import_tools_status()}
+
+    brew_path = _find_tool("brew")
+    if not brew_path:
+        raise HTTPException(
+            status_code=400,
+            detail="Homebrew is required to install evernote2md. Install Homebrew, then retry.",
+        )
+
+    import_tool_install_state.update({
+        "running": True,
+        "detail": "Installing evernote2md with Homebrew...",
+        "error": None,
+    })
+
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, _install_evernote2md, brew_path)
+
+    return {"status": "started", **_get_import_tools_status()}
+
+
+def _install_evernote2md(brew_path: str):
+    try:
+        env = _get_subprocess_env()
+        result = subprocess.run(
+            [brew_path, "install", "evernote2md"],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=900,
+        )
+        if result.returncode != 0:
+            msg = (result.stderr or result.stdout or "brew install evernote2md failed").strip()
+            raise RuntimeError(msg)
+        import_tool_install_state.update({
+            "running": False,
+            "detail": "evernote2md installed.",
+            "error": None,
+        })
+    except Exception as e:
+        import_tool_install_state.update({
+            "running": False,
+            "detail": "",
+            "error": str(e),
+        })
+
+
 @app.post("/api/auth/evernote/start")
 async def evernote_auth_start():
     """Start Evernote OAuth + full sync pipeline in a background thread."""
     if evernote_auth_state["status"] == "running":
         return {"status": "running", "detail": "Already running"}
+    if not _find_tool("evernote2md"):
+        raise HTTPException(
+            status_code=409,
+            detail="evernote2md is required before importing Evernote notes.",
+        )
 
     evernote_auth_state.update({"status": "running", "detail": "Starting...", "error": None})
 
@@ -330,13 +421,14 @@ def _evernote_sync_pipeline():
     """
     Full pipeline:
       1. OAuth via evernote-backup's Python API (no TTY needed)
-      2. evernote-backup init-db --token <token>
-      3. evernote-backup sync
-      4. evernote-backup export
+      2. Initialize evernote-backup's database through its Python API
+      3. Sync Evernote notes through its Python API
+      4. Export .enex files through its Python API
       5. evernote2md convert
     """
     global evernote_auth_state
     try:
+        from evernote_backup import cli_app, config_defaults
         from evernote_backup.evernote_client_oauth import (
             EvernoteOAuthCallbackHandler,
             EvernoteOAuthClient,
@@ -349,11 +441,8 @@ def _evernote_sync_pipeline():
         enex_dir = os.path.join(tmp_dir, "enex_export")
 
         env = _get_subprocess_env()
-        evernote_backup_bin = shutil.which("evernote-backup", path=env["PATH"])
         evernote2md_bin = shutil.which("evernote2md", path=env["PATH"])
 
-        if not evernote_backup_bin:
-            raise FileNotFoundError("evernote-backup is not installed or not found in PATH")
         if not evernote2md_bin:
             raise FileNotFoundError("evernote2md is not installed or not found in PATH")
 
@@ -379,29 +468,47 @@ def _evernote_sync_pipeline():
 
         # Step 2: init-db with the token we just obtained (bypasses TTY check)
         evernote_auth_state["detail"] = "Initializing database..."
-        subprocess.run(
-            [evernote_backup_bin, "init-db", "--database", db_path, "--token", token],
-            cwd=tmp_dir, env=env, check=True, capture_output=True, text=True,
+        cli_app.init_db(
+            database=Path(db_path),
+            auth_user=None,
+            auth_password=None,
+            auth_oauth_port=EVERNOTE_OAUTH_PORT,
+            auth_oauth_host="localhost",
+            auth_token=token,
+            force=False,
+            backend="evernote",
+            network_retry_count=config_defaults.NETWORK_ERROR_RETRY_COUNT,
+            use_system_ssl_ca=False,
+            custom_api_data=None,
         )
 
         # Step 3: sync
         evernote_auth_state["detail"] = "Syncing notes from Evernote..."
-        subprocess.run(
-            [
-                evernote_backup_bin, "sync",
-                "--database", db_path,
-                "--max-download-workers", str(EVERNOTE_SYNC_MAX_DOWNLOAD_WORKERS),
-            ],
-            cwd=tmp_dir, env=env, check=True, timeout=EVERNOTE_SYNC_TIMEOUT,
-            capture_output=True, text=True,
+        cli_app.sync(
+            database=Path(db_path),
+            max_chunk_results=config_defaults.SYNC_CHUNK_MAX_RESULTS,
+            max_download_workers=EVERNOTE_SYNC_MAX_DOWNLOAD_WORKERS,
+            download_cache_memory_limit=config_defaults.SYNC_DOWNLOAD_CACHE_MEMORY_LIMIT,
+            network_retry_count=config_defaults.NETWORK_ERROR_RETRY_COUNT,
+            use_system_ssl_ca=False,
+            include_tasks=False,
+            token=None,
         )
 
         # Step 4: export to .enex
         evernote_auth_state["detail"] = "Exporting .enex files..."
         os.makedirs(enex_dir, exist_ok=True)
-        subprocess.run(
-            [evernote_backup_bin, "export", "--database", db_path, enex_dir],
-            cwd=tmp_dir, env=env, check=True, capture_output=True, text=True,
+        cli_app.export(
+            database=Path(db_path),
+            single_notes=False,
+            include_trash=False,
+            no_export_date=False,
+            add_guid=False,
+            add_metadata=False,
+            overwrite=False,
+            notebooks=(),
+            tags=(),
+            output_path=Path(enex_dir),
         )
 
         # Step 5: convert to Markdown
@@ -448,6 +555,7 @@ async def get_setup_status():
         "configured": _is_configured(),
         "evernote_synced": _is_evernote_synced(),
         "notes_dir": str(NOTES_DIR),
+        "port": PORT,
     }
 
 
@@ -615,6 +723,61 @@ async def sync_status():
         return {"git": True, "remote": remote}
     except Exception:
         return {"git": True, "remote": None}
+
+
+# ── API: Search ─────────────────────────────────────────────
+def _search_snippet(content: str, query: str, size: int = 140) -> str:
+    lower = content.lower()
+    idx = lower.find(query.lower())
+    if idx < 0:
+        return ""
+    start = max(0, idx - size // 2)
+    end = min(len(content), idx + len(query) + size // 2)
+    snippet = " ".join(content[start:end].split())
+    if start > 0:
+        snippet = "..." + snippet
+    if end < len(content):
+        snippet += "..."
+    return snippet
+
+
+@app.get("/api/search")
+async def search_notes(q: str = ""):
+    query = q.strip()
+    if not query:
+        return []
+
+    results = []
+    lower_query = query.lower()
+
+    for notebook in sorted(d for d in NOTES_DIR.iterdir() if d.is_dir() and not d.name.startswith(".")):
+        for note in sorted(notebook.iterdir()):
+            if not note.is_file() or note.suffix != ".md":
+                continue
+
+            try:
+                content = note.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+
+            title = note.name.removesuffix(".md")
+            notebook_match = lower_query in notebook.name.lower()
+            title_match = lower_query in title.lower()
+            content_match = lower_query in content.lower()
+
+            if not (notebook_match or title_match or content_match):
+                continue
+
+            results.append({
+                "notebook": notebook.name,
+                "note": note.name,
+                "title": title,
+                "snippet": _search_snippet(content, query),
+            })
+            if len(results) >= 100:
+                return results
+
+    return results
 
 
 # ── API: Notebooks ───────────────────────────────────────────

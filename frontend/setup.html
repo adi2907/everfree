@@ -8,6 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="icon" href="/static/assets/everfree-logo.svg">
     <link rel="stylesheet" href="/static/setup.css">
 </head>
 <body>
@@ -15,7 +16,7 @@
         <!-- ── Header ──────────────────────────────────────── -->
         <header class="setup-header">
             <div class="logo">
-                <span class="logo-icon">📝</span>
+                <img class="logo-mark" src="/static/assets/everfree-logo.svg" alt="">
                 <span class="logo-text">EverFree</span>
             </div>
             <p class="setup-subtitle">Let's get your notes set up</p>
@@ -50,10 +51,27 @@
                     The Evernote sign-in page will open in your browser.
                 </p>
 
+                <!-- Import tool prerequisite -->
+                <div id="import-tool-status" class="tool-status">
+                    <div class="auth-status">
+                        <div class="spinner spinner-sm" id="import-tool-spinner"></div>
+                        <span class="auth-check hidden" id="import-tool-check">✓</span>
+                        <div>
+                            <p class="auth-status-title" id="import-tool-title">Checking import tools…</p>
+                            <p class="auth-status-detail" id="import-tool-detail">EverFree uses evernote2md to convert Evernote exports to Markdown.</p>
+                        </div>
+                    </div>
+                    <div class="tool-actions hidden" id="import-tool-actions">
+                        <button class="btn btn-primary btn-sm" id="btn-install-evernote2md">Install converter</button>
+                        <button class="btn btn-ghost btn-sm" id="btn-recheck-import-tools">Recheck</button>
+                    </div>
+                    <pre class="tool-command hidden" id="import-tool-command"></pre>
+                </div>
+
                 <!-- Before auth -->
                 <div id="evernote-idle">
                     <div class="auth-action">
-                        <button class="btn btn-auth" id="btn-evernote-connect">
+                        <button class="btn btn-auth" id="btn-evernote-connect" disabled>
                             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h4a2 2 0 012 2v14a2 2 0 01-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
                             Sign in with Evernote
                         </button>

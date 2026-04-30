@@ -18,6 +18,7 @@ BUILD_DIR="$PROJECT_DIR/build"
 DIST_DIR="$PROJECT_DIR/dist"
 APP_NAME="EverFree"
 DMG_NAME="${APP_NAME}.dmg"
+APP_ICON="$PROJECT_DIR/packaging/EverFree.icns"
 
 echo "╔══════════════════════════════════════════════════╗"
 echo "║      EverFree — macOS Build Pipeline              ║"
@@ -60,7 +61,7 @@ rm -f "$DIST_DIR/$DMG_NAME"
 
 create-dmg \
     --volname "$APP_NAME" \
-    --volicon "$DIST_DIR/${APP_NAME}.app/Contents/Resources/PythonApplet.icns" \
+    --volicon "$APP_ICON" \
     --window-pos 200 120 \
     --window-size 600 400 \
     --icon-size 100 \

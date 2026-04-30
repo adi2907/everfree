@@ -7,6 +7,7 @@ Usage:
 """
 
 from setuptools import setup
+from pathlib import Path
 
 APP = ["run.py"]
 DATA_FILES = [
@@ -17,6 +18,9 @@ DATA_FILES = [
         'frontend/setup.html',
         'frontend/setup.css',
         'frontend/setup.js',
+    ]),
+    ('frontend/assets', [
+        'frontend/assets/everfree-logo.svg',
     ])
 ]
 
@@ -32,6 +36,17 @@ OPTIONS = {
         "pydantic_core",
         "anyio",
         "httpx",
+        # Evernote import pipeline. evernote-backup is a Python package in
+        # requirements.txt, so bundle it instead of relying on a shell command.
+        "evernote_backup",
+        "evernote",
+        "thrift",
+        "requests",
+        "requests_oauthlib",
+        "requests_sse",
+        "xmltodict",
+        "click",
+        "click_option_group",
         # Server code
         "server",
     ],
@@ -61,6 +76,10 @@ OPTIONS = {
         "NSHighResolutionCapable": True,
     },
 }
+
+ICON_FILE = Path("packaging/EverFree.icns")
+if ICON_FILE.exists():
+    OPTIONS["iconfile"] = str(ICON_FILE)
 
 setup(
     name="EverFree",

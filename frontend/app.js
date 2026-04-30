@@ -11,6 +11,7 @@
     let currentNote = null;
     let editor = null;
     let isDirty = false;
+    let searchSeq = 0;
 
     // ── DOM References ──────────────────────────────────────
     const $notebookList = document.getElementById("notebook-list");
@@ -132,7 +133,7 @@
     async function loadNotebooks() {
         try {
             notebooks = await API.get("/api/notebooks");
-            renderSidebar();
+            renderSidebar($searchInput.value);
         } catch (err) {
             console.error("Failed to load notebooks:", err);
         }
@@ -140,22 +141,20 @@
 
     // ── Render Sidebar ──────────────────────────────────────
     async function renderSidebar(filter = "") {
+        const query = filter.trim();
+        if (query) {
+            await renderSearchResults(query);
+            return;
+        }
+
+        searchSeq += 1;
         $notebookList.innerHTML = "";
-        const lowerFilter = filter.toLowerCase();
 
         for (const nb of notebooks) {
             let notes = [];
             try {
                 notes = await API.get(`/api/notebooks/${encodeURIComponent(nb)}/notes`);
             } catch { /* empty */ }
-
-            const filteredNotes = lowerFilter
-                ? notes.filter(n => n.toLowerCase().includes(lowerFilter))
-                : notes;
-
-            if (lowerFilter && filteredNotes.length === 0 && !nb.toLowerCase().includes(lowerFilter)) {
-                continue;
-            }
 
             const $item = document.createElement("div");
             $item.className = "notebook-item";
@@ -183,7 +182,7 @@
             $noteList.className = "note-list";
             if (currentNotebook === nb) $noteList.classList.add("expanded");
 
-            for (const note of filteredNotes) {
+            for (const note of notes) {
                 const $note = document.createElement("div");
                 $note.className = "note-item";
                 if (currentNotebook === nb && currentNote === note) {
@@ -221,6 +220,49 @@
             $item.appendChild($header);
             $item.appendChild($noteList);
             $notebookList.appendChild($item);
+        }
+    }
+
+    async function renderSearchResults(query) {
+        const seq = ++searchSeq;
+        $notebookList.innerHTML = '<div class="notebook-loading">Searching…</div>';
+
+        try {
+            const results = await API.get(`/api/search?q=${encodeURIComponent(query)}`);
+            if (seq !== searchSeq) return;
+
+            if (results.length === 0) {
+                $notebookList.innerHTML = '<div class="notebook-loading">No matching notes.</div>';
+                return;
+            }
+
+            $notebookList.innerHTML = "";
+            const $header = document.createElement("div");
+            $header.className = "search-results-header";
+            $header.textContent = `${results.length} result${results.length === 1 ? "" : "s"}`;
+            $notebookList.appendChild($header);
+
+            for (const result of results) {
+                const $item = document.createElement("div");
+                $item.className = "note-item search-result-item";
+                if (currentNotebook === result.notebook && currentNote === result.note) {
+                    $item.classList.add("active");
+                }
+                $item.innerHTML = `
+                    <span class="note-item-icon">📄</span>
+                    <span class="search-result-body">
+                        <span>${escapeHtml(result.title || result.note.replace(/\.md$/, ""))}</span>
+                        <span class="search-result-meta">${escapeHtml(result.notebook)}</span>
+                        ${result.snippet ? `<span class="search-result-snippet">${escapeHtml(result.snippet)}</span>` : ""}
+                    </span>
+                `;
+                $item.addEventListener("click", () => openNote(result.notebook, result.note));
+                $notebookList.appendChild($item);
+            }
+        } catch (err) {
+            if (seq !== searchSeq) return;
+            console.error("Search failed:", err);
+            $notebookList.innerHTML = '<div class="notebook-loading">Search failed.</div>';
         }
     }
 

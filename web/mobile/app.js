@@ -20,12 +20,15 @@
     let notebooks       = [];
     let notesByNotebook = {};
     let fileShas        = {};
+    let noteContentCache = {};
     let allNotesLoaded  = false;
 
     let captureTarget = { type: 'scratch' };
     let editingNotebook = null;
     let editingNote     = null;
     let devicePollTimer = null;
+    let searchSeq = 0;
+    let browseSearchTimer = null;
 
     // ── DOM ──────────────────────────────────────────────────
     const $ = id => document.getElementById(id);
@@ -284,6 +287,7 @@
         const data = await gh('GET', `/repos/${repoFull}/contents/${encodeURI(path)}?ref=${defaultBranch}`);
         const content = b64Decode(data.content.replace(/\n/g, ''));
         fileShas[path] = data.sha;
+        noteContentCache[path] = content;
         return { content, sha: data.sha };
     }
 
@@ -296,6 +300,7 @@
         if (fileShas[path]) body.sha = fileShas[path];
         const data = await gh('PUT', `/repos/${repoFull}/contents/${encodeURI(path)}`, body);
         if (data && data.content) fileShas[path] = data.content.sha;
+        noteContentCache[path] = content;
         return data;
     }
 
@@ -366,10 +371,10 @@
 
     // ── Browse Tab ───────────────────────────────────────────
     async function initBrowseTab() {
-        if (allNotesLoaded) { renderNoteList($('browse-search').value); return; }
+        if (allNotesLoaded) { await renderNoteList($('browse-search').value); return; }
         $('note-list').innerHTML = '<div class="list-loading">Loading…</div>';
         await loadAllContent();
-        renderNoteList($('browse-search').value);
+        await renderNoteList($('browse-search').value);
     }
 
     async function loadAllContent() {
@@ -398,16 +403,20 @@
         }
     }
 
-    function renderNoteList(filter = '') {
+    async function renderNoteList(filter = '') {
         const $list = $('note-list');
+        const query = filter.trim();
+        if (query) {
+            await renderSearchResults(query);
+            return;
+        }
+
+        searchSeq += 1;
         $list.innerHTML = '';
-        const q = filter.toLowerCase();
         let count = 0;
 
         for (const nb of notebooks) {
-            const notes = (notesByNotebook[nb] || []).filter(n =>
-                !q || n.toLowerCase().includes(q) || nb.toLowerCase().includes(q)
-            );
+            const notes = notesByNotebook[nb] || [];
             if (notes.length === 0) continue;
 
             const $header = document.createElement('div');
@@ -426,8 +435,101 @@
         }
 
         if (count === 0) {
-            $list.innerHTML = `<div class="list-empty">${q ? 'No notes match.' : 'No notes yet.'}</div>`;
+            $list.innerHTML = '<div class="list-empty">No notes yet.</div>';
         }
+    }
+
+    async function renderSearchResults(query) {
+        const seq = ++searchSeq;
+        const $list = $('note-list');
+        $list.innerHTML = '<div class="list-loading">Searching note contents…</div>';
+
+        try {
+            const results = await searchNotes(query);
+            if (seq !== searchSeq) return;
+
+            $list.innerHTML = '';
+            if (results.length === 0) {
+                $list.innerHTML = '<div class="list-empty">No notes match.</div>';
+                return;
+            }
+
+            const $header = document.createElement('div');
+            $header.className = 'list-section-header';
+            $header.textContent = `${results.length} result${results.length === 1 ? '' : 's'}`;
+            $list.appendChild($header);
+
+            for (const result of results) {
+                const $row = document.createElement('div');
+                $row.className = 'note-row search-result-row';
+                $row.innerHTML = `
+                    <span class="search-result-text">
+                        <span class="note-row-name">${esc(result.title)}</span>
+                        <span class="search-result-meta">${esc(result.notebook)}</span>
+                        ${result.snippet ? `<span class="search-result-snippet">${esc(result.snippet)}</span>` : ''}
+                    </span>
+                    <svg class="note-row-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+                `;
+                $row.addEventListener('click', () => openNoteEdit(result.notebook, result.note));
+                $list.appendChild($row);
+            }
+        } catch (err) {
+            if (seq !== searchSeq) return;
+            $list.innerHTML = `<div class="list-empty">Search failed: ${esc(err.message)}</div>`;
+        }
+    }
+
+    async function searchNotes(query) {
+        const results = [];
+        const lowerQuery = query.toLowerCase();
+
+        for (const nb of notebooks) {
+            for (const note of notesByNotebook[nb] || []) {
+                const path = `${nb}/${note}`;
+                const title = note.replace(/\.md$/, '');
+                let content = '';
+                try {
+                    content = await getCachedFileContent(path);
+                } catch (_) {
+                    continue;
+                }
+
+                const titleMatch = title.toLowerCase().includes(lowerQuery);
+                const notebookMatch = nb.toLowerCase().includes(lowerQuery);
+                const contentMatch = content.toLowerCase().includes(lowerQuery);
+
+                if (!titleMatch && !notebookMatch && !contentMatch) continue;
+
+                results.push({
+                    notebook: nb,
+                    note,
+                    title,
+                    snippet: makeSnippet(content, query),
+                });
+                if (results.length >= 100) return results;
+            }
+        }
+
+        return results;
+    }
+
+    async function getCachedFileContent(path) {
+        if (Object.prototype.hasOwnProperty.call(noteContentCache, path)) {
+            return noteContentCache[path];
+        }
+        const { content } = await getFile(path);
+        return content;
+    }
+
+    function makeSnippet(content, query, size = 140) {
+        const idx = content.toLowerCase().indexOf(query.toLowerCase());
+        if (idx < 0) return '';
+        const start = Math.max(0, idx - Math.floor(size / 2));
+        const end = Math.min(content.length, idx + query.length + Math.floor(size / 2));
+        let snippet = content.slice(start, end).replace(/\s+/g, ' ').trim();
+        if (start > 0) snippet = '...' + snippet;
+        if (end < content.length) snippet += '...';
+        return snippet;
     }
 
     // ── Note Editor ──────────────────────────────────────────
@@ -573,6 +675,7 @@
                 notebooks = [];
                 notesByNotebook = {};
                 fileShas = {};
+                noteContentCache = {};
                 showView('loading');
                 $('loading-text').textContent = 'Loading your notes…';
                 await enterApp();
@@ -601,7 +704,7 @@
         localStorage.removeItem(LS_USER);
         localStorage.removeItem(LS_REPO);
         if (devicePollTimer) { clearTimeout(devicePollTimer); devicePollTimer = null; }
-        allNotesLoaded = false; notebooks = []; notesByNotebook = {}; fileShas = {};
+        allNotesLoaded = false; notebooks = []; notesByNotebook = {}; fileShas = {}; noteContentCache = {};
         $('si-idle').classList.remove('hidden');
         $('si-pending').classList.add('hidden');
         $('si-error').classList.add('hidden');
@@ -641,7 +744,10 @@
     $('btn-close-drawer').addEventListener('click', closeTargetDrawer);
     $('drawer-overlay').addEventListener('click', closeTargetDrawer);
 
-    $('browse-search').addEventListener('input', e => renderNoteList(e.target.value));
+    $('browse-search').addEventListener('input', e => {
+        clearTimeout(browseSearchTimer);
+        browseSearchTimer = setTimeout(() => renderNoteList(e.target.value), 250);
+    });
 
     $('btn-back-browse').addEventListener('click', () => showView('app'));
     $('btn-save-note').addEventListener('click', saveNoteEdit);
@@ -652,6 +758,7 @@
         allNotesLoaded = false;
         notebooks = [];
         notesByNotebook = {};
+        noteContentCache = {};
         await showRepoPicker();
     });
 
