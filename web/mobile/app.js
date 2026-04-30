@@ -9,6 +9,7 @@
     const LS_USER  = 'everfree-user';
     const LS_REPO  = 'everfree-repo';
     const DEFAULT_REPO = 'everfree-notes';
+    const EVERFREE_REPO_DESCRIPTION_MARKER = 'git-backed markdown notes';
 
     // ── State ────────────────────────────────────────────────
     let token      = localStorage.getItem(LS_TOKEN);
@@ -140,17 +141,16 @@
 
         $('loading-text').textContent = 'Connecting to your notes…';
         try {
-            const repo = await gh('GET', `/repos/${user}/${DEFAULT_REPO}`);
-            repoFull = repo.full_name;
-            defaultBranch = repo.default_branch || 'main';
-            localStorage.setItem(LS_REPO, repoFull);
-            await enterApp();
-        } catch (err) {
-            if (/404|Not Found/i.test(err.message)) {
-                await createDefaultRepo();
-            } else {
-                await showRepoPicker();
+            const repo = await findEverFreeRepo();
+            if (repo) {
+                rememberRepo(repo);
+                await enterApp();
+                return;
             }
+            await createDefaultRepo();
+        } catch (err) {
+            console.warn('Repo auto-connect failed:', err);
+            await showRepoPicker();
         }
     }
 
@@ -163,16 +163,12 @@
                 description: 'EverFree — Git-backed Markdown notes',
                 auto_init: true,
             });
-            repoFull = repo.full_name;
-            defaultBranch = repo.default_branch || 'main';
-            localStorage.setItem(LS_REPO, repoFull);
+            rememberRepo(repo);
             await enterApp();
         } catch (err) {
             if (/422/.test(err.message)) {
                 const repo = await gh('GET', `/repos/${user}/${DEFAULT_REPO}`);
-                repoFull = repo.full_name;
-                defaultBranch = repo.default_branch || 'main';
-                localStorage.setItem(LS_REPO, repoFull);
+                rememberRepo(repo);
                 await enterApp();
             } else {
                 await showRepoPicker();
@@ -180,12 +176,89 @@
         }
     }
 
+    async function findEverFreeRepo() {
+        try {
+            return await gh('GET', `/repos/${user}/${DEFAULT_REPO}`);
+        } catch (err) {
+            if (!isNotFoundError(err)) throw err;
+        }
+
+        const repos = await fetchUserRepos();
+        const candidates = repos
+            .filter(isEverFreeRepo)
+            .sort(compareEverFreeRepos);
+
+        return candidates[0] || null;
+    }
+
+    async function fetchUserRepos() {
+        const repos = [];
+        for (let page = 1; page <= 10; page += 1) {
+            const batch = await gh('GET', `/user/repos?per_page=100&page=${page}&sort=updated&affiliation=owner,collaborator`);
+            if (!Array.isArray(batch) || batch.length === 0) break;
+            repos.push(...batch);
+            if (batch.length < 100) break;
+        }
+        return repos;
+    }
+
+    function isEverFreeRepo(repo) {
+        const name = String(repo.name || '').toLowerCase();
+        const description = String(repo.description || '').toLowerCase();
+        return name === DEFAULT_REPO ||
+            (description.includes('everfree') && description.includes(EVERFREE_REPO_DESCRIPTION_MARKER));
+    }
+
+    function compareEverFreeRepos(a, b) {
+        const scoreDiff = repoScore(b) - repoScore(a);
+        if (scoreDiff) return scoreDiff;
+        return new Date(b.pushed_at || b.updated_at || 0) - new Date(a.pushed_at || a.updated_at || 0);
+    }
+
+    function repoScore(repo) {
+        const name = String(repo.name || '').toLowerCase();
+        const description = String(repo.description || '').toLowerCase();
+        let score = 0;
+        if (name === DEFAULT_REPO) score += 100;
+        if (description.includes(EVERFREE_REPO_DESCRIPTION_MARKER)) score += 40;
+        if (description.includes('everfree')) score += 20;
+        if (repo.private) score += 10;
+        if (!repo.fork) score += 5;
+        return score;
+    }
+
+    function rememberRepo(repo) {
+        repoFull = repo.full_name;
+        defaultBranch = repo.default_branch || 'main';
+        localStorage.setItem(LS_REPO, repoFull);
+    }
+
+    function clearRememberedRepo() {
+        repoFull = null;
+        defaultBranch = 'main';
+        localStorage.removeItem(LS_REPO);
+    }
+
+    function isNotFoundError(err) {
+        return /404|Not Found/i.test(err && err.message ? err.message : String(err));
+    }
+
     // ── Enter App ────────────────────────────────────────────
     async function enterApp() {
         try {
             const meta = await gh('GET', `/repos/${repoFull}`);
             defaultBranch = meta.default_branch || 'main';
-        } catch (_) {}
+        } catch (err) {
+            if (isNotFoundError(err) && repoFull) {
+                clearRememberedRepo();
+                await autoConnectRepo();
+                return;
+            }
+            console.error('Failed to load repo:', err);
+            showView('signin');
+            showSigninError('Failed to load repository: ' + err.message);
+            return;
+        }
 
         // Pre-fetch today's scratch SHA in background (avoids save race)
         prefetchScratchSha();
@@ -469,7 +542,7 @@
 
         let allRepos = [];
         try {
-            allRepos = await gh('GET', '/user/repos?per_page=100&sort=pushed&affiliation=owner,collaborator');
+            allRepos = await fetchUserRepos();
             renderRepoList(allRepos, '');
         } catch (err) {
             $list.innerHTML = `<div class="list-empty">Error: ${esc(err.message)}</div>`;
@@ -495,9 +568,7 @@
             $row.className = 'repo-row';
             $row.innerHTML = `<div class="repo-row-name">${esc(r.full_name)}</div><div class="repo-row-meta">${r.private ? 'private' : 'public'} · ${esc(r.default_branch || 'main')}</div>`;
             $row.addEventListener('click', async () => {
-                repoFull = r.full_name;
-                defaultBranch = r.default_branch || 'main';
-                localStorage.setItem(LS_REPO, repoFull);
+                rememberRepo(r);
                 allNotesLoaded = false;
                 notebooks = [];
                 notesByNotebook = {};
@@ -577,8 +648,7 @@
 
     $('btn-signout').addEventListener('click', signOut);
     $('btn-switch-repo').addEventListener('click', async () => {
-        repoFull = null;
-        localStorage.removeItem(LS_REPO);
+        clearRememberedRepo();
         allNotesLoaded = false;
         notebooks = [];
         notesByNotebook = {};

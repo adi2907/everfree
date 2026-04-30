@@ -10,6 +10,8 @@
     const LS_USER = "everfree-user";
     const LS_REPO = "everfree-repo";
     const LS_THEME = "everfree-theme";
+    const DEFAULT_REPO = "everfree-notes";
+    const EVERFREE_REPO_DESCRIPTION_MARKER = "git-backed markdown notes";
 
     // ── State ───────────────────────────────────────────────
     let token = localStorage.getItem(LS_TOKEN) || null;
@@ -128,19 +130,17 @@
     }
 
     async function autoConnectRepo() {
-        const repoName = "everfree-notes";
         try {
-            const repo = await gh("GET", `/repos/${user}/${repoName}`);
-            repoFull = repo.full_name;
-            defaultBranch = repo.default_branch || "main";
-            localStorage.setItem(LS_REPO, repoFull);
-            await enterApp();
-        } catch (err) {
-            if (/404|Not Found/i.test(err.message)) {
-                await createAndEnterDefaultRepo(repoName);
-            } else {
-                await showRepoPicker();
+            const repo = await findEverFreeRepo();
+            if (repo) {
+                rememberRepo(repo);
+                await enterApp();
+                return;
             }
+            await createAndEnterDefaultRepo(DEFAULT_REPO);
+        } catch (err) {
+            console.warn("Repo auto-connect failed:", err);
+            await showRepoPicker();
         }
     }
 
@@ -152,21 +152,84 @@
                 description: "EverFree — Git-backed Markdown notes",
                 auto_init: true,
             });
-            repoFull = repo.full_name;
-            defaultBranch = repo.default_branch || "main";
-            localStorage.setItem(LS_REPO, repoFull);
+            rememberRepo(repo);
             await enterApp();
         } catch (err) {
             if (/422/.test(err.message)) {
                 const repo = await gh("GET", `/repos/${user}/${repoName}`);
-                repoFull = repo.full_name;
-                defaultBranch = repo.default_branch || "main";
-                localStorage.setItem(LS_REPO, repoFull);
+                rememberRepo(repo);
                 await enterApp();
             } else {
                 await showRepoPicker();
             }
         }
+    }
+
+    async function findEverFreeRepo() {
+        try {
+            return await gh("GET", `/repos/${user}/${DEFAULT_REPO}`);
+        } catch (err) {
+            if (!isNotFoundError(err)) throw err;
+        }
+
+        const repos = await fetchUserRepos();
+        const candidates = repos
+            .filter(isEverFreeRepo)
+            .sort(compareEverFreeRepos);
+
+        return candidates[0] || null;
+    }
+
+    async function fetchUserRepos() {
+        const repos = [];
+        for (let page = 1; page <= 10; page += 1) {
+            const batch = await gh("GET", `/user/repos?per_page=100&page=${page}&sort=updated&affiliation=owner,collaborator`);
+            if (!Array.isArray(batch) || batch.length === 0) break;
+            repos.push(...batch);
+            if (batch.length < 100) break;
+        }
+        return repos;
+    }
+
+    function isEverFreeRepo(repo) {
+        const name = String(repo.name || "").toLowerCase();
+        const description = String(repo.description || "").toLowerCase();
+        return name === DEFAULT_REPO ||
+            (description.includes("everfree") && description.includes(EVERFREE_REPO_DESCRIPTION_MARKER));
+    }
+
+    function compareEverFreeRepos(a, b) {
+        const scoreDiff = repoScore(b) - repoScore(a);
+        if (scoreDiff) return scoreDiff;
+        return new Date(b.pushed_at || b.updated_at || 0) - new Date(a.pushed_at || a.updated_at || 0);
+    }
+
+    function repoScore(repo) {
+        const name = String(repo.name || "").toLowerCase();
+        const description = String(repo.description || "").toLowerCase();
+        let score = 0;
+        if (name === DEFAULT_REPO) score += 100;
+        if (description.includes(EVERFREE_REPO_DESCRIPTION_MARKER)) score += 40;
+        if (description.includes("everfree")) score += 20;
+        if (repo.private) score += 10;
+        if (!repo.fork) score += 5;
+        return score;
+    }
+
+    function rememberRepo(repo) {
+        repoFull = repo.full_name;
+        defaultBranch = repo.default_branch || "main";
+        localStorage.setItem(LS_REPO, repoFull);
+    }
+
+    function clearRememberedRepo() {
+        repoFull = null;
+        defaultBranch = "main";
+        localStorage.removeItem(LS_REPO);
+    }
+
+    function isNotFoundError(err) {
+        return /404|Not Found/i.test(err && err.message ? err.message : String(err));
     }
 
     // ── GitHub API Wrapper ──────────────────────────────────
@@ -204,8 +267,7 @@
         $list.innerHTML = '<div class="repo-loading">Loading your repositories…</div>';
 
         try {
-            // Fetch up to 100 most recently pushed repos
-            const repos = await gh("GET", "/user/repos?per_page=100&sort=pushed&affiliation=owner,collaborator");
+            const repos = await fetchUserRepos();
             renderRepoList(repos);
 
             $("repo-search").addEventListener("input", (e) => {
@@ -245,9 +307,7 @@
     }
 
     async function selectRepo(repo) {
-        repoFull = repo.full_name;
-        defaultBranch = repo.default_branch || "main";
-        localStorage.setItem(LS_REPO, repoFull);
+        rememberRepo(repo);
         await enterApp();
     }
 
@@ -275,6 +335,11 @@
             setSyncStatus("ok", `${repoFull}`);
             await loadNotebooks();
         } catch (err) {
+            if (isNotFoundError(err) && repoFull) {
+                clearRememberedRepo();
+                await autoConnectRepo();
+                return;
+            }
             setSyncStatus("error", "Failed to load repo");
             console.error(err);
         }
@@ -641,8 +706,7 @@
     $("btn-signout").addEventListener("click", signOut);
     $("btn-switch-repo").addEventListener("click", () => {
         $("account-popover").classList.add("hidden");
-        repoFull = null;
-        localStorage.removeItem(LS_REPO);
+        clearRememberedRepo();
         showRepoPicker();
     });
 

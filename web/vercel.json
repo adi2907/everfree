@@ -1,6 +1,8 @@
 {
+  "redirects": [
+    { "source": "/mobile", "destination": "/mobile/", "permanent": false }
+  ],
   "rewrites": [
-    { "source": "/mobile", "destination": "/mobile/index.html" },
     { "source": "/mobile/", "destination": "/mobile/index.html" },
     { "source": "/((?!api/|mobile).*)", "destination": "/index.html" }
   ]
