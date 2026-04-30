@@ -1,102 +1,235 @@
 # EverFree
 
-A rebellion against $100/year note-taking subscriptions.
+EverFree is a free, Git-backed notes app for people moving out of Evernote.
 
-Note-taking should be simple: basic notebooks, markdown, and code editors. There is no reason to pay a massive annual fee for software that is essentially doing something free.
+Access your notes from the hosted web app at
+[everfree.vercel.app](https://everfree.vercel.app) after your notes have been
+backed up to GitHub.
 
-EverFree is a 100% free, end-to-end Evernote alternative. It keeps all your data local and uses a private GitHub repository as your database.
+It imports Evernote notes into local Markdown files, keeps them in
+`~/Documents/EverFree`, and syncs them to **your private GitHub repository**.
+Your GitHub profile is used for notes backup; EverFree creates or reuses the
+private `everfree-notes` repo under your account. The hosted web and mobile
+clients then read and write the same GitHub-backed notes.
 
-Your notes are yours, and the workflow is built to keep you from being locked in: it gets all your notes automatically and integrates with both Evernote and GitHub.
+## Current Product Shape
 
-The Ecosystem:
+- **Desktop DMG:** macOS app that runs a local FastAPI server, stores notes as
+  Markdown, imports Evernote, and syncs to GitHub.
+- **Web client:** hosted on Vercel, signs in with GitHub, auto-connects to the
+  user's EverFree repo, and edits notes through the GitHub Contents API.
+- **Mobile client:** browser-based mobile UI at `/mobile/`, using the same
+  GitHub login and repo.
+- **Repository:** the canonical default repo is `everfree-notes`.
 
-- **Desktop:** A macOS `.dmg` app that reads/writes local `.md` files and silently auto-syncs to GitHub.
-- **Web:** A hosted web client ([everfree.vercel.app](https://everfree.vercel.app)) — sign in with GitHub, pick your notes repo, edit from any browser. No installation required.
-- **Mobile:** Access your data via any Git-backed mobile app (e.g., GitJournal).
+## Important Flow
 
-## Quick Start (Development)
+For a user migrating from Evernote, the desktop app is the first step.
 
-Notes are plain `.md` files organized in folders (notebooks) under `~/Documents/EverFree`.
+1. Install the EverFree DMG on macOS.
+2. Launch EverFree and allow access to the Documents folder.
+3. Import Evernote through the setup wizard.
+4. Connect GitHub.
+5. EverFree creates or reuses the private `everfree-notes` repo and pushes the
+   imported Markdown notes to your GitHub profile.
+6. After that, the same notes are available from desktop, web, and mobile.
+
+The web and mobile clients can create/use the GitHub repo and edit notes, but
+they cannot run the Evernote import pipeline because browsers cannot access the
+local Evernote data or run local conversion tools.
+
+## Desktop App
+
+The desktop app starts a local server at:
+
+```text
+http://127.0.0.1:52321
+```
+
+If that port is occupied, the launcher falls back to the next available local
+port. `52321` remains the default.
+
+Notes live here by default:
+
+```text
+~/Documents/EverFree
+```
+
+The macOS permission prompt for Documents access is expected on first launch.
+
+## Evernote Import Requirements
+
+The DMG bundles the Python app and Python dependencies, including
+`evernote-backup`.
+
+One external converter is still required:
 
 ```bash
-# 1. Create and activate a virtual environment
+brew install evernote2md
+```
+
+The setup wizard checks for `evernote2md`. If Homebrew is available, the app can
+install `evernote2md` after the user explicitly clicks the install button.
+
+## Development
+
+```bash
 python3 -m venv .venv
 source .venv/bin/activate
-
-# 2. Install dependencies
 pip install -r requirements.txt
-
-# 3. Run the app
 python run.py
 ```
 
-The app runs at [http://localhost:52321](http://localhost:52321) and auto-opens in your default browser.
+Open:
 
-## Evernote Migration & Setup
-
-EverFree has a built-in onboarding wizard, but you can also run the migration manually.
-
-```bash
-pip install evernote-backup
-brew install evernote2md
-
-chmod +x scripts/export_evernote.sh
-./scripts/export_evernote.sh
+```text
+http://127.0.0.1:52321
 ```
 
-Runs: `init-db` → `sync` → `export` → `evernote2md` → `git init` → `git push`.
+Useful environment variables:
 
-## Git-Backed Sync
+| Variable | Default | Description |
+|---|---:|---|
+| `EVERFREE_DIR` | `~/Documents/EverFree` | Local notes directory |
+| `EVERFREE_PORT` | `52321` | Fixed local server port |
+| `EVERFREE_EVERNOTE_OAUTH_PORT` | `10500` | Local Evernote OAuth callback port |
 
-Every save, create, and delete auto-commits and pushes to GitHub. On startup, the server pulls the latest changes. If setting up manually:
+## Build The DMG
 
-```bash
-cd ~/Documents/EverFree
-git init
-git remote add origin git@github.com:YOU/your-private-repo.git
-git add . && git commit -m "init" && git push -u origin main
-```
-
-⚠️ Make sure your GitHub repo is **PRIVATE**.
-
-## Build macOS `.dmg`
-
-To package the app for distribution to other users:
+Prerequisite:
 
 ```bash
 brew install create-dmg
+```
 
-chmod +x packaging/build_dmg.sh
+Build:
+
+```bash
 ./packaging/build_dmg.sh
 ```
 
-Output: `dist/EverFree.dmg`
+Output:
+
+```text
+dist/EverFree.app
+dist/EverFree.dmg
+```
+
+The build script creates a fresh `.build-venv`, installs dependencies, packages
+the app with `py2app`, and creates the DMG with `create-dmg`.
+
+## Distribution
+
+Do not commit the DMG to the repository. Publish it as a release asset, for
+example on GitHub Releases, and link to that download from the web app.
+
+For public distribution, the app should be signed with an Apple Developer ID
+Application certificate and notarized by Apple. Until then, local builds may
+trigger Gatekeeper warnings on other Macs.
+
+## Vercel Deployment
+
+The Vercel app root is `web/`.
+
+Manual production deploy:
+
+```bash
+cd web
+vercel --prod
+```
+
+If the Vercel project is connected to GitHub, pushing to the connected branch
+should deploy automatically:
+
+```bash
+git push origin main
+```
+
+Mobile is served at:
+
+```text
+/mobile/
+```
+
+## GitHub Sync
+
+Desktop saves, creates, and deletes auto-commit and push to GitHub. On startup,
+the desktop server pulls the latest changes.
+
+Web and mobile edit the same repository using GitHub OAuth and the GitHub
+Contents API.
+
+Keep the notes repo private.
+
+## Search
+
+Desktop, web, and mobile support simple keyword search across note titles,
+notebook names, and Markdown content.
+
+## Roadmap
+
+Proposed next steps:
+
+- Add import support for paid or lock-in note apps first, starting with
+  Evernote and then apps like Notion, Craft, Bear, and Roam Research.
+- Add export/interoperability support for Markdown-first tools like Obsidian and
+  Joplin so users can move their notes anywhere.
+- Improve conflict handling with a clear in-app resolution UI instead of
+  requiring terminal-based Git recovery.
+- Add attachment handling for images, PDFs, and Evernote resources.
+- Add offline-first behavior for the web and mobile clients with queued sync.
+- Add tags, backlinks, and richer Markdown navigation while keeping files
+  portable.
+- Add full-text indexing for faster search on large note collections.
+- Ship signed and notarized macOS releases, then add auto-update support.
+- Explore Windows and Linux desktop builds after the macOS release is stable.
+- Add export tools so users can leave EverFree with plain Markdown and assets at
+  any time.
+- Add a public plugin/importer interface for community-maintained connectors.
+
+## Contributing
+
+EverFree is open source. Contributions are welcome for importers, sync
+reliability, UI, packaging, documentation, and tests.
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
+
+## License
+
+EverFree is released under the [MIT License](LICENSE).
 
 ## Project Structure
 
 ```text
 EverFree/
-├── scripts/export_evernote.sh    # Evernote → Markdown → Git pipeline
-├── server/app.py                 # FastAPI backend (API + Git wrapper)
-├── frontend/                     # Desktop app UI (vanilla HTML/JS/CSS)
-├── web/                          # Hosted web client (Vercel)
-│   ├── index.html                # Three-view shell (signin / repo picker / editor)
-│   ├── style.css
-│   ├── app.js                    # Device Flow auth, GitHub Contents API, Toast UI editor
-│   └── api/github/               # Serverless OAuth proxies (device-start, device-poll)
-├── packaging/                    # py2app + create-dmg scripts
+├── server/                  # FastAPI backend and setup/import pipeline
+├── frontend/                # Desktop browser UI served by the local app
+├── web/                     # Vercel-hosted web and mobile clients
+│   ├── api/github/          # GitHub device-flow proxy endpoints
+│   └── mobile/              # Mobile browser client
+├── packaging/               # py2app, DMG build script, macOS icon
+├── scripts/                 # Legacy/manual helper scripts
+├── CONTRIBUTING.md
+├── LICENSE
 ├── requirements.txt
-├── run.py                        # App entry point
+├── run.py                   # Desktop app entry point
 └── README.md
 ```
 
-## Configuration
+## Local Checks
 
-| Variable | Default | Description |
-|---|---|---|
-| `EVERFREE_DIR` | `~/Documents/EverFree` | Notes directory |
-| `EVERFREE_PORT` | `52321` | Server port |
+```bash
+python3 -m py_compile run.py server/app.py packaging/setup_py2app.py
+node --check frontend/app.js
+node --check frontend/setup.js
+node --check web/app.js
+node --check web/mobile/app.js
+git diff --check
+```
 
-## Contributing
+## Credits
 
-This is an open-source alternative to SaaS monopolies. We want people to contribute and help build a completely different, community-driven note-taking ecosystem. Pull requests for the Python backend, UI, and Chrome extension are welcome!
+EverFree builds on open-source migration tools:
+
+- `evernote-backup` for Evernote authentication, sync, and ENEX export.
+- `evernote2md` for converting exported ENEX files into Markdown.
