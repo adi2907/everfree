@@ -71,6 +71,20 @@
     const $btnNext2       = $("btn-next-2");
     const $btnRetrySetup  = $("btn-retry-setup");
 
+    async function readJsonResponse(resp, fallbackMessage) {
+        const text = await resp.text();
+        if (!text) return {};
+        try {
+            return JSON.parse(text);
+        } catch {
+            const detail = text.slice(0, 240);
+            if (!resp.ok) {
+                return { detail: `${fallbackMessage}: ${detail}` };
+            }
+            throw new Error(`Server returned a non-JSON response: ${detail}`);
+        }
+    }
+
 
     // ── Step navigation ─────────────────────────────────────
     function goToStep(step) {
@@ -248,13 +262,11 @@
     $btnGhSignin.addEventListener("click", async () => {
         try {
             const resp = await fetch("/api/auth/github/start", { method: "POST" });
+            const data = await readJsonResponse(resp, "Failed to start GitHub sign-in");
 
             if (!resp.ok) {
-                const err = await resp.json();
-                throw new Error(err.detail || "Failed to start auth");
+                throw new Error(data.detail || "Failed to start auth");
             }
-
-            const data = await resp.json();
 
             if (!data.user_code) throw new Error("No user code returned from GitHub. Is Device Flow enabled for your OAuth App?");
 
@@ -308,9 +320,9 @@
     // ══════════════════════════════════════════════════════════
 
     const SETUP_STEPS = [
-        { key: "github_create", label: "Create private GitHub repository" },
-        { key: "git_init",      label: "Initialize local Git repository" },
-        { key: "git_push",      label: "Push notes to GitHub" },
+        { key: "github_create", label: "Connect private GitHub repository" },
+        { key: "git_init",      label: "Prepare local notes folder" },
+        { key: "git_push",      label: "Sync notes with GitHub" },
         { key: "complete",      label: "All done!" },
     ];
 
@@ -338,7 +350,7 @@
         $setupErrorBox.classList.add("hidden");
         $progressIcon.textContent = "⚙️";
         $progressIcon.classList.remove("done");
-        $progressTitle.textContent = "Creating your repository…";
+        $progressTitle.textContent = "Connecting your repository…";
         $progressDetail.textContent = "Starting…";
         $progressBar.style.width = "0%";
 

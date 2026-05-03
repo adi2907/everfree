@@ -9,6 +9,7 @@
 # Usage:
 #   chmod +x packaging/build_dmg.sh
 #   ./packaging/build_dmg.sh
+#   ./packaging/build_dmg.sh --sign-only
 #   ./packaging/build_dmg.sh --release
 #
 # One-time release setup:
@@ -28,14 +29,16 @@ APP_ICON="$PROJECT_DIR/packaging/EverFree.icns"
 APP_PATH="$DIST_DIR/${APP_NAME}.app"
 DMG_PATH="$DIST_DIR/$DMG_NAME"
 RELEASE_BUILD=0
+SIGN_ONLY_BUILD=0
 SIGN_IDENTITY="${EVERFREE_SIGN_IDENTITY:-Developer ID Application: Aditya Ganguli (928FCT369C)}"
 NOTARY_PROFILE="${EVERFREE_NOTARY_PROFILE:-EverFree-notary}"
 
 usage() {
     cat <<USAGE
-Usage: $0 [--release]
+Usage: $0 [--sign-only] [--release]
 
 Options:
+  --sign-only  Sign the app and DMG, but skip Apple notarization.
   --release    Sign the app and DMG, submit to Apple notarization, and staple.
 
 Environment:
@@ -76,6 +79,10 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --release)
             RELEASE_BUILD=1
+            shift
+            ;;
+        --sign-only)
+            SIGN_ONLY_BUILD=1
             shift
             ;;
         -h|--help)
@@ -123,6 +130,10 @@ python packaging/setup_py2app.py py2app --dist-dir "$DIST_DIR"
 echo "✓ Built: $APP_PATH"
 
 if [[ "$RELEASE_BUILD" -eq 1 ]]; then
+    SIGN_ONLY_BUILD=1
+fi
+
+if [[ "$SIGN_ONLY_BUILD" -eq 1 ]]; then
     echo ""
     echo "━━━ Signing ${APP_NAME}.app ━━━"
     if ! security find-identity -v -p codesigning | grep -Fq "$SIGN_IDENTITY"; then
@@ -179,7 +190,7 @@ create-dmg \
 echo ""
 echo "✓ DMG created: $DMG_PATH"
 
-if [[ "$RELEASE_BUILD" -eq 1 ]]; then
+if [[ "$SIGN_ONLY_BUILD" -eq 1 ]]; then
     echo ""
     echo "━━━ Signing ${DMG_NAME} ━━━"
     codesign --force --timestamp \
@@ -187,7 +198,9 @@ if [[ "$RELEASE_BUILD" -eq 1 ]]; then
         "$DMG_PATH"
     codesign --verify --verbose=2 "$DMG_PATH"
     echo "✓ Signed: $DMG_PATH"
+fi
 
+if [[ "$RELEASE_BUILD" -eq 1 ]]; then
     echo ""
     echo "━━━ Notarizing ${DMG_NAME} ━━━"
     NOTARY_OUTPUT="$DIST_DIR/notary-submit.json"

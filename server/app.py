@@ -30,6 +30,8 @@ from fastapi.staticfiles import StaticFiles
 # ── Configuration ────────────────────────────────────────────
 NOTES_DIR = Path(os.environ.get("EVERFREE_DIR", Path.home() / "Documents" / "EverFree"))
 PORT = int(os.environ.get("EVERFREE_PORT", 52321))
+GITHUB_CLIENT_ID = os.environ.get("EVERFREE_GITHUB_CLIENT_ID", "Ov23liunA4WFlhQQO9KG")
+GITHUB_REQUEST_TIMEOUT = float(os.environ.get("EVERFREE_GITHUB_REQUEST_TIMEOUT", 20))
 EVERNOTE_SYNC_TIMEOUT = int(os.environ.get("EVERFREE_EVERNOTE_SYNC_TIMEOUT", 3600))
 EVERNOTE_SYNC_MAX_DOWNLOAD_WORKERS = int(
     os.environ.get("EVERFREE_EVERNOTE_SYNC_MAX_DOWNLOAD_WORKERS", 10)
@@ -110,6 +112,34 @@ def _is_configured() -> bool:
 def _is_evernote_synced() -> bool:
     """Notes have already been imported from Evernote (dir exists with content)."""
     return NOTES_DIR.is_dir() and any(NOTES_DIR.iterdir())
+
+
+def _has_local_note_content() -> bool:
+    """Local notes exist beyond generated metadata files."""
+    if not NOTES_DIR.is_dir():
+        return False
+    ignored = {".git", ".gitignore", ".DS_Store"}
+    return any(item.name not in ignored for item in NOTES_DIR.iterdir())
+
+
+def _clone_existing_repo(auth_url: str) -> None:
+    """Clone an existing notes repo into NOTES_DIR when this Mac has no notes yet."""
+    if _is_git_repo():
+        _git("pull", "--ff-only", cwd=str(NOTES_DIR))
+        return
+
+    NOTES_DIR.mkdir(parents=True, exist_ok=True)
+    for item in list(NOTES_DIR.iterdir()):
+        if item.name == ".DS_Store":
+            item.unlink()
+
+    if any(NOTES_DIR.iterdir()):
+        raise RuntimeError(
+            f"Cannot clone existing notes repo because {NOTES_DIR} is not empty."
+        )
+
+    NOTES_DIR.rmdir()
+    _git("clone", auth_url, str(NOTES_DIR), cwd=str(NOTES_DIR.parent))
 
 
 def _get_subprocess_env() -> dict[str, str]:
@@ -224,16 +254,43 @@ async def github_auth_start(background_tasks: BackgroundTasks):
         "verification_uri": None,
     })
 
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            "https://github.com/login/device/code",
-            data={"client_id": GITHUB_CLIENT_ID, "scope": "repo"},
-            headers={"Accept": "application/json"},
-        )
+    try:
+        async with httpx.AsyncClient(timeout=GITHUB_REQUEST_TIMEOUT) as client:
+            resp = await client.post(
+                "https://github.com/login/device/code",
+                data={"client_id": GITHUB_CLIENT_ID, "scope": "repo"},
+                headers={"Accept": "application/json"},
+            )
+    except httpx.HTTPError as exc:
+        detail = f"Could not reach GitHub to start sign-in. Check internet access and try again. ({exc})"
+        logger.exception("GitHub device-flow start failed")
+        github_auth_state.update({"status": "error", "error": detail})
+        raise HTTPException(status_code=502, detail=detail) from exc
 
-    data = resp.json()
+    try:
+        data = resp.json()
+    except ValueError as exc:
+        detail = f"GitHub returned a non-JSON response while starting sign-in: HTTP {resp.status_code}."
+        logger.error("%s Body: %s", detail, resp.text[:500])
+        github_auth_state.update({"status": "error", "error": detail})
+        raise HTTPException(status_code=502, detail=detail) from exc
+
+    if not resp.is_success:
+        detail = data.get("error_description") or data.get("error") or f"GitHub sign-in failed: HTTP {resp.status_code}"
+        github_auth_state.update({"status": "error", "error": detail})
+        raise HTTPException(status_code=502, detail=detail)
+
     if "error" in data:
-        raise HTTPException(status_code=400, detail=data.get("error_description", data["error"]))
+        detail = data.get("error_description", data["error"])
+        github_auth_state.update({"status": "error", "error": detail})
+        raise HTTPException(status_code=400, detail=detail)
+
+    required_fields = {"device_code", "user_code", "verification_uri"}
+    if not required_fields.issubset(data):
+        detail = "GitHub returned an incomplete device-flow response. Please try again."
+        logger.error("%s Response: %s", detail, data)
+        github_auth_state.update({"status": "error", "error": detail})
+        raise HTTPException(status_code=502, detail=detail)
 
     device_code = data["device_code"]
     user_code = data["user_code"]
@@ -260,18 +317,36 @@ async def _poll_device_flow(device_code: str, interval: int, expires_in: int):
     while time.time() < deadline:
         await asyncio.sleep(interval)
 
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                "https://github.com/login/oauth/access_token",
-                data={
-                    "client_id": GITHUB_CLIENT_ID,
-                    "device_code": device_code,
-                    "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
-                },
-                headers={"Accept": "application/json"},
-            )
+        try:
+            async with httpx.AsyncClient(timeout=GITHUB_REQUEST_TIMEOUT) as client:
+                resp = await client.post(
+                    "https://github.com/login/oauth/access_token",
+                    data={
+                        "client_id": GITHUB_CLIENT_ID,
+                        "device_code": device_code,
+                        "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+                    },
+                    headers={"Accept": "application/json"},
+                )
+        except httpx.HTTPError as exc:
+            detail = f"Could not reach GitHub while waiting for authorization. ({exc})"
+            logger.exception("GitHub device-flow poll failed")
+            github_auth_state.update({"status": "error", "error": detail})
+            return
 
-        data = resp.json()
+        try:
+            data = resp.json()
+        except ValueError:
+            detail = f"GitHub returned a non-JSON response while waiting for authorization: HTTP {resp.status_code}."
+            logger.error("%s Body: %s", detail, resp.text[:500])
+            github_auth_state.update({"status": "error", "error": detail})
+            return
+
+        if not resp.is_success:
+            detail = data.get("error_description") or data.get("error") or f"GitHub authorization failed: HTTP {resp.status_code}"
+            github_auth_state.update({"status": "error", "error": detail})
+            return
+
         error = data.get("error")
 
         if error == "authorization_pending":
@@ -288,12 +363,20 @@ async def _poll_device_flow(device_code: str, interval: int, expires_in: int):
 
         token = data.get("access_token")
         if token:
-            async with httpx.AsyncClient() as client:
-                user_resp = await client.get(
-                    "https://api.github.com/user",
-                    headers={"Authorization": f"token {token}"},
-                )
-            username = user_resp.json().get("login", "unknown") if user_resp.status_code == 200 else "unknown"
+            try:
+                async with httpx.AsyncClient(timeout=GITHUB_REQUEST_TIMEOUT) as client:
+                    user_resp = await client.get(
+                        "https://api.github.com/user",
+                        headers={"Authorization": f"token {token}"},
+                    )
+                username = user_resp.json().get("login", "unknown") if user_resp.status_code == 200 else "unknown"
+            except Exception as exc:
+                logger.exception("Failed to fetch GitHub user after authorization")
+                github_auth_state.update({
+                    "status": "error",
+                    "error": f"GitHub authorized, but EverFree could not fetch your GitHub profile. ({exc})",
+                })
+                return
             github_auth_state.update({"access_token": token, "username": username, "status": "authorized"})
             _save_auth()
             return
@@ -315,7 +398,6 @@ async def github_auth_status():
 # ══════════════════════════════════════════════════════════════
 
 EVERNOTE_OAUTH_PORT = int(os.environ.get("EVERFREE_EVERNOTE_OAUTH_PORT", 10500))
-GITHUB_CLIENT_ID = os.environ.get("EVERFREE_GITHUB_CLIENT_ID", "Ov23liunA4WFlhQQO9KG")
 
 
 def _find_tool(name: str) -> str | None:
@@ -607,24 +689,12 @@ def _setup_repo_pipeline(token: str, repo_name: str):
 
     try:
         NOTES_DIR.mkdir(parents=True, exist_ok=True)
-
-        # Create welcome notebook if empty
-        notebooks = [d for d in NOTES_DIR.iterdir() if d.is_dir() and not d.name.startswith(".")]
-        if not notebooks:
-            welcome_dir = NOTES_DIR / "Welcome"
-            welcome_dir.mkdir(parents=True, exist_ok=True)
-            (welcome_dir / "Getting Started.md").write_text(
-                "# Getting Started\n\nWelcome to **EverFree**! 🎉\n\n"
-                "- **Edit** notes with the Markdown editor\n"
-                "- **Create** notebooks and notes from the sidebar\n"
-                "- **Sync** automatically to GitHub on every save\n\n"
-                "Happy writing!\n",
-                encoding="utf-8",
-            )
+        local_has_content = _has_local_note_content()
 
         # ── Create private GitHub repo ───────────────────────
-        _update_progress("github_create", f"Creating private repo '{repo_name}'...")
+        _update_progress("github_create", f"Connecting private repo '{repo_name}'...")
         owner = github_auth_state.get("username", "unknown")
+        repo_exists = False
 
         with httpx.Client(timeout=30) as client:
             resp = client.post(
@@ -644,12 +714,44 @@ def _setup_repo_pipeline(token: str, repo_name: str):
                 repo_data = resp.json()
                 owner = repo_data["owner"]["login"]
             elif resp.status_code == 422:
+                existing_resp = client.get(
+                    f"https://api.github.com/repos/{owner}/{repo_name}",
+                    headers={
+                        "Authorization": f"token {token}",
+                        "Accept": "application/vnd.github.v3+json",
+                    },
+                )
+                if existing_resp.status_code != 200:
+                    raise RuntimeError(f"GitHub API error {resp.status_code}: {resp.text}")
+                repo_data = existing_resp.json()
+                owner = repo_data["owner"]["login"]
+                repo_exists = True
                 _update_progress("github_create", "Repo already exists, using it...")
             else:
                 raise RuntimeError(f"GitHub API error {resp.status_code}: {resp.text}")
 
         clone_url = f"https://github.com/{owner}/{repo_name}.git"
         auth_url = clone_url.replace("https://", f"https://{token}@")
+
+        if repo_exists and not local_has_content:
+            _update_progress("git_init", "Cloning existing notes repository...")
+            _clone_existing_repo(auth_url)
+            _update_progress("complete", "All set! Redirecting...")
+            setup_progress["complete"] = True
+            return
+
+        # Create welcome notebook only for a brand-new local notes repo.
+        if not local_has_content:
+            welcome_dir = NOTES_DIR / "Welcome"
+            welcome_dir.mkdir(parents=True, exist_ok=True)
+            (welcome_dir / "Getting Started.md").write_text(
+                "# Getting Started\n\nWelcome to **EverFree**!\n\n"
+                "- **Edit** notes with the Markdown editor\n"
+                "- **Create** notebooks and notes from the sidebar\n"
+                "- **Sync** automatically to GitHub on every save\n\n"
+                "Happy writing!\n",
+                encoding="utf-8",
+            )
 
         # ── Git init + push ──────────────────────────────────
         _update_progress("git_init", "Initializing Git repository...")
