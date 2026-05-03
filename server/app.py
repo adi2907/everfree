@@ -9,6 +9,8 @@ Setup wizard orchestrates Evernote OAuth → GitHub OAuth → repo creation,
 all without the user ever touching a terminal or pasting tokens.
 """
 
+from __future__ import annotations
+
 import os
 import re
 import sys
