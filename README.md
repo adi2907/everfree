@@ -1,25 +1,48 @@
 # EverFree
 
-EverFree is a free, Git-backed notes app for people moving out of Evernote.
+EverFree helps you leave expensive note-taking apps without losing control of
+your notes. It imports your notes into Markdown, syncs them to **your private
+GitHub repository**, and lets you access them from web, mobile, and the native
+Mac app.
 
-Access your notes from the hosted web app at
-[everfree.vercel.app](https://everfree.vercel.app) after your notes have been
-backed up to GitHub.
+Use the hosted app at [everfree.vercel.app](https://everfree.vercel.app). If
+you are already signed in, it opens your notes. If not, it shows the public
+landing page and lets you connect GitHub.
 
-It imports Evernote notes into local Markdown files, keeps them in
-`~/Documents/EverFree`, and syncs them to **your private GitHub repository**.
-Your GitHub profile is used for notes backup; EverFree creates or reuses the
-private `everfree-notes` repo under your account. The hosted web and mobile
-clients then read and write the same GitHub-backed notes.
+## Quick Links
+
+- **Hosted web and mobile app:** [everfree.vercel.app](https://everfree.vercel.app)
+- **Download Mac DMG:** [EverFree.dmg](https://github.com/adi2907/everfree/releases/download/v1.0.0/EverFree.dmg)
+- **Self-host or inspect the code:** [github.com/adi2907/everfree](https://github.com/adi2907/everfree)
+- **Default notes repo:** `everfree-notes` in your own GitHub account
+
+## Why EverFree
+
+- **Always free:** no subscription wall just to access your own notes.
+- **Your data is yours:** notes are plain Markdown files that you can clone,
+  inspect, export, or move.
+- **Your GitHub is the backend:** EverFree creates or reuses a private
+  `everfree-notes` repo under your GitHub profile. There is no hosted EverFree
+  database holding your notes.
+- **Web, mobile, and native Mac:** use the hosted browser app, mobile web app,
+  and the fully featured macOS app against the same GitHub-backed notes.
+- **Easy migration:** the Mac app imports Evernote, converts notes to Markdown,
+  stores them locally in `~/Documents/EverFree`, and pushes the backup to your
+  private GitHub repository.
+- **Self-hostable:** deploy the web client yourself or run the local app from
+  source if you want full control over the stack.
 
 ## Current Product Shape
 
-- **Desktop DMG:** macOS app that runs a local FastAPI server, stores notes as
-  Markdown, imports Evernote, and syncs to GitHub.
-- **Web client:** hosted on Vercel, signs in with GitHub, auto-connects to the
-  user's EverFree repo, and edits notes through the GitHub Contents API.
-- **Mobile client:** browser-based mobile UI at `/mobile/`, using the same
-  GitHub login and repo.
+- **Desktop DMG:** signed macOS app that runs a local FastAPI server, stores
+  notes as Markdown, imports Evernote, and syncs to GitHub.
+- **Web client:** hosted on Vercel at
+  [everfree.vercel.app](https://everfree.vercel.app), signs in with GitHub,
+  auto-connects to the user's EverFree repo, and edits notes through the GitHub
+  Contents API.
+- **Mobile client:** browser-based mobile UI at
+  [everfree.vercel.app/mobile/](https://everfree.vercel.app/mobile/), using the
+  same GitHub login and repo.
 - **Repository:** the canonical default repo is `everfree-notes`.
 
 ## Important Flow
@@ -121,11 +144,17 @@ the app with `py2app`, and creates the DMG with `create-dmg`.
 ## Distribution
 
 Do not commit the DMG to the repository. Publish it as a release asset, for
-example on GitHub Releases, and link to that download from the web app.
+example on GitHub Releases, and link to that download from the web app and this
+README.
 
-For public distribution, the app should be signed with an Apple Developer ID
-Application certificate and notarized by Apple. Until then, local builds may
-trigger Gatekeeper warnings on other Macs.
+Current public DMG:
+
+```text
+https://github.com/adi2907/everfree/releases/download/v1.0.0/EverFree.dmg
+```
+
+Public macOS releases should be signed with an Apple Developer ID Application
+certificate and notarized by Apple before distribution.
 
 ## Vercel Deployment
 
