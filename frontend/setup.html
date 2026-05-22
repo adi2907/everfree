@@ -47,8 +47,9 @@
             <div class="card">
                 <h2>Import from Evernote</h2>
                 <p class="card-desc">
-                    We'll export your Evernote notebooks and convert them to Markdown.
-                    The Evernote sign-in page will open in your browser.
+                    EverFree imports your Evernote notebooks into Markdown. If
+                    evernote2md is missing, EverFree installs it with Homebrew
+                    before opening Evernote sign-in.
                 </p>
 
                 <!-- Import tool prerequisite -->
@@ -57,13 +58,9 @@
                         <div class="spinner spinner-sm" id="import-tool-spinner"></div>
                         <span class="auth-check hidden" id="import-tool-check">✓</span>
                         <div>
-                            <p class="auth-status-title" id="import-tool-title">Checking import tools…</p>
-                            <p class="auth-status-detail" id="import-tool-detail">EverFree uses evernote2md to convert Evernote exports to Markdown.</p>
+                            <p class="auth-status-title" id="import-tool-title">Checking evernote2md…</p>
+                            <p class="auth-status-detail" id="import-tool-detail">EverFree needs evernote2md for Evernote imports.</p>
                         </div>
-                    </div>
-                    <div class="tool-actions hidden" id="import-tool-actions">
-                        <button class="btn btn-primary btn-sm" id="btn-install-evernote2md">Install converter</button>
-                        <button class="btn btn-ghost btn-sm" id="btn-recheck-import-tools">Recheck</button>
                     </div>
                     <pre class="tool-command hidden" id="import-tool-command"></pre>
                 </div>

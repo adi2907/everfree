@@ -37,7 +37,6 @@
     const $importToolCheck   = $("import-tool-check");
     const $importToolTitle   = $("import-tool-title");
     const $importToolDetail  = $("import-tool-detail");
-    const $importToolActions = $("import-tool-actions");
     const $importToolCommand = $("import-tool-command");
 
     // GitHub
@@ -61,8 +60,6 @@
     // Buttons
     const $btnEnConnect   = $("btn-evernote-connect");
     const $btnEnRetry     = $("btn-evernote-retry");
-    const $btnInstallTool = $("btn-install-evernote2md");
-    const $btnRecheckTool = $("btn-recheck-import-tools");
     const $btnSkip        = $("btn-skip-evernote");
     const $btnNext1       = $("btn-next-1");
     const $btnGhSignin    = $("btn-github-signin");
@@ -113,10 +110,16 @@
         if (map[state]) map[state].classList.remove("hidden");
     }
 
+    const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+    async function fetchImportToolStatus() {
+        const resp = await fetch("/api/setup/import-tools/status");
+        return readJsonResponse(resp, "Could not check evernote2md");
+    }
+
     async function checkImportTools() {
         try {
-            const resp = await fetch("/api/setup/import-tools/status");
-            const data = await resp.json();
+            const data = await fetchImportToolStatus();
             renderImportToolStatus(data);
 
             if (data.install && data.install.running) {
@@ -140,37 +143,39 @@
         $importToolStatus.classList.toggle("tool-error", Boolean(installError) || (!installed && !installing && !hasBrew));
         $importToolSpinner.classList.toggle("hidden", installed || !installing);
         $importToolCheck.classList.toggle("hidden", !installed);
-        $importToolActions.classList.toggle("hidden", installed || installing);
         $importToolCommand.classList.add("hidden");
-        $btnInstallTool.classList.toggle("hidden", !hasBrew || installed);
-        $btnInstallTool.disabled = installing;
-        $btnEnConnect.disabled = !installed;
+        $btnEnConnect.disabled = installing || (!installed && !hasBrew);
 
         if (installed) {
-            $importToolTitle.textContent = "Evernote converter ready";
+            $importToolTitle.textContent = "evernote2md is installed";
             $importToolDetail.textContent = data.evernote2md.path || "evernote2md is installed.";
+            $btnEnConnect.textContent = "Sign in with Evernote";
             return;
         }
 
         if (installing) {
-            $importToolTitle.textContent = "Installing Evernote converter…";
+            $importToolTitle.textContent = "Installing evernote2md…";
             $importToolDetail.textContent = data.install.detail || "Running brew install evernote2md.";
+            $btnEnConnect.textContent = "Installing evernote2md…";
             return;
         }
 
         if (installError) {
-            $importToolTitle.textContent = "Converter install failed";
+            $importToolTitle.textContent = "evernote2md install failed";
             $importToolDetail.textContent = installError;
+            $btnEnConnect.textContent = hasBrew ? "Install evernote2md and sign in" : "Sign in with Evernote";
             return;
         }
 
-        $importToolTitle.textContent = "Evernote converter required";
+        $importToolTitle.textContent = "evernote2md is required";
         if (hasBrew) {
-            $importToolDetail.textContent = "EverFree can install evernote2md with Homebrew after you approve it.";
+            $importToolDetail.textContent = "EverFree will run: brew install evernote2md";
+            $btnEnConnect.textContent = "Install evernote2md and sign in";
         } else {
-            $importToolDetail.textContent = "Homebrew is required to install evernote2md.";
+            $importToolDetail.textContent = "Install Homebrew first, then reopen EverFree.";
             $importToolCommand.textContent = '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"';
             $importToolCommand.classList.remove("hidden");
+            $btnEnConnect.textContent = "Sign in with Evernote";
         }
     }
 
@@ -178,33 +183,52 @@
         $importToolStatus.classList.add("tool-error");
         $importToolSpinner.classList.add("hidden");
         $importToolCheck.classList.add("hidden");
-        $importToolActions.classList.remove("hidden");
-        $btnInstallTool.classList.add("hidden");
         $btnEnConnect.disabled = true;
-        $importToolTitle.textContent = "Import tool check failed";
+        $importToolTitle.textContent = "evernote2md check failed";
         $importToolDetail.textContent = message;
     }
 
-    $btnInstallTool.addEventListener("click", async () => {
-        $btnInstallTool.disabled = true;
-        $importToolTitle.textContent = "Starting installer…";
-        $importToolDetail.textContent = "Running brew install evernote2md.";
-        try {
-            const resp = await fetch("/api/setup/import-tools/install", { method: "POST" });
-            if (!resp.ok) {
-                const err = await resp.json();
-                throw new Error(err.detail || "Failed to start installer");
-            }
-            checkImportTools();
-        } catch (e) {
-            renderImportToolError(e.message);
-        }
-    });
+    async function ensureEvernote2md() {
+        let data = await fetchImportToolStatus();
+        renderImportToolStatus(data);
+        if (data.evernote2md && data.evernote2md.installed) return true;
 
-    $btnRecheckTool.addEventListener("click", checkImportTools);
+        if (!(data.homebrew && data.homebrew.installed)) {
+            throw new Error("Homebrew is required to install evernote2md.");
+        }
+
+        $btnEnConnect.disabled = true;
+        $importToolTitle.textContent = "Installing evernote2md…";
+        $importToolDetail.textContent = "Running brew install evernote2md.";
+
+        const resp = await fetch("/api/setup/import-tools/install", { method: "POST" });
+        const installStart = await readJsonResponse(resp, "Failed to install evernote2md");
+        if (!resp.ok) {
+            throw new Error(installStart.detail || "Failed to install evernote2md");
+        }
+
+        for (let i = 0; i < 120; i += 1) {
+            await sleep(IMPORT_TOOL_POLL_INTERVAL_MS);
+            data = await fetchImportToolStatus();
+            renderImportToolStatus(data);
+            if (data.evernote2md && data.evernote2md.installed) return true;
+            if (data.install && data.install.error) {
+                throw new Error(data.install.error);
+            }
+        }
+
+        throw new Error("Timed out installing evernote2md.");
+    }
 
     $btnEnConnect.addEventListener("click", async () => {
-        if (!await checkImportTools()) return;
+        try {
+            await ensureEvernote2md();
+        } catch (e) {
+            showEnState("idle");
+            renderImportToolError(e.message);
+            return;
+        }
+
         showEnState("running");
         try {
             const resp = await fetch("/api/auth/evernote/start", { method: "POST" });
