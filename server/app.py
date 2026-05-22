@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+import io
 import secrets
 import shutil
 import asyncio
@@ -482,6 +483,18 @@ def _install_evernote2md(brew_path: str):
         })
 
 
+def _disable_evernote_backup_click_progress() -> None:
+    """evernote-backup progress bars require a Click CLI context; EverFree has none."""
+    from evernote_backup import cli_app_util, note_exporter, note_synchronizer
+
+    def _silent_progress_output():
+        return io.StringIO()
+
+    cli_app_util.get_progress_output = _silent_progress_output
+    note_exporter.get_progress_output = _silent_progress_output
+    note_synchronizer.get_progress_output = _silent_progress_output
+
+
 @app.post("/api/auth/evernote/start")
 async def evernote_auth_start():
     """Start Evernote OAuth + full sync pipeline in a background thread."""
@@ -519,6 +532,8 @@ def _evernote_sync_pipeline():
             OAuthDeclinedError,
         )
         from evernote_backup.cli_app_util import get_api_data
+
+        _disable_evernote_backup_click_progress()
 
         tmp_dir = tempfile.mkdtemp(prefix="everfree_en_")
         db_path = os.path.join(tmp_dir, "en_backup.db")
