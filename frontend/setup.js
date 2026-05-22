@@ -167,9 +167,9 @@
             return;
         }
 
-        $importToolTitle.textContent = "evernote2md is required";
+        $importToolTitle.textContent = "Ready to import from Evernote";
         if (hasBrew) {
-            $importToolDetail.textContent = "EverFree will run: brew install evernote2md";
+            $importToolDetail.textContent = "Click below to continue.";
             $btnEnConnect.textContent = "Install evernote2md and sign in";
         } else {
             $importToolDetail.textContent = "Install Homebrew first, then reopen EverFree.";
