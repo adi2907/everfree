@@ -139,6 +139,8 @@
         const installError = data.install && data.install.error;
         const hasBrew = data.homebrew && data.homebrew.installed;
 
+        const shouldShowStatus = installing || Boolean(installError) || (!installed && !hasBrew);
+        $importToolStatus.classList.toggle("hidden", !shouldShowStatus);
         $importToolStatus.classList.toggle("tool-ok", installed);
         $importToolStatus.classList.toggle("tool-error", Boolean(installError) || (!installed && !installing && !hasBrew));
         $importToolSpinner.classList.toggle("hidden", installed || !installing);
@@ -147,8 +149,6 @@
         $btnEnConnect.disabled = installing || (!installed && !hasBrew);
 
         if (installed) {
-            $importToolTitle.textContent = "evernote2md is installed";
-            $importToolDetail.textContent = data.evernote2md.path || "evernote2md is installed.";
             $btnEnConnect.textContent = "Sign in with Evernote";
             return;
         }
@@ -181,6 +181,7 @@
 
     function renderImportToolError(message) {
         $importToolStatus.classList.add("tool-error");
+        $importToolStatus.classList.remove("hidden");
         $importToolSpinner.classList.add("hidden");
         $importToolCheck.classList.add("hidden");
         $btnEnConnect.disabled = true;
