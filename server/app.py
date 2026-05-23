@@ -14,12 +14,15 @@ from __future__ import annotations
 import os
 import re
 import sys
+import sqlite3
 import secrets
 import shutil
 import asyncio
 import logging
 import subprocess
 import tempfile
+import threading
+import time
 import webbrowser
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -35,6 +38,8 @@ PORT = int(os.environ.get("EVERFREE_PORT", 52321))
 GITHUB_CLIENT_ID = os.environ.get("EVERFREE_GITHUB_CLIENT_ID", "Ov23liunA4WFlhQQO9KG")
 GITHUB_REQUEST_TIMEOUT = float(os.environ.get("EVERFREE_GITHUB_REQUEST_TIMEOUT", 20))
 EVERNOTE_SYNC_TIMEOUT = int(os.environ.get("EVERFREE_EVERNOTE_SYNC_TIMEOUT", 3600))
+EVERNOTE_NETWORK_RETRY_COUNT = int(os.environ.get("EVERFREE_EVERNOTE_NETWORK_RETRY_COUNT", 5))
+EVERNOTE_PROGRESS_INTERVAL = float(os.environ.get("EVERFREE_EVERNOTE_PROGRESS_INTERVAL", 5))
 EVERNOTE_SYNC_MAX_DOWNLOAD_WORKERS = int(
     os.environ.get("EVERFREE_EVERNOTE_SYNC_MAX_DOWNLOAD_WORKERS", 10)
 )
@@ -511,6 +516,71 @@ def _disable_evernote_backup_click_progress() -> None:
     note_synchronizer.get_progress_output = _silent_progress_output
 
 
+def _format_elapsed(seconds: float) -> str:
+    total = max(0, int(seconds))
+    minutes, secs = divmod(total, 60)
+    if minutes:
+        return f"{minutes}m {secs}s"
+    return f"{secs}s"
+
+
+def _read_sync_counts(db_path: Path) -> dict | None:
+    if not db_path.exists():
+        return None
+
+    try:
+        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=0.2) as conn:
+            total_notes = conn.execute("select count(*) from notes").fetchone()[0]
+            downloaded_notes = conn.execute(
+                "select count(*) from notes where raw_note is not null"
+            ).fetchone()[0]
+            notebooks = conn.execute("select count(*) from notebooks").fetchone()[0]
+            return {
+                "total_notes": int(total_notes),
+                "downloaded_notes": int(downloaded_notes),
+                "notebooks": int(notebooks),
+            }
+    except sqlite3.Error:
+        return None
+
+
+def _start_sync_progress_monitor(db_path: Path) -> threading.Event:
+    stop = threading.Event()
+    started_at = time.monotonic()
+
+    def _monitor() -> None:
+        while not stop.wait(EVERNOTE_PROGRESS_INTERVAL):
+            elapsed = _format_elapsed(time.monotonic() - started_at)
+            counts = _read_sync_counts(db_path)
+            if not counts:
+                evernote_auth_state["detail"] = (
+                    f"Syncing notes from Evernote... {elapsed} elapsed"
+                )
+                continue
+
+            total_notes = counts["total_notes"]
+            downloaded_notes = counts["downloaded_notes"]
+            notebooks = counts["notebooks"]
+            if total_notes:
+                evernote_auth_state["detail"] = (
+                    f"Syncing notes from Evernote... "
+                    f"{downloaded_notes}/{total_notes} notes downloaded, "
+                    f"{elapsed} elapsed"
+                )
+            elif notebooks:
+                evernote_auth_state["detail"] = (
+                    f"Fetching Evernote index... {notebooks} notebooks found, "
+                    f"{elapsed} elapsed"
+                )
+            else:
+                evernote_auth_state["detail"] = (
+                    f"Fetching Evernote index... {elapsed} elapsed"
+                )
+
+    threading.Thread(target=_monitor, daemon=True).start()
+    return stop
+
+
 @app.post("/api/auth/evernote/start")
 async def evernote_auth_start():
     """Start Evernote OAuth + full sync pipeline in a background thread."""
@@ -606,34 +676,43 @@ def _evernote_sync_pipeline():
         except OAuthDeclinedError:
             raise RuntimeError("Evernote authorization was declined.")
 
-        # Step 2: init-db with the token we just obtained (bypasses TTY check)
-        evernote_auth_state["detail"] = "Initializing database..."
-        cli_app.init_db(
-            database=Path(db_path),
-            auth_user=None,
-            auth_password=None,
-            auth_oauth_port=EVERNOTE_OAUTH_PORT,
-            auth_oauth_host="localhost",
+        # Step 2: initialize evernote-backup's database with explicit progress.
+        evernote_auth_state["detail"] = "Checking Evernote authorization..."
+        cli_app.raise_on_existing_database(Path(db_path))
+        note_client = cli_app.get_sync_client(
             auth_token=token,
-            force=False,
             backend="evernote",
-            network_retry_count=config_defaults.NETWORK_ERROR_RETRY_COUNT,
+            network_error_retry_count=EVERNOTE_NETWORK_RETRY_COUNT,
             use_system_ssl_ca=False,
-            custom_api_data=None,
+            max_chunk_results=1,
+            is_jwt_needed=False,
         )
+        evernote_auth_state["detail"] = "Creating local Evernote backup database..."
+        storage = cli_app.initialize_storage(Path(db_path), force=False)
+        evernote_auth_state["detail"] = "Preparing Evernote sync..."
+        storage.config.set_config_value("DB_VERSION", str(cli_app.CURRENT_DB_VERSION))
+        storage.config.set_config_value("USN", "0")
+        storage.config.set_config_value("auth_token", token)
+        storage.config.set_config_value("user", note_client.user)
+        storage.config.set_config_value("backend", "evernote")
+        storage.config.set_config_value("last_connection_tasks", "0")
 
         # Step 3: sync
         evernote_auth_state["detail"] = "Syncing notes from Evernote..."
-        cli_app.sync(
-            database=Path(db_path),
-            max_chunk_results=config_defaults.SYNC_CHUNK_MAX_RESULTS,
-            max_download_workers=EVERNOTE_SYNC_MAX_DOWNLOAD_WORKERS,
-            download_cache_memory_limit=config_defaults.SYNC_DOWNLOAD_CACHE_MEMORY_LIMIT,
-            network_retry_count=config_defaults.NETWORK_ERROR_RETRY_COUNT,
-            use_system_ssl_ca=False,
-            include_tasks=False,
-            token=None,
-        )
+        sync_monitor = _start_sync_progress_monitor(Path(db_path))
+        try:
+            cli_app.sync(
+                database=Path(db_path),
+                max_chunk_results=config_defaults.SYNC_CHUNK_MAX_RESULTS,
+                max_download_workers=EVERNOTE_SYNC_MAX_DOWNLOAD_WORKERS,
+                download_cache_memory_limit=config_defaults.SYNC_DOWNLOAD_CACHE_MEMORY_LIMIT,
+                network_retry_count=EVERNOTE_NETWORK_RETRY_COUNT,
+                use_system_ssl_ca=False,
+                include_tasks=False,
+                token=None,
+            )
+        finally:
+            sync_monitor.set()
 
         # Step 4: export to .enex
         evernote_auth_state["detail"] = "Exporting .enex files..."
