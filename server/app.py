@@ -100,8 +100,11 @@ _load_saved_auth()
 
 evernote_auth_state = {
     "status": "idle",  # idle | running | done | error
+    "step": "",
     "detail": "",
     "error": None,
+    "debug": [],
+    "started_at": None,
 }
 
 import_tool_install_state = {
@@ -516,6 +519,21 @@ def _disable_evernote_backup_click_progress() -> None:
     note_synchronizer.get_progress_output = _silent_progress_output
 
 
+def _set_evernote_detail(step: str, detail: str) -> None:
+    evernote_auth_state["step"] = step
+    evernote_auth_state["detail"] = detail
+
+    started_at = evernote_auth_state.get("started_at")
+    elapsed = round(time.monotonic() - started_at, 1) if started_at else 0.0
+    debug = evernote_auth_state.setdefault("debug", [])
+    debug.append({
+        "elapsed": elapsed,
+        "step": step,
+        "detail": detail,
+    })
+    del debug[:-40]
+
+
 def _format_elapsed(seconds: float) -> str:
     total = max(0, int(seconds))
     minutes, secs = divmod(total, 60)
@@ -553,7 +571,8 @@ def _start_sync_progress_monitor(db_path: Path) -> threading.Event:
             elapsed = _format_elapsed(time.monotonic() - started_at)
             counts = _read_sync_counts(db_path)
             if not counts:
-                evernote_auth_state["detail"] = (
+                _set_evernote_detail(
+                    "sync_waiting_for_database",
                     f"Syncing notes from Evernote... {elapsed} elapsed"
                 )
                 continue
@@ -562,18 +581,21 @@ def _start_sync_progress_monitor(db_path: Path) -> threading.Event:
             downloaded_notes = counts["downloaded_notes"]
             notebooks = counts["notebooks"]
             if total_notes:
-                evernote_auth_state["detail"] = (
+                _set_evernote_detail(
+                    "sync_downloading_notes",
                     f"Syncing notes from Evernote... "
                     f"{downloaded_notes}/{total_notes} notes downloaded, "
                     f"{elapsed} elapsed"
                 )
             elif notebooks:
-                evernote_auth_state["detail"] = (
+                _set_evernote_detail(
+                    "sync_fetching_index",
                     f"Fetching Evernote index... {notebooks} notebooks found, "
                     f"{elapsed} elapsed"
                 )
             else:
-                evernote_auth_state["detail"] = (
+                _set_evernote_detail(
+                    "sync_fetching_index",
                     f"Fetching Evernote index... {elapsed} elapsed"
                 )
 
@@ -587,7 +609,14 @@ async def evernote_auth_start():
     if evernote_auth_state["status"] == "running":
         return {"status": "running", "detail": "Already running"}
 
-    evernote_auth_state.update({"status": "running", "detail": "Starting...", "error": None})
+    evernote_auth_state.update({
+        "status": "running",
+        "step": "starting",
+        "detail": "Starting...",
+        "error": None,
+        "debug": [],
+        "started_at": time.monotonic(),
+    })
 
     loop = asyncio.get_event_loop()
     loop.run_in_executor(None, _evernote_sync_pipeline)
@@ -624,7 +653,7 @@ def _evernote_sync_pipeline():
         evernote2md_bin = shutil.which("evernote2md", path=env["PATH"])
 
         if not evernote2md_bin:
-            evernote_auth_state["detail"] = "Installing evernote2md..."
+            _set_evernote_detail("install_evernote2md", "Installing evernote2md...")
             import_tool_install_state.update({
                 "running": True,
                 "detail": "Installing evernote2md...",
@@ -657,7 +686,7 @@ def _evernote_sync_pipeline():
                 raise FileNotFoundError("Evernote import setup did not complete. Please retry.")
 
         # Step 1: OAuth — use the Python API directly so no TTY is required
-        evernote_auth_state["detail"] = "Opening Evernote login in your browser..."
+        _set_evernote_detail("evernote_oauth_open", "Opening Evernote login in your browser...")
         consumer_key, consumer_secret = get_api_data("evernote", None)
         oauth_client = EvernoteOAuthClient(
             backend="evernote",
@@ -670,14 +699,17 @@ def _evernote_sync_pipeline():
         oauth_url = oauth_handler.get_oauth_url()
         webbrowser.open(oauth_url)
 
-        evernote_auth_state["detail"] = "Waiting for Evernote authorization (check your browser)..."
+        _set_evernote_detail(
+            "evernote_oauth_wait",
+            "Waiting for Evernote authorization (check your browser)...",
+        )
         try:
             token = oauth_handler.wait_for_token()
         except OAuthDeclinedError:
             raise RuntimeError("Evernote authorization was declined.")
 
         # Step 2: initialize evernote-backup's database with explicit progress.
-        evernote_auth_state["detail"] = "Checking Evernote authorization..."
+        _set_evernote_detail("init_auth_check", "Checking Evernote authorization...")
         cli_app.raise_on_existing_database(Path(db_path))
         note_client = cli_app.get_sync_client(
             auth_token=token,
@@ -687,9 +719,9 @@ def _evernote_sync_pipeline():
             max_chunk_results=1,
             is_jwt_needed=False,
         )
-        evernote_auth_state["detail"] = "Creating local Evernote backup database..."
+        _set_evernote_detail("init_create_db", "Creating local Evernote backup database...")
         storage = cli_app.initialize_storage(Path(db_path), force=False)
-        evernote_auth_state["detail"] = "Preparing Evernote sync..."
+        _set_evernote_detail("init_write_config", "Preparing Evernote sync...")
         storage.config.set_config_value("DB_VERSION", str(cli_app.CURRENT_DB_VERSION))
         storage.config.set_config_value("USN", "0")
         storage.config.set_config_value("auth_token", token)
@@ -698,24 +730,63 @@ def _evernote_sync_pipeline():
         storage.config.set_config_value("last_connection_tasks", "0")
 
         # Step 3: sync
-        evernote_auth_state["detail"] = "Syncing notes from Evernote..."
+        _set_evernote_detail("sync_open_db", "Opening Evernote sync database...")
+        sync_storage = cli_app.get_storage(Path(db_path))
+        _set_evernote_detail("sync_check_db", "Checking Evernote sync database...")
+        cli_app.raise_on_old_database_version(sync_storage)
+
+        backend = sync_storage.config.get_config_value("backend")
+        auth_token = sync_storage.config.get_config_value("auth_token")
+
+        _set_evernote_detail("sync_auth_check", "Checking Evernote token before sync...")
+        sync_client = cli_app.get_sync_client(
+            auth_token=auth_token,
+            backend=backend,
+            network_error_retry_count=EVERNOTE_NETWORK_RETRY_COUNT,
+            use_system_ssl_ca=False,
+            max_chunk_results=config_defaults.SYNC_CHUNK_MAX_RESULTS,
+            is_jwt_needed=False,
+        )
+
+        _set_evernote_detail("sync_prepare", "Preparing Evernote sync worker...")
+        note_synchronizer = cli_app.NoteSynchronizer(
+            sync_client,
+            sync_storage,
+            EVERNOTE_SYNC_MAX_DOWNLOAD_WORKERS,
+            config_defaults.SYNC_DOWNLOAD_CACHE_MEMORY_LIMIT,
+            False,
+        )
+
+        original_sync_chunks = note_synchronizer._sync_chunks
+        original_download_notes = note_synchronizer._download_scheduled_notes
+
+        def _sync_chunks_with_status():
+            _set_evernote_detail("sync_fetch_index", "Fetching Evernote index...")
+            return original_sync_chunks()
+
+        def _download_notes_with_status(notes_to_sync):
+            _set_evernote_detail(
+                "sync_download_notes",
+                f"Downloading {len(notes_to_sync)} Evernote notes...",
+            )
+            return original_download_notes(notes_to_sync)
+
+        note_synchronizer._sync_chunks = _sync_chunks_with_status
+        note_synchronizer._download_scheduled_notes = _download_notes_with_status
+
+        _set_evernote_detail("sync_running", "Syncing notes from Evernote...")
         sync_monitor = _start_sync_progress_monitor(Path(db_path))
         try:
-            cli_app.sync(
-                database=Path(db_path),
-                max_chunk_results=config_defaults.SYNC_CHUNK_MAX_RESULTS,
-                max_download_workers=EVERNOTE_SYNC_MAX_DOWNLOAD_WORKERS,
-                download_cache_memory_limit=config_defaults.SYNC_DOWNLOAD_CACHE_MEMORY_LIMIT,
-                network_retry_count=EVERNOTE_NETWORK_RETRY_COUNT,
-                use_system_ssl_ca=False,
-                include_tasks=False,
-                token=None,
-            )
+            note_synchronizer.sync()
+        except cli_app.WrongAuthUserError as exc:
+            raise RuntimeError(
+                f"Current user of this database is {exc.local_user}, not {exc.remote_user}."
+            ) from exc
         finally:
             sync_monitor.set()
 
         # Step 4: export to .enex
-        evernote_auth_state["detail"] = "Exporting .enex files..."
+        _set_evernote_detail("export_enex", "Exporting .enex files...")
         os.makedirs(enex_dir, exist_ok=True)
         cli_app.export(
             database=Path(db_path),
@@ -731,14 +802,17 @@ def _evernote_sync_pipeline():
         )
 
         # Step 5: convert to Markdown
-        evernote_auth_state["detail"] = "Converting to Markdown..."
+        _set_evernote_detail("convert_markdown", "Converting to Markdown...")
         NOTES_DIR.mkdir(parents=True, exist_ok=True)
         enex_files = list(Path(enex_dir).glob("*.enex"))
         for i, enex_file in enumerate(enex_files, 1):
             notebook_name = enex_file.stem
             notebook_dir = NOTES_DIR / notebook_name
             notebook_dir.mkdir(parents=True, exist_ok=True)
-            evernote_auth_state["detail"] = f"Converting {notebook_name} ({i}/{len(enex_files)})..."
+            _set_evernote_detail(
+                "convert_notebook",
+                f"Converting {notebook_name} ({i}/{len(enex_files)})...",
+            )
             subprocess.run(
                 [evernote2md_bin, str(enex_file), str(notebook_dir)],
                 env=env, check=True, capture_output=True, text=True,
