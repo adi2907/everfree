@@ -546,20 +546,24 @@ def _read_sync_counts(db_path: Path) -> dict | None:
     if not db_path.exists():
         return None
 
+    conn = None
     try:
-        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=0.2) as conn:
-            total_notes = conn.execute("select count(*) from notes").fetchone()[0]
-            downloaded_notes = conn.execute(
-                "select count(*) from notes where raw_note is not null"
-            ).fetchone()[0]
-            notebooks = conn.execute("select count(*) from notebooks").fetchone()[0]
-            return {
-                "total_notes": int(total_notes),
-                "downloaded_notes": int(downloaded_notes),
-                "notebooks": int(notebooks),
-            }
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=0.2)
+        total_notes = conn.execute("select count(*) from notes").fetchone()[0]
+        downloaded_notes = conn.execute(
+            "select count(*) from notes where raw_note is not null"
+        ).fetchone()[0]
+        notebooks = conn.execute("select count(*) from notebooks").fetchone()[0]
+        return {
+            "total_notes": int(total_notes),
+            "downloaded_notes": int(downloaded_notes),
+            "notebooks": int(notebooks),
+        }
     except sqlite3.Error:
         return None
+    finally:
+        if conn:
+            conn.close()
 
 
 def _start_sync_progress_monitor(db_path: Path) -> threading.Event:
@@ -721,6 +725,10 @@ def _evernote_sync_pipeline():
         )
         _set_evernote_detail("init_create_db", "Creating local Evernote backup database...")
         storage = cli_app.initialize_storage(Path(db_path), force=False)
+        try:
+            storage.db.execute("PRAGMA journal_mode=WAL")
+        except sqlite3.Error:
+            pass
         _set_evernote_detail("init_write_config", "Preparing Evernote sync...")
         storage.config.set_config_value("DB_VERSION", str(cli_app.CURRENT_DB_VERSION))
         storage.config.set_config_value("USN", "0")
@@ -825,11 +833,13 @@ def _evernote_sync_pipeline():
         })
 
     except subprocess.CalledProcessError as e:
+        logger.exception("Evernote sync pipeline subprocess failed")
         evernote_auth_state.update({
             "status": "error",
             "error": f"{' '.join(e.cmd)}: {(e.stderr or str(e)).strip()}",
         })
     except Exception as e:
+        logger.exception("Evernote sync pipeline failed")
         evernote_auth_state.update({"status": "error", "error": str(e)})
 
 
