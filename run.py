@@ -38,11 +38,13 @@ def _resolve_port() -> int:
 def main():
     port = _resolve_port()
     server_app.PORT = port
+    log_level = os.environ.get("EVERFREE_LOG_LEVEL", "warning").lower()
     uvicorn.run(
         server_app.app,
         host="127.0.0.1",
         port=port,
-        log_level="info",
+        log_level=log_level,
+        access_log=False,
     )
 
 

@@ -14,7 +14,6 @@ from __future__ import annotations
 import os
 import re
 import sys
-import io
 import secrets
 import shutil
 import asyncio
@@ -487,12 +486,25 @@ def _install_evernote2md(brew_path: str):
         })
 
 
+class _ProgressSink:
+    """Writable sink for libraries that expect a progress output stream."""
+
+    def write(self, value):
+        return len(value or "")
+
+    def flush(self):
+        return None
+
+    def isatty(self):
+        return False
+
+
 def _disable_evernote_backup_click_progress() -> None:
     """evernote-backup progress bars require a Click CLI context; EverFree has none."""
     from evernote_backup import cli_app_util, note_exporter, note_synchronizer
 
     def _silent_progress_output():
-        return io.StringIO()
+        return _ProgressSink()
 
     cli_app_util.get_progress_output = _silent_progress_output
     note_exporter.get_progress_output = _silent_progress_output
@@ -542,11 +554,34 @@ def _evernote_sync_pipeline():
         evernote2md_bin = shutil.which("evernote2md", path=env["PATH"])
 
         if not evernote2md_bin:
-            evernote_auth_state["detail"] = "Preparing Evernote import..."
+            evernote_auth_state["detail"] = "Installing evernote2md with Homebrew..."
+            import_tool_install_state.update({
+                "running": True,
+                "detail": "Installing evernote2md with Homebrew...",
+                "error": None,
+            })
             brew_path = shutil.which("brew", path=env["PATH"])
             if not brew_path:
+                import_tool_install_state.update({
+                    "running": False,
+                    "detail": "",
+                    "error": "Homebrew is required for Evernote import.",
+                })
                 raise RuntimeError("Homebrew is required for Evernote import. Install Homebrew, then retry.")
-            _install_evernote2md_blocking(brew_path)
+            try:
+                _install_evernote2md_blocking(brew_path)
+            except Exception as exc:
+                import_tool_install_state.update({
+                    "running": False,
+                    "detail": "",
+                    "error": str(exc),
+                })
+                raise
+            import_tool_install_state.update({
+                "running": False,
+                "detail": "evernote2md installed.",
+                "error": None,
+            })
             evernote2md_bin = shutil.which("evernote2md", path=_get_subprocess_env()["PATH"])
             if not evernote2md_bin:
                 raise FileNotFoundError("Evernote import setup did not complete. Please retry.")
