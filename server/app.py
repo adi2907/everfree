@@ -132,24 +132,75 @@ def _has_local_note_content() -> bool:
     return any(item.name not in ignored for item in NOTES_DIR.iterdir())
 
 
-def _clone_existing_repo(auth_url: str) -> None:
-    """Clone an existing notes repo into NOTES_DIR when this Mac has no notes yet."""
+def _next_notes_backup_path() -> Path:
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
+    base = NOTES_DIR.with_name(f"{NOTES_DIR.name} Local Import {timestamp}")
+    candidate = base
+    counter = 2
+    while candidate.exists():
+        candidate = NOTES_DIR.with_name(f"{base.name} {counter}")
+        counter += 1
+    return candidate
+
+
+def _clone_existing_repo(auth_url: str, *, backup_existing: bool = False) -> Path | None:
+    """Clone an existing notes repo into NOTES_DIR and optionally preserve local imports."""
     if _is_git_repo():
         _git("pull", "--ff-only", cwd=str(NOTES_DIR))
-        return
+        return None
 
     NOTES_DIR.mkdir(parents=True, exist_ok=True)
     for item in list(NOTES_DIR.iterdir()):
-        if item.name == ".DS_Store":
+        if item.name in {".DS_Store", ".gitignore"} and item.is_file():
             item.unlink()
 
+    backup_path = None
     if any(NOTES_DIR.iterdir()):
-        raise RuntimeError(
-            f"Cannot clone existing notes repo because {NOTES_DIR} is not empty."
-        )
+        if not backup_existing:
+            raise RuntimeError(
+                f"Cannot clone existing notes repo because {NOTES_DIR} is not empty."
+            )
+        backup_path = _next_notes_backup_path()
+        shutil.move(str(NOTES_DIR), str(backup_path))
+    else:
+        NOTES_DIR.rmdir()
 
-    NOTES_DIR.rmdir()
-    _git("clone", auth_url, str(NOTES_DIR), cwd=str(NOTES_DIR.parent))
+    try:
+        _git("clone", auth_url, str(NOTES_DIR), cwd=str(NOTES_DIR.parent))
+    except Exception:
+        if backup_path and not NOTES_DIR.exists():
+            shutil.move(str(backup_path), str(NOTES_DIR))
+        raise
+    return backup_path
+
+
+def _github_headers(token: str) -> dict[str, str]:
+    return {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+
+
+def _github_api_error(resp: httpx.Response) -> RuntimeError:
+    return RuntimeError(f"GitHub API error {resp.status_code}: {resp.text}")
+
+
+def _github_repo_has_commits(
+    client: httpx.Client,
+    token: str,
+    owner: str,
+    repo_name: str,
+) -> bool:
+    resp = client.get(
+        f"https://api.github.com/repos/{owner}/{repo_name}/commits",
+        headers=_github_headers(token),
+        params={"per_page": 1},
+    )
+    if resp.status_code == 200:
+        return bool(resp.json())
+    if resp.status_code in (404, 409):
+        return False
+    raise _github_api_error(resp)
 
 
 def _get_subprocess_env() -> dict[str, str]:
@@ -916,43 +967,80 @@ def _setup_repo_pipeline(token: str, repo_name: str):
         _update_progress("github_create", f"Connecting private repo '{repo_name}'...")
         owner = github_auth_state.get("username", "unknown")
         repo_exists = False
+        repo_has_commits = False
 
         with httpx.Client(timeout=30) as client:
-            resp = client.post(
-                "https://api.github.com/user/repos",
-                headers={
-                    "Authorization": f"token {token}",
-                    "Accept": "application/vnd.github.v3+json",
-                },
-                json={
-                    "name": repo_name,
-                    "private": True,
-                    "description": "EverFree — Git-backed Markdown notes",
-                    "auto_init": False,
-                },
+            user_resp = client.get(
+                "https://api.github.com/user",
+                headers=_github_headers(token),
             )
-            if resp.status_code == 201:
-                repo_data = resp.json()
-                owner = repo_data["owner"]["login"]
-            elif resp.status_code == 422:
-                existing_resp = client.get(
-                    f"https://api.github.com/repos/{owner}/{repo_name}",
-                    headers={
-                        "Authorization": f"token {token}",
-                        "Accept": "application/vnd.github.v3+json",
-                    },
-                )
-                if existing_resp.status_code != 200:
-                    raise RuntimeError(f"GitHub API error {resp.status_code}: {resp.text}")
+            if user_resp.status_code == 200:
+                owner = user_resp.json().get("login", owner)
+            elif owner == "unknown":
+                raise _github_api_error(user_resp)
+
+            existing_resp = client.get(
+                f"https://api.github.com/repos/{owner}/{repo_name}",
+                headers=_github_headers(token),
+            )
+            if existing_resp.status_code == 200:
                 repo_data = existing_resp.json()
                 owner = repo_data["owner"]["login"]
                 repo_exists = True
-                _update_progress("github_create", "Repo already exists, using it...")
+                repo_has_commits = _github_repo_has_commits(client, token, owner, repo_name)
+                if repo_has_commits:
+                    _update_progress("github_create", "Repo already exists on GitHub, using it...")
+                else:
+                    _update_progress("github_create", "Repo already exists and is empty, importing notes...")
+            elif existing_resp.status_code == 404:
+                resp = client.post(
+                    "https://api.github.com/user/repos",
+                    headers=_github_headers(token),
+                    json={
+                        "name": repo_name,
+                        "private": True,
+                        "description": "EverFree — Git-backed Markdown notes",
+                        "auto_init": False,
+                    },
+                )
+                if resp.status_code == 201:
+                    repo_data = resp.json()
+                    owner = repo_data["owner"]["login"]
+                elif resp.status_code == 422:
+                    existing_resp = client.get(
+                        f"https://api.github.com/repos/{owner}/{repo_name}",
+                        headers=_github_headers(token),
+                    )
+                    if existing_resp.status_code != 200:
+                        raise _github_api_error(resp)
+                    repo_data = existing_resp.json()
+                    owner = repo_data["owner"]["login"]
+                    repo_exists = True
+                    repo_has_commits = _github_repo_has_commits(client, token, owner, repo_name)
+                    if repo_has_commits:
+                        _update_progress("github_create", "Repo already exists on GitHub, using it...")
+                    else:
+                        _update_progress("github_create", "Repo already exists and is empty, importing notes...")
+                else:
+                    raise _github_api_error(resp)
             else:
-                raise RuntimeError(f"GitHub API error {resp.status_code}: {resp.text}")
+                raise _github_api_error(existing_resp)
 
         clone_url = f"https://github.com/{owner}/{repo_name}.git"
         auth_url = clone_url.replace("https://", f"https://{token}@")
+
+        if repo_exists and repo_has_commits:
+            _update_progress("git_init", "Cloning existing notes repository...")
+            backup_path = _clone_existing_repo(auth_url, backup_existing=local_has_content)
+            if backup_path:
+                _update_progress(
+                    "complete",
+                    f"Repo already exists on GitHub. Local import saved to {backup_path}.",
+                )
+            else:
+                _update_progress("complete", "Repo already exists on GitHub. No push needed.")
+            setup_progress["complete"] = True
+            return
 
         if repo_exists and not local_has_content:
             _update_progress("git_init", "Cloning existing notes repository...")
