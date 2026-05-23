@@ -13,6 +13,7 @@
     let currentStep = 1;
     let skipEvernote = false;
     let githubPollTimer = null;
+    let evernote2mdInstalled = false;
 
     // ── DOM refs ────────────────────────────────────────────
     const $ = (id) => document.getElementById(id);
@@ -136,6 +137,7 @@
         const installing = data.install && data.install.running;
         const installError = data.install && data.install.error;
         const hasBrew = data.homebrew && data.homebrew.installed;
+        evernote2mdInstalled = Boolean(installed);
 
         const shouldShowStatus = installing || Boolean(installError) || (!installed && !hasBrew);
         $importToolStatus.classList.toggle("hidden", !shouldShowStatus);
@@ -189,6 +191,9 @@
 
     $btnEnConnect.addEventListener("click", async () => {
         showEnState("running");
+        if (!evernote2mdInstalled) {
+            $enDetail.textContent = "Installing evernote2md...";
+        }
         try {
             const resp = await fetch("/api/auth/evernote/start", { method: "POST" });
             if (!resp.ok) throw new Error((await resp.json()).detail);

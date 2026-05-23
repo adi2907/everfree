@@ -554,10 +554,10 @@ def _evernote_sync_pipeline():
         evernote2md_bin = shutil.which("evernote2md", path=env["PATH"])
 
         if not evernote2md_bin:
-            evernote_auth_state["detail"] = "Installing evernote2md with Homebrew..."
+            evernote_auth_state["detail"] = "Installing evernote2md..."
             import_tool_install_state.update({
                 "running": True,
-                "detail": "Installing evernote2md with Homebrew...",
+                "detail": "Installing evernote2md...",
                 "error": None,
             })
             brew_path = shutil.which("brew", path=env["PATH"])
