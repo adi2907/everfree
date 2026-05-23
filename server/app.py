@@ -456,20 +456,24 @@ async def install_import_tools():
     return {"status": "started", **_get_import_tools_status()}
 
 
+def _install_evernote2md_blocking(brew_path: str) -> None:
+    env = _get_subprocess_env()
+    result = subprocess.run(
+        [brew_path, "install", "evernote2md"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=900,
+    )
+    if result.returncode != 0:
+        msg = (result.stderr or result.stdout or "brew install evernote2md failed").strip()
+        raise RuntimeError(msg)
+
+
 def _install_evernote2md(brew_path: str):
     try:
-        env = _get_subprocess_env()
-        result = subprocess.run(
-            [brew_path, "install", "evernote2md"],
-            env=env,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=900,
-        )
-        if result.returncode != 0:
-            msg = (result.stderr or result.stdout or "brew install evernote2md failed").strip()
-            raise RuntimeError(msg)
+        _install_evernote2md_blocking(brew_path)
         import_tool_install_state.update({
             "running": False,
             "detail": "evernote2md installed.",
@@ -500,11 +504,6 @@ async def evernote_auth_start():
     """Start Evernote OAuth + full sync pipeline in a background thread."""
     if evernote_auth_state["status"] == "running":
         return {"status": "running", "detail": "Already running"}
-    if not _find_tool("evernote2md"):
-        raise HTTPException(
-            status_code=409,
-            detail="evernote2md is required before importing Evernote notes.",
-        )
 
     evernote_auth_state.update({"status": "running", "detail": "Starting...", "error": None})
 
@@ -543,7 +542,14 @@ def _evernote_sync_pipeline():
         evernote2md_bin = shutil.which("evernote2md", path=env["PATH"])
 
         if not evernote2md_bin:
-            raise FileNotFoundError("evernote2md is not installed or not found in PATH")
+            evernote_auth_state["detail"] = "Preparing Evernote import..."
+            brew_path = shutil.which("brew", path=env["PATH"])
+            if not brew_path:
+                raise RuntimeError("Homebrew is required for Evernote import. Install Homebrew, then retry.")
+            _install_evernote2md_blocking(brew_path)
+            evernote2md_bin = shutil.which("evernote2md", path=_get_subprocess_env()["PATH"])
+            if not evernote2md_bin:
+                raise FileNotFoundError("Evernote import setup did not complete. Please retry.")
 
         # Step 1: OAuth — use the Python API directly so no TTY is required
         evernote_auth_state["detail"] = "Opening Evernote login in your browser..."
