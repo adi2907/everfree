@@ -1192,11 +1192,30 @@ async def search_notes(q: str = ""):
 
 
 # ── API: Notebooks ───────────────────────────────────────────
+def _get_file_mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except Exception:
+        return 0.0
+
+
+def _get_notebook_mtime(notebook_name: str) -> float:
+    nb_path = _safe_notebook_path(notebook_name)
+    if not nb_path.exists():
+        return 0.0
+    notes = [f for f in nb_path.iterdir() if f.is_file() and f.suffix == ".md"]
+    if not notes:
+        return _get_file_mtime(nb_path)
+    return max(_get_file_mtime(f) for f in notes)
+
+
 @app.get("/api/notebooks")
 async def list_notebooks():
     if not NOTES_DIR.exists():
         return []
-    return sorted(d.name for d in NOTES_DIR.iterdir() if d.is_dir() and not d.name.startswith("."))
+    notebooks = [d.name for d in NOTES_DIR.iterdir() if d.is_dir() and not d.name.startswith(".")]
+    notebooks.sort(key=_get_notebook_mtime, reverse=True)
+    return notebooks
 
 
 @app.post("/api/notebooks")
@@ -1222,7 +1241,9 @@ async def list_notes(notebook: str):
     nb_path = _safe_notebook_path(notebook)
     if not nb_path.exists():
         raise HTTPException(status_code=404, detail="Notebook not found")
-    return sorted(f.name for f in nb_path.iterdir() if f.is_file() and f.suffix == ".md")
+    notes = [f for f in nb_path.iterdir() if f.is_file() and f.suffix == ".md"]
+    notes.sort(key=_get_file_mtime, reverse=True)
+    return [f.name for f in notes]
 
 
 @app.get("/api/notebooks/{notebook}/notes/{note}")

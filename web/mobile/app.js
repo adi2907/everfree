@@ -21,6 +21,7 @@
     let notesByNotebook = {};
     let fileShas        = {};
     let noteContentCache = {};
+    let noteModifiedCache = {};
     let allNotesLoaded  = false;
 
     let captureTarget = { type: 'scratch' };
@@ -301,6 +302,7 @@
         const data = await gh('PUT', `/repos/${repoFull}/contents/${encodeURI(path)}`, body);
         if (data && data.content) fileShas[path] = data.content.sha;
         noteContentCache[path] = content;
+        noteModifiedCache[path] = Date.now();
         return data;
     }
 
@@ -377,15 +379,35 @@
         await renderNoteList($('browse-search').value);
     }
 
+    async function getNoteLastModified(nb, noteName) {
+        const path = `${nb}/${noteName}`;
+        if (noteModifiedCache[path] !== undefined) {
+            return noteModifiedCache[path];
+        }
+        try {
+            const commits = await gh('GET', `/repos/${repoFull}/commits?path=${encodeURIComponent(path)}&per_page=1`);
+            if (commits && commits.length > 0) {
+                const time = new Date(commits[0].commit.committer.date).getTime();
+                noteModifiedCache[path] = time;
+                return time;
+            }
+        } catch (err) {
+            console.error(`Failed to get modified date for ${path}:`, err);
+        }
+        return 0; // fallback
+    }
+
     async function loadAllContent() {
         try {
             const root = await listContents('');
             notebooks = root
                 .filter(item => item.type === 'dir' && !item.name.startsWith('.'))
-                .map(item => item.name)
-                .sort();
+                .map(item => item.name);
 
             notesByNotebook = {};
+            const noteDates = {}; // "nb/note.md" -> timestamp
+            const notebookLastModified = {}; // nb -> max timestamp
+
             await Promise.all(notebooks.map(async nb => {
                 const items = await listContents(nb);
                 const notes = items
@@ -393,10 +415,35 @@
                     .map(item => {
                         fileShas[`${nb}/${item.name}`] = item.sha;
                         return item.name;
-                    })
-                    .sort();
+                    });
+
+                // Fetch commit date for each note in parallel
+                await Promise.all(notes.map(async noteName => {
+                    const mtime = await getNoteLastModified(nb, noteName);
+                    noteDates[`${nb}/${noteName}`] = mtime;
+                }));
+
+                // Sort notes in this notebook by last modified descending
+                notes.sort((a, b) => {
+                    const timeA = noteDates[`${nb}/${a}`] || 0;
+                    const timeB = noteDates[`${nb}/${b}`] || 0;
+                    return timeB - timeA;
+                });
+
                 notesByNotebook[nb] = notes;
+
+                // Track the latest modified note time for this notebook
+                const maxTime = notes.length > 0 ? (noteDates[`${nb}/${notes[0]}`] || 0) : 0;
+                notebookLastModified[nb] = maxTime;
             }));
+
+            // Sort notebooks by their latest note's modified time descending
+            notebooks.sort((a, b) => {
+                const timeA = notebookLastModified[a] || 0;
+                const timeB = notebookLastModified[b] || 0;
+                return timeB - timeA;
+            });
+
             allNotesLoaded = true;
         } catch (err) {
             $('note-list').innerHTML = `<div class="list-empty">Failed to load: ${esc(err.message)}</div>`;
@@ -676,6 +723,7 @@
                 notesByNotebook = {};
                 fileShas = {};
                 noteContentCache = {};
+                noteModifiedCache = {};
                 showView('loading');
                 $('loading-text').textContent = 'Loading your notes…';
                 await enterApp();
@@ -704,7 +752,7 @@
         localStorage.removeItem(LS_USER);
         localStorage.removeItem(LS_REPO);
         if (devicePollTimer) { clearTimeout(devicePollTimer); devicePollTimer = null; }
-        allNotesLoaded = false; notebooks = []; notesByNotebook = {}; fileShas = {}; noteContentCache = {};
+        allNotesLoaded = false; notebooks = []; notesByNotebook = {}; fileShas = {}; noteContentCache = {}; noteModifiedCache = {};
         $('si-idle').classList.remove('hidden');
         $('si-pending').classList.add('hidden');
         $('si-error').classList.add('hidden');
@@ -759,6 +807,7 @@
         notebooks = [];
         notesByNotebook = {};
         noteContentCache = {};
+        noteModifiedCache = {};
         await showRepoPicker();
     });
 
