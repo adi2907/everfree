@@ -1192,6 +1192,44 @@ async def search_notes(q: str = ""):
 
 
 # ── API: Notebooks ───────────────────────────────────────────
+from datetime import datetime
+
+MONTHS_MAP = {
+    'jan': 1, 'january': 1,
+    'feb': 2, 'february': 2,
+    'mar': 3, 'march': 3,
+    'apr': 4, 'april': 4,
+    'may': 5,
+    'jun': 6, 'june': 6,
+    'jul': 7, 'july': 7,
+    'aug': 8, 'august': 8,
+    'sep': 9, 'september': 9,
+    'oct': 10, 'october': 10,
+    'nov': 11, 'november': 11,
+    'dec': 12, 'december': 12
+}
+
+
+def parse_note_name_date(name: str) -> float:
+    clean = name.replace('.md', '').replace('_', ' ').strip()
+    match = re.match(r'^(\d+)(?:st|nd|rd|th)?\s+([A-Za-z]+)(?:\s+(\d{4}))?', clean, re.IGNORECASE)
+    if not match:
+        return -1.0
+    
+    try:
+        day = int(match.group(1))
+        month_str = match.group(2).lower()[:3]
+        month = MONTHS_MAP.get(month_str)
+        if not month:
+            return -1.0
+        
+        year_str = match.group(3)
+        year = int(year_str) if year_str else datetime.now().year
+        return datetime(year, month, day).timestamp()
+    except Exception:
+        return -1.0
+
+
 def _get_file_mtime(path: Path) -> float:
     try:
         return path.stat().st_mtime
@@ -1199,14 +1237,24 @@ def _get_file_mtime(path: Path) -> float:
         return 0.0
 
 
-def _get_notebook_mtime(notebook_name: str) -> float:
+def _get_note_sort_key(f: Path) -> tuple:
+    mtime = _get_file_mtime(f)
+    parsed_date = parse_note_name_date(f.name)
+    return (-mtime, -parsed_date if parsed_date > 0 else 0.0, f.name.lower())
+
+
+def _get_notebook_sort_key(notebook_name: str) -> tuple:
     nb_path = _safe_notebook_path(notebook_name)
     if not nb_path.exists():
-        return 0.0
+        return (0.0, 0.0, notebook_name.lower())
     notes = [f for f in nb_path.iterdir() if f.is_file() and f.suffix == ".md"]
     if not notes:
-        return _get_file_mtime(nb_path)
-    return max(_get_file_mtime(f) for f in notes)
+        return (-_get_file_mtime(nb_path), 0.0, notebook_name.lower())
+    notes.sort(key=_get_note_sort_key)
+    newest = notes[0]
+    mtime = _get_file_mtime(newest)
+    parsed_date = parse_note_name_date(newest.name)
+    return (-mtime, -parsed_date if parsed_date > 0 else 0.0, notebook_name.lower())
 
 
 @app.get("/api/notebooks")
@@ -1214,7 +1262,7 @@ async def list_notebooks():
     if not NOTES_DIR.exists():
         return []
     notebooks = [d.name for d in NOTES_DIR.iterdir() if d.is_dir() and not d.name.startswith(".")]
-    notebooks.sort(key=_get_notebook_mtime, reverse=True)
+    notebooks.sort(key=_get_notebook_sort_key)
     return notebooks
 
 
@@ -1242,7 +1290,7 @@ async def list_notes(notebook: str):
     if not nb_path.exists():
         raise HTTPException(status_code=404, detail="Notebook not found")
     notes = [f for f in nb_path.iterdir() if f.is_file() and f.suffix == ".md"]
-    notes.sort(key=_get_file_mtime, reverse=True)
+    notes.sort(key=_get_note_sort_key)
     return [f.name for f in notes]
 
 

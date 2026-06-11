@@ -379,6 +379,36 @@
         await renderNoteList($('browse-search').value);
     }
 
+    function parseNoteNameDate(name) {
+        const clean = name.replace(/\.md$/, '').replace(/_/g, ' ').trim();
+        const match = clean.match(/^(\d+)(?:st|nd|rd|th)?\s+([A-Za-z]+)(?:\s+(\d{4}))?/i);
+        if (!match) return null;
+        
+        const day = parseInt(match[1], 10);
+        const monthStr = match[2].toLowerCase();
+        const year = match[3] ? parseInt(match[3], 10) : new Date().getFullYear();
+        
+        const months = {
+            jan: 0, january: 0,
+            feb: 1, february: 1,
+            mar: 2, march: 2,
+            apr: 3, april: 3,
+            may: 4,
+            jun: 5, june: 5,
+            jul: 6, july: 6,
+            aug: 7, august: 7,
+            sep: 8, september: 8,
+            oct: 9, october: 9,
+            nov: 10, november: 10,
+            dec: 11, december: 11
+        };
+        
+        const month = months[monthStr.substring(0, 3)];
+        if (month === undefined) return null;
+        
+        return new Date(year, month, day).getTime();
+    }
+
     async function getNoteLastModified(nb, noteName) {
         const path = `${nb}/${noteName}`;
         if (noteModifiedCache[path] !== undefined) {
@@ -423,11 +453,19 @@
                     noteDates[`${nb}/${noteName}`] = mtime;
                 }));
 
-                // Sort notes in this notebook by last modified descending
+                // Sort notes in this notebook by last modified descending, then parsed date, then alphabetically
                 notes.sort((a, b) => {
                     const timeA = noteDates[`${nb}/${a}`] || 0;
                     const timeB = noteDates[`${nb}/${b}`] || 0;
-                    return timeB - timeA;
+                    if (timeA !== timeB) return timeB - timeA;
+                    
+                    const dateA = parseNoteNameDate(a);
+                    const dateB = parseNoteNameDate(b);
+                    if (dateA !== null && dateB !== null) return dateB - dateA;
+                    if (dateA !== null) return -1;
+                    if (dateB !== null) return 1;
+                    
+                    return a.localeCompare(b);
                 });
 
                 notesByNotebook[nb] = notes;
@@ -437,11 +475,22 @@
                 notebookLastModified[nb] = maxTime;
             }));
 
-            // Sort notebooks by their latest note's modified time descending
+            // Sort notebooks by their latest note's modified time, then parsed date, then alphabetically
             notebooks.sort((a, b) => {
                 const timeA = notebookLastModified[a] || 0;
                 const timeB = notebookLastModified[b] || 0;
-                return timeB - timeA;
+                if (timeA !== timeB) return timeB - timeA;
+                
+                const newestA = notesByNotebook[a] && notesByNotebook[a][0];
+                const newestB = notesByNotebook[b] && notesByNotebook[b][0];
+                
+                const dateA = newestA ? parseNoteNameDate(newestA) : null;
+                const dateB = newestB ? parseNoteNameDate(newestB) : null;
+                if (dateA !== null && dateB !== null) return dateB - dateA;
+                if (dateA !== null) return -1;
+                if (dateB !== null) return 1;
+                
+                return a.localeCompare(b);
             });
 
             allNotesLoaded = true;
