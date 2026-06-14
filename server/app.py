@@ -29,8 +29,10 @@ from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+
+from server import agent
 
 # ── Configuration ────────────────────────────────────────────
 NOTES_DIR = Path(os.environ.get("EVERFREE_DIR", Path.home() / "Documents" / "EverFree"))
@@ -297,6 +299,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="EverFree", version="4.0.0", lifespan=lifespan)
+app.include_router(agent.router)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -1347,6 +1350,17 @@ async def delete_note(notebook: str, note: str):
     if not ok:
         raise HTTPException(status_code=409, detail=f"Git conflict: {msg}")
     return {"status": "deleted", "notebook": notebook, "note": note, "git": msg}
+
+
+# ── Note assets (images referenced relatively from notes) ───
+@app.get("/notes/{file_path:path}")
+async def serve_note_asset(file_path: str):
+    resolved = (NOTES_DIR / file_path).resolve()
+    if not str(resolved).startswith(str(NOTES_DIR.resolve())) or ".git" in resolved.parts:
+        raise HTTPException(status_code=404, detail="Not found")
+    if not resolved.is_file():
+        raise HTTPException(status_code=404, detail="Not found")
+    return FileResponse(resolved)
 
 
 # ── Static assets ────────────────────────────────────────────

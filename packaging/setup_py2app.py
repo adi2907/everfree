@@ -15,6 +15,7 @@ DATA_FILES = [
         'frontend/index.html',
         'frontend/style.css',
         'frontend/app.js',
+        'frontend/assist.js',
         'frontend/setup.html',
         'frontend/setup.css',
         'frontend/setup.js',

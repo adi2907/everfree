@@ -291,6 +291,9 @@
 
             initEditor(data.content);
             renderSidebar($searchInput.value);
+            window.dispatchEvent(new CustomEvent("everfree:note-changed", {
+                detail: { notebook, note },
+            }));
         } catch (err) {
             console.error("Failed to open note:", err);
             alert("Failed to open note.");
@@ -305,6 +308,20 @@
             initialEditType: "wysiwyg",
             initialValue: content,
             placeholder: "Start writing…",
+            customHTMLRenderer: {
+                // Resolve note-relative image paths (e.g. assets/foo.png) against
+                // the local server's /notes/<notebook>/ route so they render.
+                image(node, context) {
+                    const result = context.origin();
+                    const src = node.destination || "";
+                    if (result && currentNotebook && !/^(https?:|data:|\/)/.test(src)) {
+                        result.attributes.src =
+                            `/notes/${encodeURIComponent(currentNotebook)}/` +
+                            src.split("/").map(encodeURIComponent).join("/");
+                    }
+                    return result;
+                },
+            },
         });
 
         // Apply current theme to the newly created editor
@@ -509,6 +526,49 @@
             e.returnValue = "";
         }
     });
+
+    // ── Bridge for the writing assistant panel (assist.js) ──
+    window.EverFreeBridge = {
+        getNote() {
+            if (!currentNotebook || !currentNote || !editor) return null;
+            return { notebook: currentNotebook, note: currentNote, content: editor.getMarkdown() };
+        },
+        getSelection() {
+            if (!editor) return "";
+            try {
+                return (editor.getSelectedText() || "").trim();
+            } catch {
+                return "";
+            }
+        },
+        insertAtCursor(text) {
+            if (!editor) return false;
+            editor.insertText(text);
+            editor.focus();
+            return true;
+        },
+        // WYSIWYG insertText would show raw Markdown syntax literally, so
+        // formatted passages are appended through setMarkdown instead.
+        insertMarkdown(text) {
+            if (!editor) return false;
+            if (editor.isMarkdownMode()) {
+                editor.insertText(text);
+            } else {
+                const md = editor.getMarkdown();
+                editor.setMarkdown(md ? md.replace(/\s+$/, "") + "\n\n" + text + "\n" : text + "\n");
+                editor.moveCursorToEnd();
+            }
+            editor.focus();
+            return true;
+        },
+        insertImage(relPath, altText) {
+            if (!editor) return false;
+            editor.exec("addImage", { imageUrl: relPath, altText: altText || "image" });
+            editor.focus();
+            return true;
+        },
+        saveNote,
+    };
 
     // ── Init ────────────────────────────────────────────────
     loadNotebooks();
