@@ -39,96 +39,100 @@
                     <img class="logo-mark" src="/assets/everfree-logo.svg" alt="">
                     <span>EverFree</span>
                 </h1>
-                <a class="landing-nav-link" href="https://github.com/adi2907/everfree" target="_blank" rel="noopener">GitHub</a>
+                <nav class="landing-nav-actions" aria-label="Primary navigation">
+                    <a class="landing-nav-link" href="#how-it-works">How it works</a>
+                    <a class="landing-nav-link" href="https://github.com/adi2907/everfree" target="_blank" rel="noopener">GitHub</a>
+                    <button class="landing-nav-app" id="btn-github-signin">Open web app</button>
+                </nav>
             </header>
 
             <section class="landing-hero">
                 <div class="landing-copy">
-                    <p class="eyebrow">Free your notes</p>
-                    <h2>Leave expensive note-taking apps without losing your workflow.</h2>
+                    <p class="eyebrow">Plain text · private repo</p>
+                    <h2>Your notes are<br>files again.</h2>
                     <p class="landing-lede">
-                        EverFree turns your notes into Markdown, syncs them to your own private GitHub repository,
-                        and keeps them usable from web, mobile, and the native Mac app.
+                        Move from Evernote to plain Markdown. Keep everything in your private GitHub repository.
                     </p>
-                    <p class="landing-note">
-                        Use the Mac app for the first Evernote migration. After your notes are backed up, this web app
-                        and the mobile web app read and write the same GitHub-backed notes.
-                    </p>
+                    <div id="signin-idle" class="landing-actions">
+                        <a class="btn btn-primary landing-download" href="https://github.com/adi2907/everfree/releases/download/v1.0.0/EverFree.dmg">
+                            Download for Mac
+                        </a>
+                        <button class="btn landing-web-cta" id="btn-github-signin-hero">
+                            Open web app
+                        </button>
+                    </div>
+
+                    <div id="signin-pending" class="landing-auth-state hidden">
+                        <p class="device-flow-label">
+                            Enter this code at <a id="signin-verification-uri" href="https://github.com/login/device" target="_blank" rel="noopener">github.com/login/device</a>
+                        </p>
+                        <div class="device-flow-code" id="signin-user-code">––––</div>
+                        <p class="device-flow-waiting">
+                            <span class="spinner spinner-sm"></span>
+                            Waiting for authorization…
+                        </p>
+                    </div>
+
+                    <div id="signin-error" class="landing-auth-state hidden">
+                        <div class="error-box">
+                            <p class="error-title">Sign-in failed</p>
+                            <pre class="error-detail" id="signin-error-detail"></pre>
+                            <button class="btn btn-ghost btn-sm" id="btn-signin-retry">Try again</button>
+                        </div>
+                    </div>
                 </div>
 
-                <div class="auth-card landing-auth-card">
-            <h1 class="logo">
-                <img class="logo-mark" src="/assets/everfree-logo.svg" alt="">
-                <span>EverFree</span>
-            </h1>
-            <p class="auth-tagline">Your notes, your GitHub repo, your control.</p>
-
-            <div id="signin-idle" class="landing-actions">
-                <button class="btn btn-auth btn-github" id="btn-github-signin">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
-                    Sign in with GitHub
-                </button>
-                <a class="btn btn-primary landing-download" href="https://github.com/adi2907/everfree/releases/download/v1.0.0/EverFree.dmg">
-                    Download Mac app
-                </a>
-                <a class="btn btn-ghost landing-selfhost" href="https://github.com/adi2907/everfree" target="_blank" rel="noopener">
-                    Self-host
-                </a>
-            </div>
-
-            <div id="signin-pending" class="hidden">
-                <div class="device-flow-card">
-                    <p class="device-flow-label">
-                        Enter this code at <a id="signin-verification-uri" href="https://github.com/login/device" target="_blank" rel="noopener">github.com/login/device</a>
-                    </p>
-                    <div class="device-flow-code" id="signin-user-code">––––</div>
-                    <p class="device-flow-waiting">
-                        <span class="spinner spinner-sm"></span>
-                        Waiting for authorization…
-                    </p>
-                </div>
-            </div>
-
-            <div id="signin-error" class="hidden">
-                <div class="error-box">
-                    <p class="error-title">Sign-in failed</p>
-                    <pre class="error-detail" id="signin-error-detail"></pre>
-                    <button class="btn btn-ghost btn-sm" id="btn-signin-retry">Try again</button>
-                </div>
-            </div>
+                <div class="landing-product" aria-label="EverFree notes interface preview">
+                    <div class="product-window-bar">
+                        <span></span><span></span><span></span>
+                        <small>private/everfree-notes</small>
+                    </div>
+                    <div class="product-window-body">
+                        <aside class="product-sidebar">
+                            <strong>Notes</strong>
+                            <div class="product-search">Search notes…</div>
+                            <small>JOURNAL</small>
+                            <div class="product-note active">Monday, June 22</div>
+                            <div class="product-note">Reading notes</div>
+                            <div class="product-note">Ideas</div>
+                            <small>PROJECTS</small>
+                            <div class="product-note">EverFree roadmap</div>
+                        </aside>
+                        <article class="product-document">
+                            <code>Journal / Monday, June 22.md</code>
+                            <h3>Monday, June 22</h3>
+                            <p class="product-lede">A quieter system for keeping useful things.</p>
+                            <p>Today I moved the archive out of Evernote. Every note is ordinary Markdown now—easy to search, edit, clone, and keep.</p>
+                            <div class="product-file">
+                                <code>~/everfree-notes/Journal/Monday, June 22.md</code>
+                                <small>committed moments ago · private repository</small>
+                            </div>
+                        </article>
+                    </div>
                 </div>
             </section>
 
-            <section class="feature-grid" aria-label="EverFree features">
-                <article class="feature-card">
-                    <span class="feature-icon">0</span>
-                    <h3>Always free</h3>
-                    <p>No subscription wall for your own notes. EverFree is open source and built around user-owned storage.</p>
+            <section class="landing-proof" aria-label="Product principles">
+                <span>Markdown files</span>
+                <span>Private by default</span>
+                <span>No subscription</span>
+            </section>
+
+            <section class="editorial-features" id="how-it-works" aria-label="How EverFree works">
+                <article>
+                    <span>01</span>
+                    <h3>Import once</h3>
+                    <p>Bring your Evernote archive over with the Mac app.</p>
                 </article>
-                <article class="feature-card">
-                    <span class="feature-icon">GH</span>
-                    <h3>Use your own GitHub backend</h3>
-                    <p>Your GitHub profile stores the private notes repository. EverFree reads and writes through GitHub.</p>
+                <article>
+                    <span>02</span>
+                    <h3>Write anywhere</h3>
+                    <p>Use EverFree, the web app, or any Markdown editor.</p>
                 </article>
-                <article class="feature-card">
-                    <span class="feature-icon">MD</span>
-                    <h3>Data owned by you</h3>
-                    <p>Notes live as Markdown files, so you can inspect, clone, export, or move them whenever you want.</p>
-                </article>
-                <article class="feature-card">
-                    <span class="feature-icon">APP</span>
-                    <h3>Web, mobile, and native Mac</h3>
-                    <p>Use everfree.vercel.app from browsers, capture from mobile, and run the full native app on macOS.</p>
-                </article>
-                <article class="feature-card">
-                    <span class="feature-icon">IN</span>
-                    <h3>Easy migration</h3>
-                    <p>The Mac app imports Evernote, converts notes to Markdown, and pushes the backup to GitHub.</p>
-                </article>
-                <article class="feature-card">
-                    <span class="feature-icon">DIY</span>
-                    <h3>Self-hostable</h3>
-                    <p>Clone the project, deploy your own web client, or inspect the code before trusting it with your notes.</p>
+                <article>
+                    <span>03</span>
+                    <h3>Own forever</h3>
+                    <p>Your files, repository, and complete version history.</p>
                 </article>
             </section>
         </div>

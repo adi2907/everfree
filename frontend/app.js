@@ -7,6 +7,8 @@
 
     // ── State ───────────────────────────────────────────────
     let notebooks = [];
+    let notesByNotebook = {};
+    let selectedNotebook = null;
     let currentNotebook = null;
     let currentNote = null;
     let editor = null;
@@ -15,6 +17,14 @@
 
     // ── DOM References ──────────────────────────────────────
     const $notebookList = document.getElementById("notebook-list");
+    const $noteBrowserList = document.getElementById("note-browser-list");
+    const $noteBrowserTitle = document.getElementById("note-browser-title");
+    const $libraryTotal = document.getElementById("library-total");
+    const $btnAllNotes = document.getElementById("btn-all-notes");
+    const $btnNewNote = document.getElementById("btn-new-note");
+    const $btnNewNotebookInline = document.getElementById("btn-new-notebook-inline");
+    const $btnShowNotes = document.getElementById("btn-show-notes");
+    const $btnRailSearch = document.getElementById("btn-rail-search");
     const $emptyState = document.getElementById("empty-state");
     const $editorContainer = document.getElementById("editor-container");
     const $breadcrumb = document.getElementById("note-breadcrumb");
@@ -164,43 +174,52 @@
     async function loadNotebooks() {
         try {
             notebooks = await API.get("/api/notebooks");
+            const entries = await Promise.all(notebooks.map(async (nb) => {
+                try {
+                    return [nb, await API.get(`/api/notebooks/${encodeURIComponent(nb)}/notes`)];
+                } catch {
+                    return [nb, []];
+                }
+            }));
+            notesByNotebook = Object.fromEntries(entries);
+            if (currentNotebook && notebooks.includes(currentNotebook)) {
+                selectedNotebook = currentNotebook;
+            } else if (selectedNotebook && !notebooks.includes(selectedNotebook)) {
+                selectedNotebook = null;
+            }
             renderSidebar($searchInput.value);
         } catch (err) {
             console.error("Failed to load notebooks:", err);
         }
     }
 
-    // ── Render Sidebar ──────────────────────────────────────
+    // ── Render notebook library + note browser ──────────────
     async function renderSidebar(filter = "") {
         const query = filter.trim();
+        renderNotebookLibrary();
         if (query) {
             await renderSearchResults(query);
             return;
         }
 
         searchSeq += 1;
+        renderNoteBrowser();
+    }
+
+    function renderNotebookLibrary() {
         $notebookList.innerHTML = "";
+        const total = notebooks.reduce((sum, nb) => sum + (notesByNotebook[nb] || []).length, 0);
+        $libraryTotal.textContent = total ? String(total) : "";
+        $btnAllNotes.classList.toggle("active", !selectedNotebook);
 
         for (const nb of notebooks) {
-            let notes = [];
-            try {
-                notes = await API.get(`/api/notebooks/${encodeURIComponent(nb)}/notes`);
-            } catch { /* empty */ }
-
-            const $item = document.createElement("div");
-            $item.className = "notebook-item";
-
             const $header = document.createElement("div");
             $header.className = "notebook-header";
-            if (currentNotebook === nb) $header.classList.add("active", "expanded");
+            if (selectedNotebook === nb) $header.classList.add("active");
 
             $header.innerHTML = `
-                <svg class="notebook-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none"
-                     stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <polyline points="9 18 15 12 9 6"/>
-                </svg>
                 <span class="notebook-name">${escapeHtml(nb)}</span>
-                <span class="notebook-count">${notes.length}</span>
+                <span class="notebook-count">${(notesByNotebook[nb] || []).length}</span>
                 <button class="notebook-add-note" title="New Note" data-notebook="${escapeAttr(nb)}">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                          stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -209,29 +228,11 @@
                 </button>
             `;
 
-            const $noteList = document.createElement("div");
-            $noteList.className = "note-list";
-            if (currentNotebook === nb) $noteList.classList.add("expanded");
-
-            for (const note of notes) {
-                const $note = document.createElement("div");
-                $note.className = "note-item";
-                if (currentNotebook === nb && currentNote === note) {
-                    $note.classList.add("active");
-                }
-                $note.innerHTML = `<span class="note-item-icon">📄</span> ${escapeHtml(note.replace(/\.md$/, ""))}`;
-                $note.addEventListener("click", () => openNote(nb, note));
-                $note.addEventListener("contextmenu", (e) => {
-                    e.preventDefault();
-                    showNoteMenu(e, nb, note);
-                });
-                $noteList.appendChild($note);
-            }
-
             $header.addEventListener("click", (e) => {
                 if (e.target.closest(".notebook-add-note")) return;
-                const isExpanded = $header.classList.toggle("expanded");
-                $noteList.classList.toggle("expanded", isExpanded);
+                selectedNotebook = nb;
+                $searchInput.value = "";
+                renderSidebar();
             });
 
             $header.addEventListener("contextmenu", (e) => {
@@ -250,53 +251,85 @@
                 });
             });
 
-            $item.appendChild($header);
-            $item.appendChild($noteList);
-            $notebookList.appendChild($item);
+            $notebookList.appendChild($header);
+        }
+    }
+
+    function renderNoteBrowser() {
+        const visible = selectedNotebook
+            ? (notesByNotebook[selectedNotebook] || []).map((note) => ({ notebook: selectedNotebook, note }))
+            : notebooks.flatMap((notebook) => (notesByNotebook[notebook] || []).map((note) => ({ notebook, note })));
+
+        $noteBrowserTitle.textContent = selectedNotebook || "All notes";
+        $noteBrowserList.innerHTML = "";
+
+        if (visible.length === 0) {
+            $noteBrowserList.innerHTML = '<div class="notebook-loading">No notes here yet.</div>';
+            return;
+        }
+
+        for (const item of visible) {
+            const $note = document.createElement("button");
+            $note.type = "button";
+            $note.className = "note-card";
+            if (currentNotebook === item.notebook && currentNote === item.note) {
+                $note.classList.add("active");
+            }
+            $note.innerHTML = `
+                <span class="note-card-title">${escapeHtml(item.note.replace(/\.md$/, ""))}</span>
+                <span class="note-card-preview">Markdown note</span>
+                <span class="note-card-meta">${escapeHtml(item.notebook)}</span>`;
+            $note.addEventListener("click", () => openNote(item.notebook, item.note));
+            $note.addEventListener("contextmenu", (e) => {
+                e.preventDefault();
+                showNoteMenu(e, item.notebook, item.note);
+            });
+            $noteBrowserList.appendChild($note);
         }
     }
 
     async function renderSearchResults(query) {
         const seq = ++searchSeq;
-        $notebookList.innerHTML = '<div class="notebook-loading">Searching…</div>';
+        $noteBrowserTitle.textContent = "Search";
+        $noteBrowserList.innerHTML = '<div class="notebook-loading">Searching…</div>';
 
         try {
             const results = await API.get(`/api/search?q=${encodeURIComponent(query)}`);
             if (seq !== searchSeq) return;
 
             if (results.length === 0) {
-                $notebookList.innerHTML = '<div class="notebook-loading">No matching notes.</div>';
+                $noteBrowserList.innerHTML = '<div class="notebook-loading">No matching notes.</div>';
                 return;
             }
 
-            $notebookList.innerHTML = "";
+            $noteBrowserList.innerHTML = "";
             const $header = document.createElement("div");
             $header.className = "search-results-header";
             $header.textContent = `${results.length} result${results.length === 1 ? "" : "s"}`;
-            $notebookList.appendChild($header);
+            $noteBrowserList.appendChild($header);
 
             for (const result of results) {
-                const $item = document.createElement("div");
-                $item.className = "note-item search-result-item";
+                const $item = document.createElement("button");
+                $item.type = "button";
+                $item.className = "note-card search-result-item";
                 if (currentNotebook === result.notebook && currentNote === result.note) {
                     $item.classList.add("active");
                 }
                 const title = result.title || result.note.replace(/\.md$/, "");
                 $item.innerHTML = `
-                    <span class="note-item-icon">📄</span>
                     <span class="search-result-body">
-                        <span>${highlight(title, query)}</span>
+                        <span class="note-card-title">${highlight(title, query)}</span>
                         <span class="search-result-meta">${escapeHtml(result.notebook)}</span>
                         ${result.snippet ? `<span class="search-result-snippet">${highlight(result.snippet, query)}</span>` : ""}
                     </span>
                 `;
                 $item.addEventListener("click", () => openNote(result.notebook, result.note));
-                $notebookList.appendChild($item);
+                $noteBrowserList.appendChild($item);
             }
         } catch (err) {
             if (seq !== searchSeq) return;
             console.error("Search failed:", err);
-            $notebookList.innerHTML = '<div class="notebook-loading">Search failed.</div>';
+            $noteBrowserList.innerHTML = '<div class="notebook-loading">Search failed.</div>';
         }
     }
 
@@ -310,6 +343,7 @@
             );
 
             currentNotebook = notebook;
+            selectedNotebook = notebook;
             currentNote = note;
             isDirty = false;
 
@@ -342,6 +376,26 @@
             initialEditType: "wysiwyg",
             initialValue: content,
             placeholder: "Start writing…",
+            hooks: {
+                // Paste or drag-drop an image: upload the blob to the notebook's
+                // assets/ folder and insert it as a note-relative path (the same
+                // form the agent uses), so it renders here and stays portable in
+                // the synced Markdown. Returning false prevents Toast UI's default
+                // base64 inlining.
+                addImageBlobHook(blob, callback) {
+                    uploadImageBlob(blob).then((relPath) => {
+                        if (!relPath) return;
+                        callback(relPath, blob.name || "image");
+                        // Re-render from Markdown so customHTMLRenderer maps the
+                        // relative assets/ path to the local /notes/ route — a
+                        // freshly inserted node keeps the raw src and won't load.
+                        requestAnimationFrame(() => {
+                            if (editor) editor.setMarkdown(editor.getMarkdown());
+                        });
+                    });
+                    return false;
+                },
+            },
             customHTMLRenderer: {
                 // Resolve note-relative image paths (e.g. assets/foo.png) against
                 // the local server's /notes/<notebook>/ route so they render.
@@ -359,7 +413,7 @@
         });
 
         // Apply current theme to the newly created editor
-        const isDark = (localStorage.getItem("everfree-theme") || "dark") === "dark";
+        const isDark = (localStorage.getItem("everfree-theme") || "light") === "dark";
         const tuiWrapper = document.querySelector(".toastui-editor-defaultUI");
         if (tuiWrapper) tuiWrapper.classList.toggle("toastui-editor-dark", isDark);
 
@@ -372,6 +426,37 @@
             }
             scheduleAutosave();
         });
+    }
+
+    // ── Image paste / drag-drop upload ──────────────────────
+    // Uploads the blob to the open note's assets/ folder; returns the
+    // note-relative path (assets/<file>) to embed, or null on failure.
+    async function uploadImageBlob(blob) {
+        if (!currentNotebook) {
+            alert("Open a note before adding an image.");
+            return null;
+        }
+        if (!blob || !/^image\//.test(blob.type || "")) {
+            alert("Only image files can be added.");
+            return null;
+        }
+        try {
+            const r = await fetch(`/api/notebooks/${encodeURIComponent(currentNotebook)}/assets`, {
+                method: "POST",
+                headers: { "Content-Type": blob.type },
+                body: blob,
+            });
+            if (!r.ok) {
+                let detail = `Upload failed (${r.status})`;
+                try { detail = (await r.json()).detail || detail; } catch { /* ignore */ }
+                throw new Error(detail);
+            }
+            return (await r.json()).rel_path;
+        } catch (err) {
+            console.error("Image upload failed:", err);
+            alert("Couldn't add image: " + (err.message || err));
+            return null;
+        }
     }
 
     // ── Autosave ────────────────────────────────────────────
@@ -587,6 +672,7 @@
                     const res = await API.post(
                         `/api/notebooks/${encodeURIComponent(notebook)}/rename`, { new_name: name });
                     if (currentNotebook === notebook) currentNotebook = res.name;
+                    if (selectedNotebook === notebook) selectedNotebook = res.name;
                     await loadNotebooks();
                     if (reopen) openNote(res.name, reopen);
                 }, { value: notebook }),
@@ -602,6 +688,7 @@
                         if (editor) { editor.destroy(); editor = null; }
                         currentNotebook = null;
                         currentNote = null;
+                        if (selectedNotebook === notebook) selectedNotebook = null;
                         isDirty = false;
                         $editorContainer.style.display = "none";
                         $emptyState.style.display = "flex";
@@ -715,12 +802,12 @@
     }
 
     $btnTheme.addEventListener("click", () => {
-        const current = document.documentElement.getAttribute("data-theme") || "dark";
+        const current = document.documentElement.getAttribute("data-theme") || "light";
         applyTheme(current === "dark" ? "light" : "dark");
     });
 
-    // Apply saved theme on load (default: dark)
-    applyTheme(localStorage.getItem("everfree-theme") || "dark");
+    // Apply saved theme on load (default: light)
+    applyTheme(localStorage.getItem("everfree-theme") || "light");
 
     // ── Event Bindings ──────────────────────────────────────
     $btnSave.addEventListener("click", () => saveNote().catch(() => {}));
@@ -742,8 +829,40 @@
     $btnNewNotebook.addEventListener("click", () => {
         showModal("New Notebook", "Notebook name…", async (name) => {
             await API.post("/api/notebooks", { name });
+            selectedNotebook = name;
             await loadNotebooks();
         });
+    });
+
+    $btnNewNotebookInline.addEventListener("click", () => $btnNewNotebook.click());
+
+    $btnAllNotes.addEventListener("click", () => {
+        selectedNotebook = null;
+        $searchInput.value = "";
+        renderSidebar();
+    });
+
+    $btnNewNote.addEventListener("click", () => {
+        const notebook = selectedNotebook || currentNotebook || notebooks[0];
+        if (!notebook) {
+            $btnNewNotebook.click();
+            return;
+        }
+        showModal("New Note", `Create note in "${notebook}"`, async (name) => {
+            await API.post(`/api/notebooks/${encodeURIComponent(notebook)}/notes`, { name });
+            await loadNotebooks();
+            const noteName = name.endsWith(".md") ? name : name + ".md";
+            openNote(notebook, noteName);
+        });
+    });
+
+    $btnShowNotes.addEventListener("click", () => {
+        document.getElementById("assist-close-btn")?.click();
+    });
+
+    $btnRailSearch.addEventListener("click", () => {
+        document.getElementById("assist-close-btn")?.click();
+        setTimeout(() => $searchInput.focus(), 50);
     });
 
     $modalSelect.addEventListener("keydown", (e) => {

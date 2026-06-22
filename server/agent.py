@@ -1,13 +1,12 @@
 """
 EverFree — Writing Assist Agent
 
-Local-first agent: text generation and the search tool-loop run against an
-LM Studio server (OpenAI-compatible API on localhost). Image generation goes
-through OpenRouter (Gemini image model, "nano banana"). Web search uses
-Serper, and result pages are fetched and reduced to readable text with a
-stdlib HTML parser so no extra dependencies enter the py2app bundle.
+Provider-selectable agent: text generation can run through LM Studio,
+OpenRouter, or the Gemini API. Image generation goes through OpenRouter.
+Web search uses Serper, and result pages are fetched and reduced to readable
+text with a stdlib HTML parser so no extra dependencies enter the bundle.
 
-Settings (LM Studio URL/model, OpenRouter + Serper keys) live in
+Settings (provider URLs, models, and API keys) live in
 ~/.everfree_agent.json, managed through /api/agent/settings.
 """
 
@@ -38,9 +37,13 @@ SETTINGS_FILE = Path.home() / ".everfree_agent.json"
 CHATS_DIR = Path(os.environ.get("EVERFREE_CHATS_DIR", Path.home() / ".everfree_chats"))
 
 DEFAULT_SETTINGS = {
+    "active_provider": "lmstudio",
     "lmstudio_url": "http://localhost:1234/v1",
     "lmstudio_model": "",
     "openrouter_api_key": "",
+    "openrouter_model": "",
+    "gemini_api_key": "",
+    "gemini_model": "gemini-2.5-flash",
     "serper_api_key": "",
     "image_model": "google/gemini-2.5-flash-image",
 }
@@ -71,10 +74,14 @@ def _save_settings(settings: dict) -> None:
 
 def _public_settings(settings: dict) -> dict:
     return {
+        "active_provider": settings["active_provider"],
         "lmstudio_url": settings["lmstudio_url"],
         "lmstudio_model": settings["lmstudio_model"],
+        "openrouter_model": settings["openrouter_model"],
+        "gemini_model": settings["gemini_model"],
         "image_model": settings["image_model"],
         "openrouter_api_key_set": bool(settings["openrouter_api_key"]),
+        "gemini_api_key_set": bool(settings["gemini_api_key"]),
         "serper_api_key_set": bool(settings["serper_api_key"]),
     }
 
@@ -91,6 +98,8 @@ async def update_settings(request: Request):
     for key in DEFAULT_SETTINGS:
         if key in body and isinstance(body[key], str):
             settings[key] = body[key].strip()
+    if settings["active_provider"] not in {"lmstudio", "openrouter", "gemini"}:
+        raise HTTPException(status_code=400, detail="Invalid AI provider")
     _save_settings(settings)
     return _public_settings(settings)
 
@@ -98,23 +107,76 @@ async def update_settings(request: Request):
 @router.get("/status")
 async def agent_status():
     settings = _load_settings()
-    base_url = settings["lmstudio_url"].rstrip("/")
-    reachable = False
-    models: list[str] = []
-    try:
-        async with httpx.AsyncClient(timeout=3) as client:
-            resp = await client.get(f"{base_url}/models")
-        if resp.status_code == 200:
-            reachable = True
-            models = [m.get("id", "") for m in resp.json().get("data", [])]
-    except Exception:
-        pass
+    provider = settings["active_provider"]
+    labels = {"lmstudio": "Local LLM", "openrouter": "OpenRouter", "gemini": "Gemini"}
+    model = settings.get(f"{provider}_model", "")
+    ready = False
+    detail = ""
+
+    if provider == "lmstudio":
+        try:
+            async with httpx.AsyncClient(timeout=3) as client:
+                resp = await client.get(f"{settings['lmstudio_url'].rstrip('/')}/models")
+            ready = resp.status_code == 200 and bool(resp.json().get("data"))
+            if ready and not model:
+                model = resp.json()["data"][0].get("id", "")
+        except Exception:
+            detail = "Start LM Studio, load a model, and enable its local server."
+    elif provider == "openrouter":
+        ready = bool(settings["openrouter_api_key"] and settings["openrouter_model"])
+        detail = "Add an OpenRouter API key and select a model."
+    else:
+        ready = bool(settings["gemini_api_key"] and settings["gemini_model"])
+        detail = "Add a Gemini API key and select a model."
+
     return {
-        "lmstudio_reachable": reachable,
-        "models": models,
-        "openrouter_api_key_set": bool(settings["openrouter_api_key"]),
-        "serper_api_key_set": bool(settings["serper_api_key"]),
+        "provider": provider,
+        "provider_label": labels[provider],
+        "model": model,
+        "ready": ready,
+        "detail": detail,
     }
+
+
+@router.post("/models/{provider}")
+async def provider_models(provider: str, request: Request):
+    """Return selectable text-generation models for one provider."""
+    settings = _load_settings()
+    body = await request.json()
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            if provider == "lmstudio":
+                base_url = (body.get("lmstudio_url") or settings["lmstudio_url"]).strip().rstrip("/")
+                resp = await client.get(f"{base_url}/models")
+                resp.raise_for_status()
+                models = [m.get("id", "") for m in resp.json().get("data", [])]
+            elif provider == "openrouter":
+                api_key = (body.get("api_key") or settings["openrouter_api_key"]).strip()
+                headers = {}
+                if api_key:
+                    headers["Authorization"] = f"Bearer {api_key}"
+                resp = await client.get("https://openrouter.ai/api/v1/models", headers=headers)
+                resp.raise_for_status()
+                models = [m.get("id", "") for m in resp.json().get("data", [])]
+            elif provider == "gemini":
+                api_key = (body.get("api_key") or settings["gemini_api_key"]).strip()
+                if not api_key:
+                    return {"models": []}
+                resp = await client.get(
+                    "https://generativelanguage.googleapis.com/v1beta/models",
+                    params={"key": api_key, "pageSize": 1000},
+                )
+                resp.raise_for_status()
+                models = [
+                    m.get("baseModelId") or m.get("name", "").removeprefix("models/")
+                    for m in resp.json().get("models", [])
+                    if "generateContent" in (m.get("supportedGenerationMethods") or [])
+                ]
+            else:
+                raise HTTPException(status_code=404, detail="Unknown AI provider")
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"Could not load {provider} models: {exc}") from exc
+    return {"models": sorted({m for m in models if m})}
 
 
 # ── Chat session persistence ─────────────────────────────────
@@ -369,12 +431,12 @@ When you researched online, end your passage with a "Sources:" line listing the 
 Your final reply is inserted directly into the note, so reply with clean Markdown only — no preamble like "Here is...", no code fences wrapping the whole reply, no commentary about what you did."""
 
 CONTINUE_SYSTEM_PROMPT = """You are the writing assistant built into EverFree, a Markdown note-taking app.
-Continue the user's note from exactly where it stops. If the last sentence is unfinished, finish it first, then continue with one or two more sentences or a short paragraph in the same voice, tone, and formatting.
+Continue the user's note from exactly where it stops. If the last sentence is unfinished, finish it. Add at most one short sentence after that, in the same voice, tone, and formatting. Do not keep expanding the note.
 Reply with the continuation text only — no preamble, no quotes, and do not repeat any of the existing text."""
 
 
 # ── Agent loop ───────────────────────────────────────────────
-async def _resolve_model(client: httpx.AsyncClient, base_url: str, settings: dict) -> str:
+async def _resolve_local_model(client: httpx.AsyncClient, base_url: str, settings: dict) -> str:
     if settings["lmstudio_model"]:
         return settings["lmstudio_model"]
     resp = await client.get(f"{base_url}/models")
@@ -385,113 +447,224 @@ async def _resolve_model(client: httpx.AsyncClient, base_url: str, settings: dic
     return models[0]["id"]
 
 
-async def _agent_events(messages: list[dict], use_tools: bool):
-    """Run the LM Studio tool-call loop, yielding UI events as dicts."""
-    settings = _load_settings()
-    base_url = settings["lmstudio_url"].rstrip("/")
+async def _run_tool(name: str, args: dict, settings: dict) -> tuple[str, str]:
+    if name == "web_search":
+        detail = args.get("query", "")
+        return detail, await _tool_web_search(detail, settings)
+    if name == "read_page":
+        detail = args.get("url", "")
+        return detail, await _tool_read_page(detail)
+    return "", f"Error: unknown tool {name}"
 
-    try:
-        async with httpx.AsyncClient(timeout=LLM_TIMEOUT) as client:
-            model = await _resolve_model(client, base_url, settings)
 
-            for _ in range(MAX_TOOL_ROUNDS):
-                payload = {
-                    "model": model,
-                    "messages": messages,
-                    "stream": True,
-                    "temperature": 0.7,
-                }
-                if use_tools:
-                    payload["tools"] = TOOLS
+def _empty_completion_event(finish_reason: str | None) -> dict:
+    """Build a user-facing error for a completion that came back with no text.
+    Reasoning/thinking models can spend the whole token budget on hidden
+    reasoning and return empty content — surface that instead of silently
+    yielding nothing."""
+    if (finish_reason or "").lower() in {"length", "max_tokens"}:
+        detail = ("The model hit its output-token limit before replying — often a "
+                  "reasoning model. Try again, shorten the note, or use a smaller model.")
+    else:
+        detail = "The model returned no text. Try again or pick a different model."
+    return {"type": "error", "detail": detail}
 
-                content_parts: list[str] = []
-                tool_calls: dict[int, dict] = {}
-                finish_reason = None
 
-                async with client.stream(
-                    "POST", f"{base_url}/chat/completions", json=payload
-                ) as resp:
-                    if resp.status_code != 200:
-                        body = (await resp.aread()).decode("utf-8", "replace")
-                        raise RuntimeError(f"LM Studio error HTTP {resp.status_code}: {body[:300]}")
-                    async for line in resp.aiter_lines():
-                        if not line.startswith("data:"):
-                            continue
-                        data = line[5:].strip()
-                        if data == "[DONE]":
-                            break
-                        try:
-                            chunk = json.loads(data)
-                        except ValueError:
-                            continue
-                        choices = chunk.get("choices") or []
-                        if not choices:
-                            continue
-                        choice = choices[0]
-                        delta = choice.get("delta") or {}
-                        if delta.get("content"):
-                            content_parts.append(delta["content"])
-                            yield {"type": "delta", "text": delta["content"]}
-                        for tc in delta.get("tool_calls") or []:
-                            slot = tool_calls.setdefault(
-                                tc.get("index", 0), {"id": "", "name": "", "arguments": ""}
-                            )
-                            if tc.get("id"):
-                                slot["id"] = tc["id"]
-                            fn = tc.get("function") or {}
-                            if fn.get("name"):
-                                slot["name"] = fn["name"]
-                            if fn.get("arguments"):
-                                slot["arguments"] += fn["arguments"]
-                        if choice.get("finish_reason"):
-                            finish_reason = choice["finish_reason"]
+async def _openai_compatible_events(
+    messages: list[dict], use_tools: bool, settings: dict, max_tokens: int,
+    no_thinking: bool = False,
+):
+    """Run a non-streaming OpenAI-compatible tool loop.
 
-                if finish_reason != "tool_calls" or not tool_calls:
+    The endpoint response is buffered so the UI receives complete passages
+    instead of visually filling them in word by word. (`no_thinking` has no
+    portable equivalent here, so continuations rely on a generous token budget
+    to leave room for any reasoning the model does.)
+    """
+    provider = settings["active_provider"]
+    if provider == "lmstudio":
+        base_url = settings["lmstudio_url"].rstrip("/")
+        headers = {}
+    else:
+        if not settings["openrouter_api_key"]:
+            raise RuntimeError("Add an OpenRouter API key in assistant settings.")
+        base_url = "https://openrouter.ai/api/v1"
+        headers = {"Authorization": f"Bearer {settings['openrouter_api_key']}"}
+
+    async with httpx.AsyncClient(timeout=LLM_TIMEOUT, headers=headers) as client:
+        if provider == "lmstudio":
+            model = await _resolve_local_model(client, base_url, settings)
+        else:
+            model = settings["openrouter_model"]
+            if not model:
+                raise RuntimeError("Select an OpenRouter chat model in assistant settings.")
+
+        for _ in range(MAX_TOOL_ROUNDS):
+            payload = {
+                "model": model,
+                "messages": messages,
+                "temperature": 0.7,
+                "max_tokens": max_tokens,
+            }
+            if use_tools:
+                payload["tools"] = TOOLS
+
+            resp = await client.post(f"{base_url}/chat/completions", json=payload)
+            if resp.status_code != 200:
+                label = "LM Studio" if provider == "lmstudio" else "OpenRouter"
+                raise RuntimeError(f"{label} error HTTP {resp.status_code}: {resp.text[:300]}")
+
+            choices = resp.json().get("choices") or []
+            if not choices:
+                raise RuntimeError("The model returned no response.")
+            message = choices[0].get("message") or {}
+            tool_calls = message.get("tool_calls") or []
+            if not tool_calls:
+                text = message.get("content") or ""
+                if text:
+                    yield {"type": "delta", "text": text}
                     yield {"type": "done"}
-                    return
+                else:
+                    yield _empty_completion_event(choices[0].get("finish_reason"))
+                return
 
-                assistant_msg = {
-                    "role": "assistant",
-                    "content": "".join(content_parts) or None,
-                    "tool_calls": [
-                        {
-                            "id": slot["id"] or f"call_{i}",
-                            "type": "function",
-                            "function": {"name": slot["name"], "arguments": slot["arguments"]},
-                        }
-                        for i, slot in sorted(tool_calls.items())
-                    ],
-                }
-                messages.append(assistant_msg)
+            messages.append(message)
+            for i, call in enumerate(tool_calls):
+                fn = call.get("function") or {}
+                name = fn.get("name", "")
+                try:
+                    args = json.loads(fn.get("arguments") or "{}")
+                except ValueError:
+                    args = {}
+                detail, result = await _run_tool(name, args, settings)
+                yield {"type": "tool", "name": name, "detail": detail}
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": call.get("id") or f"call_{i}",
+                    "content": result,
+                })
 
-                for call in assistant_msg["tool_calls"]:
-                    name = call["function"]["name"]
-                    try:
-                        args = json.loads(call["function"]["arguments"] or "{}")
-                    except ValueError:
-                        args = {}
-                    if name == "web_search":
-                        detail = args.get("query", "")
-                        yield {"type": "tool", "name": name, "detail": detail}
-                        result = await _tool_web_search(detail, settings)
-                    elif name == "read_page":
-                        detail = args.get("url", "")
-                        yield {"type": "tool", "name": name, "detail": detail}
-                        result = await _tool_read_page(detail)
-                    else:
-                        result = f"Error: unknown tool {name}"
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": call["id"],
-                        "content": result,
-                    })
+        yield {"type": "error", "detail": "The agent hit the tool-call limit without finishing."}
 
-            yield {"type": "error", "detail": "The agent hit the tool-call limit without finishing."}
+
+def _gemini_request(messages: list[dict]) -> tuple[dict | None, list[dict]]:
+    system_instruction = None
+    contents = []
+    for message in messages:
+        role = message.get("role")
+        text = message.get("content")
+        if role == "system":
+            system_instruction = {"parts": [{"text": text or ""}]}
+        elif role in {"user", "assistant"} and isinstance(text, str):
+            contents.append({
+                "role": "model" if role == "assistant" else "user",
+                "parts": [{"text": text}],
+            })
+    return system_instruction, contents
+
+
+def _gemini_tools() -> list[dict]:
+    return [{
+        "functionDeclarations": [
+            {
+                "name": tool["function"]["name"],
+                "description": tool["function"]["description"],
+                "parameters": tool["function"]["parameters"],
+            }
+            for tool in TOOLS
+        ]
+    }]
+
+
+async def _gemini_events(
+    messages: list[dict], use_tools: bool, settings: dict, max_tokens: int,
+    no_thinking: bool = False,
+):
+    if not settings["gemini_api_key"]:
+        raise RuntimeError("Add a Gemini API key in assistant settings.")
+    model = settings["gemini_model"]
+    if not model:
+        raise RuntimeError("Select a Gemini model in assistant settings.")
+    model = model.removeprefix("models/")
+    system_instruction, contents = _gemini_request(messages)
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{model}:generateContent"
+    )
+
+    async with httpx.AsyncClient(
+        timeout=LLM_TIMEOUT,
+        headers={"x-goog-api-key": settings["gemini_api_key"]},
+    ) as client:
+        for _ in range(MAX_TOOL_ROUNDS):
+            generation_config = {
+                "temperature": 0.7,
+                "maxOutputTokens": max_tokens,
+            }
+            # Gemini 2.5 models "think" by default, and thinking tokens count
+            # against maxOutputTokens — for a short continuation that can consume
+            # the whole budget and return empty text. Disable thinking there.
+            if no_thinking:
+                generation_config["thinkingConfig"] = {"thinkingBudget": 0}
+            payload = {
+                "contents": contents,
+                "generationConfig": generation_config,
+            }
+            if system_instruction:
+                payload["systemInstruction"] = system_instruction
+            if use_tools:
+                payload["tools"] = _gemini_tools()
+
+            resp = await client.post(url, json=payload)
+            if resp.status_code != 200:
+                raise RuntimeError(f"Gemini error HTTP {resp.status_code}: {resp.text[:300]}")
+            candidates = resp.json().get("candidates") or []
+            if not candidates:
+                raise RuntimeError("Gemini returned no response.")
+            content = candidates[0].get("content") or {}
+            parts = content.get("parts") or []
+            function_calls = [part["functionCall"] for part in parts if part.get("functionCall")]
+            if not function_calls:
+                text = "".join(part.get("text", "") for part in parts)
+                if text:
+                    yield {"type": "delta", "text": text}
+                    yield {"type": "done"}
+                else:
+                    yield _empty_completion_event(candidates[0].get("finishReason"))
+                return
+
+            contents.append({"role": "model", "parts": parts})
+            response_parts = []
+            for call in function_calls:
+                name = call.get("name", "")
+                args = call.get("args") or {}
+                detail, result = await _run_tool(name, args, settings)
+                yield {"type": "tool", "name": name, "detail": detail}
+                response_parts.append({
+                    "functionResponse": {
+                        "name": name,
+                        "response": {"result": result},
+                    }
+                })
+            contents.append({"role": "user", "parts": response_parts})
+
+        yield {"type": "error", "detail": "The agent hit the tool-call limit without finishing."}
+
+
+async def _agent_events(messages: list[dict], use_tools: bool, max_tokens: int, no_thinking: bool = False):
+    """Run the selected provider and yield UI events."""
+    settings = _load_settings()
+    try:
+        if settings["active_provider"] == "gemini":
+            async for event in _gemini_events(messages, use_tools, settings, max_tokens, no_thinking):
+                yield event
+        else:
+            async for event in _openai_compatible_events(messages, use_tools, settings, max_tokens, no_thinking):
+                yield event
     except httpx.ConnectError:
         yield {
             "type": "error",
-            "detail": f"Could not reach LM Studio at {base_url}. Start LM Studio, load a model, "
-                      "and enable its local server (or fix the URL in assistant settings).",
+            "detail": "Could not reach the selected AI provider. Check its connection and settings.",
         }
     except Exception as exc:
         logger.exception("Agent run failed")
@@ -519,6 +692,11 @@ async def agent_chat(request: Request):
             {"role": "user", "content": f"Continue this note:\n\n{note_content[-NOTE_CONTEXT_LIMIT:]}"},
         ]
         use_tools = False
+        # Brevity is enforced by the prompt; the budget just needs to be large
+        # enough that a reasoning model's hidden thinking doesn't crowd out the
+        # short continuation. Gemini additionally has thinking disabled below.
+        max_tokens = 1024
+        no_thinking = True
     else:
         system = CHAT_SYSTEM_PROMPT
         if note_content:
@@ -529,9 +707,11 @@ async def agent_chat(request: Request):
             if msg.get("role") in ("user", "assistant") and isinstance(msg.get("content"), str):
                 messages.append({"role": msg["role"], "content": msg["content"]})
         use_tools = True
+        max_tokens = 1200
+        no_thinking = False
 
     return StreamingResponse(
-        (_ndjson(event) async for event in _agent_events(messages, use_tools)),
+        (_ndjson(event) async for event in _agent_events(messages, use_tools, max_tokens, no_thinking)),
         media_type="application/x-ndjson",
     )
 

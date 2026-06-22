@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900">
+  <rect width="1440" height="900" fill="#e9e9e5"/>
+  <style>
+    .ui{font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    .mono{font-family:"SFMono-Regular",Consolas,monospace}
+  </style>
+  <rect x="22" y="20" width="1396" height="858" rx="12" fill="#fff" stroke="#cfcfca"/>
+  <rect x="22" y="20" width="1396" height="44" rx="12" fill="#f5f5f2"/>
+  <circle cx="45" cy="42" r="6" fill="#ff5f57"/><circle cx="65" cy="42" r="6" fill="#febc2e"/><circle cx="85" cy="42" r="6" fill="#28c840"/>
+  <text x="720" y="47" class="ui" font-size="12" fill="#888983" text-anchor="middle">EverFree</text>
+
+  <rect x="22" y="64" width="286" height="814" fill="#f3f3ef"/>
+  <line x1="308" y1="64" x2="308" y2="878" stroke="#deded8"/>
+  <g class="ui">
+    <text x="50" y="108" font-size="19" font-weight="750" fill="#272823">EverFree</text>
+    <text x="267" y="108" font-size="21" fill="#777972">＋</text>
+    <rect x="42" y="135" width="245" height="36" rx="7" fill="#e7e7e2"/>
+    <text x="59" y="158" font-size="11" fill="#888a83">⌕  Search notes</text>
+    <text x="48" y="210" font-size="10" font-weight="700" letter-spacing="1.2" fill="#93958e">NOTES</text>
+    <rect x="39" y="225" width="259" height="76" rx="7" fill="#dce7df"/>
+    <text x="55" y="251" font-size="13" font-weight="650" fill="#315f47">A quieter archive</text>
+    <text x="55" y="273" font-size="11" fill="#6e7069">Nothing is trapped. Nothing…</text>
+    <text x="55" y="291" font-size="9" fill="#8e9089">Today · Journal</text>
+    <text x="55" y="338" font-size="13" font-weight="600" fill="#393a35">Ideas for the garden</text>
+    <text x="55" y="360" font-size="11" fill="#777972">Native plants and shade…</text>
+    <line x1="49" y1="386" x2="289" y2="386" stroke="#dfdfda"/>
+    <text x="55" y="424" font-size="13" font-weight="600" fill="#393a35">Books to revisit</text>
+    <text x="55" y="446" font-size="11" fill="#777972">Le Guin, Didion, Sacks…</text>
+    <line x1="43" y1="817" x2="291" y2="817" stroke="#d9d9d3"/>
+    <circle cx="54" cy="846" r="4" fill="#4e9869"/>
+    <text x="67" y="850" font-size="10" fill="#85877f">All changes saved</text>
+  </g>
+
+  <g class="ui">
+    <text x="351" y="102" font-size="11" fill="#8b8d86">Journal / A quieter archive</text>
+    <rect x="1191" y="81" width="108" height="35" rx="7" fill="#eef3ef"/>
+    <circle cx="1211" cy="98" r="8" fill="#315f47"/>
+    <path d="M1207 98h8M1211 94v8" stroke="#fff" stroke-width="1.3"/>
+    <text x="1253" y="103" font-size="11" font-weight="650" fill="#315f47" text-anchor="middle">Ask AI</text>
+    <rect x="1310" y="81" width="70" height="35" rx="7" fill="#f4f4f0"/>
+    <text x="1345" y="103" font-size="16" fill="#666861" text-anchor="middle">•••</text>
+    <line x1="336" y1="129" x2="1390" y2="129" stroke="#eeeeea"/>
+  </g>
+
+  <g class="ui">
+    <text x="525" y="221" font-size="42" font-weight="700" letter-spacing="-1.5" fill="#252621">A quieter archive</text>
+    <text x="528" y="264" font-size="12" fill="#9a9b95">JUNE 22, 2026 · JOURNAL</text>
+    <text x="525" y="343" font-size="18" fill="#383934">Today I moved years of notes into plain text.</text>
+    <text x="525" y="384" font-size="18" fill="#383934">Nothing is trapped. Nothing requires a subscription.</text>
+    <text x="525" y="425" font-size="18" fill="#383934">The folder is mine, and its history is backed up.</text>
+    <text x="525" y="514" font-size="25" font-weight="650" fill="#252621">What changed</text>
+    <text x="528" y="569" font-size="17" fill="#383934">Notes became Markdown files.</text>
+    <text x="528" y="609" font-size="17" fill="#383934">Attachments stayed beside them.</text>
+    <text x="528" y="649" font-size="17" fill="#383934">GitHub keeps the history.</text>
+    <rect x="525" y="718" width="480" height="62" rx="7" fill="#f5f6f2"/>
+    <text x="547" y="746" class="mono" font-size="10" fill="#315f47">Journal/A quieter archive.md</text>
+    <text x="547" y="765" class="mono" font-size="9" fill="#8d8f88">private · main · saved moments ago</text>
+  </g>
+
+  <!-- Slash command menu -->
+  <rect x="518" y="789" width="335" height="62" rx="9" fill="#fff" stroke="#d6d7d1"/>
+  <text x="538" y="814" class="ui" font-size="12" fill="#8b8d86">Type / for commands</text>
+  <text x="538" y="837" class="ui" font-size="11" fill="#315f47">Continue writing · Brainstorm · Summarize · Research</text>
+
+  <!-- Explanation labels -->
+  <g class="ui">
+    <path d="M1238 153v-22" stroke="#315f47" stroke-width="1.5"/>
+    <text x="1238" y="174" font-size="10" font-weight="650" fill="#315f47" text-anchor="middle">Long-form AI opens here</text>
+    <path d="M870 830h72" stroke="#315f47" stroke-width="1.5"/>
+    <text x="952" y="834" font-size="10" font-weight="650" fill="#315f47">Quick commands stay in the page</text>
+  </g>
+</svg>

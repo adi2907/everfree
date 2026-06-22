@@ -23,6 +23,11 @@
     const $setModelList = document.getElementById("assist-model-list");
     const $setSerper = document.getElementById("assist-set-serper");
     const $setOpenrouter = document.getElementById("assist-set-openrouter");
+    const $setOpenrouterModel = document.getElementById("assist-set-openrouter-model");
+    const $setOpenrouterModelList = document.getElementById("assist-openrouter-model-list");
+    const $setGemini = document.getElementById("assist-set-gemini");
+    const $setGeminiModel = document.getElementById("assist-set-gemini-model");
+    const $setGeminiModelList = document.getElementById("assist-gemini-model-list");
     const $setImageModel = document.getElementById("assist-set-image-model");
     const $settingsSave = document.getElementById("assist-settings-save");
     const $settingsCancel = document.getElementById("assist-settings-cancel");
@@ -75,6 +80,7 @@
     function togglePanel(show) {
         const visible = show !== undefined ? show : $panel.hidden;
         $panel.hidden = !visible;
+        document.body.classList.toggle("assist-open", visible);
         if (visible) {
             $input.focus();
             refreshStatus();
@@ -85,15 +91,14 @@
         try {
             const r = await fetch("/api/agent/status");
             const data = await r.json();
-            if (data.lmstudio_reachable) {
-                const model = data.models[0] || "model loaded";
-                $status.textContent = "● " + model;
+            if (data.ready) {
+                $status.textContent = `● ${data.provider_label}${data.model ? ` · ${data.model}` : ""}`;
                 $status.className = "assist-status ok";
-                $status.title = `LM Studio connected (${data.models.join(", ")})`;
+                $status.title = `${data.provider_label} is configured`;
             } else {
-                $status.textContent = "● LM Studio offline";
+                $status.textContent = `● ${data.provider_label || "Assistant"} not configured`;
                 $status.className = "assist-status err";
-                $status.title = "Start LM Studio and load a model, then check the URL in settings.";
+                $status.title = data.detail || "Open assistant settings to configure a provider.";
             }
         } catch {
             $status.textContent = "";
@@ -361,20 +366,20 @@
         const decoder = new TextDecoder();
         let buffer = "";
         let fullText = "";
-        let $bubble = null;
+        const $thinking = document.createElement("div");
+        $thinking.className = "assist-tool";
+        $thinking.textContent = "Thinking…";
+        $messages.appendChild($thinking);
+        scrollToBottom();
 
         const handleEvent = (event) => {
             if (event.type === "delta") {
-                if (!$bubble) $bubble = addBubble("assistant", "");
-                $bubble.textContent += event.text;
                 fullText += event.text;
-                scrollToBottom();
             } else if (event.type === "tool") {
-                // Text streamed before a tool call was the model thinking out
-                // loud; start a fresh bubble after the tool line.
-                $bubble = null;
+                $thinking.remove();
                 addToolLine(event.name, event.detail);
             } else if (event.type === "error") {
+                $thinking.remove();
                 addErrorLine(event.detail);
             }
         };
@@ -390,6 +395,8 @@
                 try { handleEvent(JSON.parse(line)); } catch { /* skip bad line */ }
             }
         }
+        $thinking.remove();
+        if (fullText) addBubble("assistant", fullText);
         return fullText;
     }
 
@@ -536,37 +543,86 @@
     }
 
     // ── Settings ────────────────────────────────────────────
+    function selectSettingsTab(provider) {
+        document.querySelectorAll("[data-provider-tab]").forEach(($tab) => {
+            const active = $tab.dataset.providerTab === provider;
+            $tab.classList.toggle("active", active);
+            $tab.setAttribute("aria-selected", active ? "true" : "false");
+        });
+        document.querySelectorAll("[data-provider-pane]").forEach(($pane) => {
+            const active = $pane.dataset.providerPane === provider;
+            $pane.classList.toggle("active", active);
+            $pane.hidden = !active;
+        });
+    }
+
+    function fillModelList($list, models) {
+        $list.innerHTML = "";
+        for (const model of models || []) {
+            const $opt = document.createElement("option");
+            $opt.value = model;
+            $list.appendChild($opt);
+        }
+    }
+
+    async function loadProviderModels(provider) {
+        try {
+            const body = {};
+            if (provider === "lmstudio") body.lmstudio_url = $setUrl.value.trim();
+            if (provider === "openrouter") body.api_key = $setOpenrouter.value.trim();
+            if (provider === "gemini") body.api_key = $setGemini.value.trim();
+            const response = await fetch(`/api/agent/models/${provider}`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body),
+            });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const data = await response.json();
+            if (provider === "lmstudio") fillModelList($setModelList, data.models);
+            if (provider === "openrouter") fillModelList($setOpenrouterModelList, data.models);
+            if (provider === "gemini") fillModelList($setGeminiModelList, data.models);
+        } catch {
+            /* Model IDs can still be entered manually. */
+        }
+    }
+
     async function openSettings() {
         try {
-            const [settings, status] = await Promise.all([
-                fetch("/api/agent/settings").then((r) => r.json()),
-                fetch("/api/agent/status").then((r) => r.json()),
-            ]);
+            const settings = await fetch("/api/agent/settings").then((r) => r.json());
             $setUrl.value = settings.lmstudio_url;
             $setModel.value = settings.lmstudio_model;
+            $setOpenrouterModel.value = settings.openrouter_model;
+            $setGeminiModel.value = settings.gemini_model;
             $setImageModel.value = settings.image_model;
             $setSerper.value = "";
             $setSerper.placeholder = settings.serper_api_key_set ? "•••••• (saved — leave blank to keep)" : "";
             $setOpenrouter.value = "";
             $setOpenrouter.placeholder = settings.openrouter_api_key_set ? "•••••• (saved — leave blank to keep)" : "";
-            $setModelList.innerHTML = "";
-            for (const id of status.models || []) {
-                const $opt = document.createElement("option");
-                $opt.value = id;
-                $setModelList.appendChild($opt);
-            }
+            $setGemini.value = "";
+            $setGemini.placeholder = settings.gemini_api_key_set ? "•••••• (saved — leave blank to keep)" : "";
+            const provider = settings.active_provider || "lmstudio";
+            const $radio = document.querySelector(`input[name="assist-provider"][value="${provider}"]`);
+            if ($radio) $radio.checked = true;
+            selectSettingsTab(provider);
+            loadProviderModels("lmstudio");
+            loadProviderModels("openrouter");
+            loadProviderModels("gemini");
         } catch { /* show form with whatever we have */ }
         $settings.hidden = false;
     }
 
     async function saveSettings() {
         const body = {
+            active_provider: document.querySelector('input[name="assist-provider"]:checked')?.value || "lmstudio",
             lmstudio_url: $setUrl.value.trim() || "http://localhost:1234/v1",
             lmstudio_model: $setModel.value.trim(),
+            openrouter_model: $setOpenrouterModel.value.trim(),
+            gemini_model: $setGeminiModel.value.trim(),
             image_model: $setImageModel.value.trim() || "google/gemini-2.5-flash-image",
         };
         if ($setSerper.value.trim()) body.serper_api_key = $setSerper.value.trim();
         if ($setOpenrouter.value.trim()) body.openrouter_api_key = $setOpenrouter.value.trim();
+        if ($setGemini.value.trim()) body.gemini_api_key = $setGemini.value.trim();
         try {
             const r = await fetch("/api/agent/settings", {
                 method: "POST",
@@ -591,6 +647,15 @@
     });
     $settingsCancel.addEventListener("click", () => { $settings.hidden = true; });
     $settingsSave.addEventListener("click", saveSettings);
+    document.querySelectorAll("[data-provider-tab]").forEach(($tab) => {
+        $tab.addEventListener("click", () => {
+            selectSettingsTab($tab.dataset.providerTab);
+            loadProviderModels($tab.dataset.providerTab);
+        });
+    });
+    $setModel.addEventListener("focus", () => loadProviderModels("lmstudio"));
+    $setOpenrouterModel.addEventListener("focus", () => loadProviderModels("openrouter"));
+    $setGeminiModel.addEventListener("focus", () => loadProviderModels("gemini"));
     $send.addEventListener("click", () => handleInput($input.value));
 
     $input.addEventListener("keydown", (e) => {

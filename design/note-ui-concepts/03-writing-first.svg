@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900">
+  <rect width="1440" height="900" fill="#eeeae2"/>
+  <style>
+    .ui{font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    .serif{font-family:Georgia,"Times New Roman",serif}
+    .mono{font-family:"SFMono-Regular",Consolas,monospace}
+  </style>
+
+  <rect x="24" y="20" width="1392" height="858" rx="12" fill="#fcfbf7" stroke="#d2cec5"/>
+  <rect x="24" y="20" width="1392" height="44" rx="12" fill="#f5f2eb"/>
+  <circle cx="47" cy="42" r="6" fill="#ff5f57"/>
+  <circle cx="67" cy="42" r="6" fill="#febc2e"/>
+  <circle cx="87" cy="42" r="6" fill="#28c840"/>
+  <text x="720" y="47" class="ui" font-size="11" fill="#8d8a82" text-anchor="middle">A quieter archive — EverFree</text>
+
+  <!-- Ultra-small navigation rail -->
+  <rect x="24" y="64" width="72" height="814" fill="#f0ede6"/>
+  <line x1="96" y1="64" x2="96" y2="878" stroke="#dcd8cf"/>
+  <g class="ui" text-anchor="middle">
+    <circle cx="60" cy="103" r="17" fill="#51705b"/>
+    <path d="M53 103h14M60 96v14" stroke="#fff" stroke-width="2"/>
+    <text x="60" y="162" font-size="18" fill="#68665f">⌕</text>
+    <rect x="40" y="190" width="40" height="40" rx="8" fill="#dde5de"/>
+    <text x="60" y="216" font-size="17" fill="#51705b">☰</text>
+    <text x="60" y="275" font-size="18" fill="#77746d">＋</text>
+    <text x="60" y="817" font-size="16" fill="#77746d">☼</text>
+    <circle cx="60" cy="850" r="4" fill="#4c9665"/>
+  </g>
+
+  <!-- Minimal document bar -->
+  <g class="ui">
+    <text x="132" y="103" font-size="11" fill="#8d8a82">Journal</text>
+    <text x="1358" y="103" font-size="11" fill="#8d8a82" text-anchor="end">Saved</text>
+    <text x="1382" y="104" font-size="16" fill="#77746d">•••</text>
+    <line x1="118" y1="126" x2="1390" y2="126" stroke="#ece8df"/>
+  </g>
+
+  <!-- Paper-like writing area -->
+  <g>
+    <text x="385" y="223" class="serif" font-size="48" fill="#272722">A quieter archive</text>
+    <text x="389" y="267" class="mono" font-size="10" letter-spacing=".8" fill="#99968e">JUNE 22, 2026</text>
+
+    <text x="385" y="355" class="serif" font-size="20" fill="#34342f">Today I moved years of notes into plain text.</text>
+    <text x="385" y="397" class="serif" font-size="20" fill="#34342f">Nothing is trapped. Nothing requires a subscription.</text>
+    <text x="385" y="439" class="serif" font-size="20" fill="#34342f">The folder is mine, and its history is backed up.</text>
+
+    <text x="385" y="538" class="serif" font-size="29" fill="#272722">What changed</text>
+    <circle cx="394" cy="592" r="8" fill="none" stroke="#51705b" stroke-width="1.7"/>
+    <path d="M389 592l4 4 7-9" fill="none" stroke="#51705b" stroke-width="1.7"/>
+    <text x="421" y="599" class="serif" font-size="18" fill="#34342f">Notes became Markdown files</text>
+    <circle cx="394" cy="637" r="8" fill="none" stroke="#51705b" stroke-width="1.7"/>
+    <path d="M389 637l4 4 7-9" fill="none" stroke="#51705b" stroke-width="1.7"/>
+    <text x="421" y="644" class="serif" font-size="18" fill="#34342f">Attachments stayed beside them</text>
+    <circle cx="394" cy="682" r="8" fill="none" stroke="#51705b" stroke-width="1.7"/>
+    <path d="M389 682l4 4 7-9" fill="none" stroke="#51705b" stroke-width="1.7"/>
+    <text x="421" y="689" class="serif" font-size="18" fill="#34342f">GitHub keeps the history</text>
+
+    <line x1="385" y1="758" x2="1038" y2="758" stroke="#dedad1"/>
+    <text x="385" y="794" class="mono" font-size="9" fill="#99968e">Journal/A quieter archive.md</text>
+    <text x="1038" y="794" class="mono" font-size="9" fill="#51705b" text-anchor="end">PRIVATE REPOSITORY · SYNCED</text>
+  </g>
+
+  <!-- Collapsed library drawer hint -->
+  <rect x="1058" y="169" width="302" height="560" rx="9" fill="#f4f1ea" stroke="#ddd9d0"/>
+  <g class="ui">
+    <text x="1082" y="206" font-size="14" font-weight="700" fill="#35352f">Notes</text>
+    <text x="1336" y="206" font-size="20" fill="#77746d">＋</text>
+    <rect x="1075" y="224" width="268" height="33" rx="6" fill="#e8e5de"/>
+    <text x="1090" y="245" font-size="10" fill="#8c8981">Search</text>
+
+    <rect x="1072" y="278" width="274" height="82" rx="7" fill="#e1e8e1"/>
+    <text x="1088" y="304" font-size="12" font-weight="650" fill="#3f624c">A quieter archive</text>
+    <text x="1088" y="326" font-size="10" fill="#6f706a">Today I moved years of notes…</text>
+    <text x="1088" y="346" font-size="9" fill="#8d8a82">Today · Journal</text>
+
+    <text x="1088" y="397" font-size="12" font-weight="600" fill="#44443e">Ideas for the garden</text>
+    <text x="1088" y="419" font-size="10" fill="#77746d">Native plants and shade…</text>
+    <line x1="1082" y1="442" x2="1334" y2="442" stroke="#ddd9d0"/>
+
+    <text x="1088" y="478" font-size="12" font-weight="600" fill="#44443e">Books to revisit</text>
+    <text x="1088" y="500" font-size="10" fill="#77746d">Le Guin, Didion, Sacks…</text>
+    <line x1="1082" y1="523" x2="1334" y2="523" stroke="#ddd9d0"/>
+
+    <text x="1088" y="559" font-size="12" font-weight="600" fill="#44443e">June planning</text>
+    <text x="1088" y="581" font-size="10" fill="#77746d">Three things that matter…</text>
+    <line x1="1082" y1="654" x2="1334" y2="654" stroke="#ddd9d0"/>
+    <text x="1088" y="687" font-size="10" fill="#8d8a82">4 notebooks · 42 notes</text>
+  </g>
+
+  <!-- Subtle floating controls -->
+  <rect x="562" y="824" width="306" height="38" rx="8" fill="#fff" stroke="#d9d5cc"/>
+  <g class="ui" font-size="12" fill="#6b6962">
+    <text x="585" y="848" font-weight="700">B</text>
+    <text x="620" y="848" font-style="italic">I</text>
+    <text x="655" y="848">H</text>
+    <text x="693" y="848">☷</text>
+    <text x="731" y="848">✓</text>
+    <text x="770" y="848">⌁</text>
+    <text x="814" y="848" fill="#51705b">Ask AI</text>
+  </g>
+</svg>

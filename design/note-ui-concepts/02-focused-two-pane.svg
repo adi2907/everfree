@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900">
+  <rect width="1440" height="900" fill="#ecece8"/>
+  <style>
+    .ui{font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    .mono{font-family:"SFMono-Regular",Consolas,monospace}
+  </style>
+
+  <rect x="25" y="22" width="1390" height="856" rx="11" fill="#fff" stroke="#d0d0ca"/>
+  <rect x="25" y="22" width="1390" height="43" rx="11" fill="#f7f7f4"/>
+  <circle cx="48" cy="43" r="6" fill="#ff5f57"/>
+  <circle cx="68" cy="43" r="6" fill="#febc2e"/>
+  <circle cx="88" cy="43" r="6" fill="#28c840"/>
+
+  <!-- Compact sidebar -->
+  <rect x="25" y="65" width="286" height="813" fill="#f4f4f0"/>
+  <line x1="311" y1="65" x2="311" y2="878" stroke="#deded8"/>
+  <g class="ui">
+    <text x="53" y="111" font-size="19" font-weight="750" fill="#272823">EverFree</text>
+    <text x="269" y="110" font-size="22" fill="#777972">＋</text>
+    <rect x="44" y="137" width="246" height="36" rx="7" fill="#e8e8e3"/>
+    <text x="62" y="160" font-size="11" fill="#888a83">⌕  Search</text>
+
+    <text x="49" y="214" font-size="10" font-weight="700" letter-spacing="1.2" fill="#93958e">NOTES</text>
+    <rect x="40" y="229" width="259" height="76" rx="7" fill="#dde7e0"/>
+    <text x="56" y="255" font-size="13" font-weight="650" fill="#315f47">A quieter archive</text>
+    <text x="56" y="277" font-size="11" fill="#6e7069">Nothing is trapped. Nothing…</text>
+    <text x="56" y="295" font-size="9" fill="#8e9089">Today</text>
+
+    <text x="56" y="340" font-size="13" font-weight="600" fill="#393a35">Ideas for the garden</text>
+    <text x="56" y="362" font-size="11" fill="#777972">Native plants and shade…</text>
+    <text x="56" y="380" font-size="9" fill="#9a9b95">Yesterday</text>
+    <line x1="50" y1="399" x2="289" y2="399" stroke="#dfdfda"/>
+
+    <text x="56" y="435" font-size="13" font-weight="600" fill="#393a35">Books to revisit</text>
+    <text x="56" y="457" font-size="11" fill="#777972">Le Guin, Didion, Sacks…</text>
+    <text x="56" y="475" font-size="9" fill="#9a9b95">Monday</text>
+    <line x1="50" y1="494" x2="289" y2="494" stroke="#dfdfda"/>
+
+    <text x="56" y="530" font-size="13" font-weight="600" fill="#393a35">June planning</text>
+    <text x="56" y="552" font-size="11" fill="#777972">Three things that matter…</text>
+    <text x="56" y="570" font-size="9" fill="#9a9b95">June 1</text>
+
+    <line x1="44" y1="817" x2="291" y2="817" stroke="#d9d9d3"/>
+    <circle cx="55" cy="846" r="4" fill="#4e9869"/>
+    <text x="68" y="850" font-size="10" fill="#85877f">All changes saved</text>
+    <text x="270" y="850" font-size="15" fill="#85877f">☼</text>
+  </g>
+
+  <!-- Editor header -->
+  <g class="ui">
+    <text x="352" y="102" font-size="11" fill="#8b8d86">Journal / A quieter archive</text>
+    <rect x="1228" y="82" width="72" height="34" rx="7" fill="#f4f4f0"/>
+    <text x="1264" y="103" font-size="11" fill="#666861" text-anchor="middle">Share</text>
+    <rect x="1311" y="82" width="70" height="34" rx="7" fill="#f4f4f0"/>
+    <text x="1346" y="103" font-size="16" fill="#666861" text-anchor="middle">•••</text>
+    <line x1="336" y1="129" x2="1390" y2="129" stroke="#eeeeea"/>
+  </g>
+
+  <!-- Focused writing canvas -->
+  <g class="ui">
+    <text x="530" y="221" font-size="42" font-weight="700" letter-spacing="-1.5" fill="#252621">A quieter archive</text>
+    <text x="533" y="264" font-size="12" fill="#9a9b95">JUNE 22, 2026 · JOURNAL</text>
+    <text x="530" y="343" font-size="18" fill="#383934">Today I moved years of notes into plain text.</text>
+    <text x="530" y="384" font-size="18" fill="#383934">Nothing is trapped. Nothing requires a subscription.</text>
+    <text x="530" y="425" font-size="18" fill="#383934">The folder is mine, and its history is backed up.</text>
+
+    <text x="530" y="514" font-size="25" font-weight="650" fill="#252621">What changed</text>
+    <text x="533" y="569" font-size="17" fill="#383934">Notes became Markdown files.</text>
+    <text x="533" y="609" font-size="17" fill="#383934">Attachments stayed beside them.</text>
+    <text x="533" y="649" font-size="17" fill="#383934">GitHub keeps the history.</text>
+
+    <rect x="530" y="718" width="480" height="62" rx="7" fill="#f5f6f2"/>
+    <text x="552" y="746" class="mono" font-size="10" fill="#315f47">Journal/A quieter archive.md</text>
+    <text x="552" y="765" class="mono" font-size="9" fill="#8d8f88">private · main · saved moments ago</text>
+  </g>
+
+  <!-- Tiny contextual toolbar, not permanent chrome -->
+  <rect x="579" y="821" width="330" height="39" rx="8" fill="#fff" stroke="#d9d9d3"/>
+  <g class="ui" font-size="13" fill="#64665f">
+    <text x="602" y="846" font-weight="700">B</text>
+    <text x="638" y="846" font-style="italic">I</text>
+    <text x="674" y="846">H</text>
+    <text x="712" y="846">☷</text>
+    <text x="750" y="846">✓</text>
+    <text x="788" y="846">⌁</text>
+    <text x="838" y="846" fill="#315f47">Ask AI</text>
+  </g>
+</svg>

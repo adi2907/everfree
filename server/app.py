@@ -26,6 +26,7 @@ import time
 import webbrowser
 from pathlib import Path
 from contextlib import asynccontextmanager
+from urllib.parse import quote
 
 import httpx
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
@@ -290,6 +291,19 @@ def _atomic_write_text(path: Path, text: str) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(text)
+        with _repo_lock:
+            os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def _atomic_write_bytes(path: Path, data: bytes) -> None:
+    """Binary counterpart of _atomic_write_text (for pasted/uploaded images)."""
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
         with _repo_lock:
             os.replace(tmp, path)
     finally:
@@ -1722,6 +1736,56 @@ async def delete_notebook(notebook: str):
         shutil.rmtree(nb_path)
     request_sync()
     return {"status": "deleted", "name": notebook}
+
+
+# ── Image upload (paste / drag-drop from the editor) ────────
+# Map the image content types a browser produces on paste to file extensions.
+# Raw bytes are posted as the request body so we don't need python-multipart
+# (kept out of the py2app bundle).
+_IMAGE_EXT = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/jpg": "jpg",
+    "image/gif": "gif",
+    "image/webp": "webp",
+    "image/svg+xml": "svg",
+    "image/bmp": "bmp",
+    "image/tiff": "tiff",
+    "image/heic": "heic",
+}
+MAX_IMAGE_BYTES = int(os.environ.get("EVERFREE_MAX_IMAGE_BYTES", 32 * 1024 * 1024))
+
+
+@app.post("/api/notebooks/{notebook}/assets")
+async def upload_asset(notebook: str, request: Request):
+    """Save a pasted/dropped image into the notebook's assets/ folder and return
+    its note-relative path so the editor can reference it as assets/<file>."""
+    nb_path = _safe_notebook_path(notebook)
+    if not nb_path.exists():
+        raise HTTPException(status_code=404, detail="Notebook not found")
+
+    content_type = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
+    ext = _IMAGE_EXT.get(content_type)
+    if not ext:
+        raise HTTPException(status_code=400, detail="Unsupported image type")
+
+    data = await request.body()
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty image")
+    if len(data) > MAX_IMAGE_BYTES:
+        raise HTTPException(status_code=413, detail="Image too large")
+
+    assets_dir = nb_path / "assets"
+    assets_dir.mkdir(exist_ok=True)
+    filename = f"paste-{time.strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(3)}.{ext}"
+    _atomic_write_bytes(assets_dir / filename, data)
+    request_sync()
+
+    rel_path = f"assets/{filename}"
+    return {
+        "rel_path": rel_path,
+        "preview_url": f"/notes/{quote(notebook)}/{rel_path}",
+    }
 
 
 # ── Note assets (images referenced relatively from notes) ───
