@@ -282,6 +282,218 @@ def git_sync():
     return True, "Synced successfully"
 
 
+# ── Atomic disk writes ───────────────────────────────────────
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Write text via a temp file + rename so the sync worker never reads a
+    half-written note while `git add` is running concurrently."""
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+# ══════════════════════════════════════════════════════════════
+#  BACKGROUND SYNC WORKER
+#  Saves write to disk instantly and enqueue a sync; this worker
+#  coalesces edits into batched commits, pulls periodically, and
+#  retries on its own when the network is down — so the request
+#  path never blocks on git and edits are never lost offline.
+# ══════════════════════════════════════════════════════════════
+SYNC_DEBOUNCE = float(os.environ.get("EVERFREE_SYNC_DEBOUNCE", 2.0))
+SYNC_PULL_INTERVAL = float(os.environ.get("EVERFREE_SYNC_PULL_INTERVAL", 45.0))
+SYNC_BRANCH = os.environ.get("EVERFREE_SYNC_BRANCH", "main")
+
+_sync_lock = threading.Lock()
+_sync_wanted = threading.Event()   # set when local changes need pushing
+_sync_now = threading.Event()      # set by a manual sync to skip the debounce
+_sync_stop = threading.Event()
+_sync_thread: threading.Thread | None = None
+
+sync_state = {
+    "status": "idle",      # idle | syncing | offline | conflict | error
+    "detail": "",
+    "online": True,
+    "pending": False,      # local changes not yet pushed
+    "last_synced": None,   # epoch seconds
+    "conflicts": [],       # note paths whose remote copy was preserved
+    "remote": None,
+}
+
+
+def _set_sync_state(**kwargs) -> None:
+    with _sync_lock:
+        sync_state.update(kwargs)
+
+
+def request_sync(*, immediate: bool = False) -> None:
+    """Mark that local changes are waiting to be synced."""
+    _set_sync_state(pending=True)
+    if immediate:
+        _sync_now.set()
+    _sync_wanted.set()
+
+
+def _git_bytes(*args: str) -> bytes:
+    """Run git capturing raw stdout bytes (used to extract conflict sides)."""
+    env = _get_subprocess_env()
+    git_bin = shutil.which("git", path=env["PATH"]) or "git"
+    return subprocess.run(
+        [git_bin, *args], cwd=str(NOTES_DIR), env=env,
+        capture_output=True, check=True, timeout=60,
+    ).stdout
+
+
+def _is_network_error(stderr: str) -> bool:
+    lowered = (stderr or "").lower()
+    needles = (
+        "could not resolve host", "could not read from remote",
+        "connection timed out", "connection refused", "network is unreachable",
+        "failed to connect", "operation timed out", "temporary failure in name resolution",
+        "unable to access",
+    )
+    return any(n in lowered for n in needles)
+
+
+def _resolve_merge_conflicts() -> list[str]:
+    """After a conflicted merge, keep the local version of each note and save
+    the remote version alongside as a "conflicted copy" so nothing is lost.
+    Returns the list of notes that had a real conflict."""
+    result = _git("diff", "--name-only", "--diff-filter=U", check=False)
+    conflicted = [line for line in result.stdout.splitlines() if line.strip()]
+    saved: list[str] = []
+    for rel in conflicted:
+        target = (NOTES_DIR / rel)
+        try:
+            theirs = _git_bytes("show", f":3:{rel}")           # remote side
+        except subprocess.CalledProcessError:
+            theirs = b""
+        # Keep our local content as the canonical file.
+        _git("checkout", "--ours", "--", rel, check=False)
+        _git("add", "--", rel, check=False)
+        if theirs:
+            stem, suffix = target.stem, target.suffix or ".md"
+            ts = time.strftime("%Y%m%d-%H%M%S")
+            copy = target.with_name(f"{stem} (conflicted copy {ts}){suffix}")
+            try:
+                copy.write_bytes(theirs)
+                _git("add", "--", str(copy.relative_to(NOTES_DIR)), check=False)
+                saved.append(str(copy.relative_to(NOTES_DIR)))
+            except OSError:
+                pass
+    return saved
+
+
+def _sync_cycle(push: bool) -> None:
+    """One pull(+optional commit/push) pass. Updates sync_state; swallows
+    transient network errors by flipping to an 'offline' state to retry later."""
+    if not _is_git_repo():
+        _set_sync_state(status="idle", online=True, pending=False, detail="Local only")
+        return
+
+    _set_sync_state(status="syncing", detail="Syncing…")
+    try:
+        # 1. Commit any local changes first so a merge has something to work with.
+        _git("add", "-A", check=True)
+        has_local = bool(_git("status", "--porcelain", check=True).stdout.strip())
+        if has_local:
+            _git("commit", "-m", "EverFree: save notes", check=True)
+
+        # 2. Pull + merge (auto-merges non-overlapping edits to the same file).
+        new_conflicts: list[str] = []
+        pull = _git("pull", "--no-edit", "origin", SYNC_BRANCH, check=False)
+        if pull.returncode != 0:
+            if _is_network_error(pull.stderr):
+                _set_sync_state(status="offline", online=False,
+                                detail="Offline — will sync when reconnected")
+                return
+            # Merge conflict: keep local, preserve remote copy, then commit.
+            new_conflicts = _resolve_merge_conflicts()
+            if new_conflicts:
+                _git("commit", "--no-edit", check=False)
+            else:
+                _git("merge", "--abort", check=False)
+
+        # 3. Push if we have anything outstanding.
+        if push or has_local or new_conflicts:
+            pushed = _git("push", "origin", SYNC_BRANCH, check=False)
+            if pushed.returncode != 0:
+                if _is_network_error(pushed.stderr):
+                    _set_sync_state(status="offline", online=False,
+                                    detail="Offline — will sync when reconnected")
+                    return
+                # Likely the remote moved between pull and push; let the next
+                # cycle pull again. Keep pending so we retry.
+                _set_sync_state(status="error", online=True,
+                                detail=pushed.stderr.strip()[:200] or "Push failed")
+                _sync_wanted.set()
+                return
+
+        remote = None
+        r = _git("remote", "get-url", "origin", check=False)
+        if r.returncode == 0:
+            remote = r.stdout.strip()
+
+        with _sync_lock:
+            if new_conflicts:
+                existing = sync_state.get("conflicts") or []
+                sync_state["conflicts"] = (existing + new_conflicts)[-50:]
+            sync_state.update({
+                "status": "conflict" if (sync_state.get("conflicts")) else "idle",
+                "online": True,
+                "pending": False,
+                "last_synced": time.time(),
+                "remote": remote,
+                "detail": "Saved remote copies of conflicts" if new_conflicts else "Synced to GitHub",
+            })
+    except subprocess.TimeoutExpired:
+        _set_sync_state(status="offline", online=False, detail="Sync timed out — will retry")
+    except subprocess.CalledProcessError as exc:
+        _set_sync_state(status="error", detail=(exc.stderr or str(exc)).strip()[:200])
+    except Exception as exc:  # never let the worker die
+        logger.exception("Sync cycle failed")
+        _set_sync_state(status="error", detail=str(exc)[:200])
+
+
+def _sync_worker_loop() -> None:
+    while not _sync_stop.is_set():
+        triggered = _sync_wanted.wait(timeout=SYNC_PULL_INTERVAL)
+        if _sync_stop.is_set():
+            break
+        if triggered:
+            _sync_wanted.clear()
+            # Debounce: coalesce a burst of edits into one commit unless the
+            # user asked for an immediate (manual) sync.
+            if not _sync_now.is_set():
+                _sync_stop.wait(SYNC_DEBOUNCE)
+            _sync_now.clear()
+            if _sync_stop.is_set():
+                break
+            _sync_cycle(push=True)
+        else:
+            # Periodic background pull to pick up edits from other devices.
+            _sync_cycle(push=False)
+
+
+def start_sync_worker() -> None:
+    global _sync_thread
+    if _sync_thread and _sync_thread.is_alive():
+        return
+    _sync_stop.clear()
+    _sync_thread = threading.Thread(target=_sync_worker_loop, name="everfree-sync", daemon=True)
+    _sync_thread.start()
+
+
+def stop_sync_worker() -> None:
+    _sync_stop.set()
+    _sync_wanted.set()
+    if _sync_thread:
+        _sync_thread.join(timeout=5)
+
+
 # ── Lifespan ─────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -289,6 +501,7 @@ async def lifespan(app: FastAPI):
     if _is_git_repo():
         ok, msg = git_pull()
         logger.info("Startup pull: %s", msg if ok else f"FAILED: {msg}")
+        start_sync_worker()
 
     async def _open_browser():
         await asyncio.sleep(0.5)
@@ -296,6 +509,7 @@ async def lifespan(app: FastAPI):
 
     asyncio.create_task(_open_browser())
     yield
+    stop_sync_worker()
 
 
 app = FastAPI(title="EverFree", version="4.0.0", lifespan=lifespan)
@@ -1121,25 +1335,60 @@ def _safe_note_path(notebook: str, note: str) -> Path:
 # ── API: Sync ────────────────────────────────────────────────
 @app.post("/api/sync")
 async def manual_sync():
-    ok, msg = git_sync()
-    if not ok:
-        raise HTTPException(status_code=409, detail=msg)
-    return {"status": "synced", "message": msg}
+    """Kick off an immediate sync in the background worker and return state.
+    The worker reports progress through /api/sync/status."""
+    if not _is_git_repo():
+        return {"status": "local", "message": "Not a git repository"}
+    request_sync(immediate=True)
+    with _sync_lock:
+        return {"status": "queued", **dict(sync_state)}
+
+
+@app.post("/api/sync/conflicts/clear")
+async def clear_conflicts():
+    _set_sync_state(conflicts=[], status="idle")
+    return {"status": "cleared"}
 
 
 @app.get("/api/sync/status")
 async def sync_status():
     if not _is_git_repo():
-        return {"git": False, "message": "Not a git repository"}
-    try:
+        return {"git": False, "message": "Not a git repository", "status": "local"}
+    with _sync_lock:
+        state = dict(sync_state)
+    if state.get("remote") is None:
         result = _git("remote", "get-url", "origin", check=False)
-        remote = result.stdout.strip() if result.returncode == 0 else None
-        return {"git": True, "remote": remote}
-    except Exception:
-        return {"git": True, "remote": None}
+        state["remote"] = result.stdout.strip() if result.returncode == 0 else None
+    state["git"] = True
+    return state
 
 
 # ── API: Search ─────────────────────────────────────────────
+# Cache file contents keyed by path → (mtime, text). Re-reading only changed
+# files keeps repeated searches off the disk and off the event loop.
+_search_cache: dict[str, tuple[float, str]] = {}
+_search_cache_lock = threading.Lock()
+
+
+def _cached_note_text(path: Path) -> str:
+    key = str(path)
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return ""
+    with _search_cache_lock:
+        cached = _search_cache.get(key)
+        if cached and cached[0] == mtime:
+            return cached[1]
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    with _search_cache_lock:
+        _search_cache[key] = (mtime, text)
+    return text
+
+
 def _search_snippet(content: str, query: str, size: int = 140) -> str:
     lower = content.lower()
     idx = lower.find(query.lower())
@@ -1155,43 +1404,62 @@ def _search_snippet(content: str, query: str, size: int = 140) -> str:
     return snippet
 
 
-@app.get("/api/search")
-async def search_notes(q: str = ""):
-    query = q.strip()
-    if not query:
-        return []
-
-    results = []
+def _run_search(query: str) -> list[dict]:
     lower_query = query.lower()
+    results = []
 
-    for notebook in sorted(d for d in NOTES_DIR.iterdir() if d.is_dir() and not d.name.startswith(".")):
-        for note in sorted(notebook.iterdir()):
+    for notebook in sorted(
+        (d for d in NOTES_DIR.iterdir() if d.is_dir() and not d.name.startswith(".")),
+        key=lambda d: d.name.lower(),
+    ):
+        notebook_match = lower_query in notebook.name.lower()
+        for note in notebook.iterdir():
             if not note.is_file() or note.suffix != ".md":
                 continue
 
-            try:
-                content = note.read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                continue
-
             title = note.name.removesuffix(".md")
-            notebook_match = lower_query in notebook.name.lower()
-            title_match = lower_query in title.lower()
+            lower_title = title.lower()
+            title_match = lower_query in lower_title
+            content = _cached_note_text(note)
             content_match = lower_query in content.lower()
 
             if not (notebook_match or title_match or content_match):
                 continue
 
+            # Rank: exact title > title prefix > title contains > notebook > content.
+            if lower_title == lower_query:
+                score = 100
+            elif lower_title.startswith(lower_query):
+                score = 80
+            elif title_match:
+                score = 60
+            elif notebook_match:
+                score = 40
+            else:
+                score = 20
+
             results.append({
                 "notebook": notebook.name,
                 "note": note.name,
                 "title": title,
-                "snippet": _search_snippet(content, query),
+                "snippet": _search_snippet(content, query) if content_match else "",
+                "score": score,
+                "_mtime": _get_file_mtime(note),
             })
-            if len(results) >= 100:
-                return results
 
-    return results
+    # Best score first, then most recently edited.
+    results.sort(key=lambda r: (-r["score"], -r["_mtime"]))
+    for r in results:
+        r.pop("_mtime", None)
+    return results[:100]
+
+
+@app.get("/api/search")
+async def search_notes(q: str = ""):
+    query = q.strip()
+    if not query:
+        return []
+    return await asyncio.to_thread(_run_search, query)
 
 
 # ── API: Notebooks ───────────────────────────────────────────
@@ -1280,10 +1548,8 @@ async def create_notebook(request: Request):
         raise HTTPException(status_code=409, detail="Notebook already exists")
     nb_path.mkdir(parents=True)
     (nb_path / ".gitkeep").touch()
-    ok, msg = git_push(f"New notebook: {name}")
-    if not ok:
-        raise HTTPException(status_code=409, detail=f"Git conflict: {msg}")
-    return {"status": "created", "name": name, "git": msg}
+    request_sync()
+    return {"status": "created", "name": name}
 
 
 # ── API: Notes ───────────────────────────────────────────────
@@ -1312,11 +1578,9 @@ async def update_note(notebook: str, note: str, request: Request):
     if not nb_path.exists():
         raise HTTPException(status_code=404, detail="Notebook not found")
     body = await request.json()
-    note_path.write_text(body.get("content", ""), encoding="utf-8")
-    ok, msg = git_push(f"Auto-save: {note.replace('.md', '')}")
-    if not ok:
-        raise HTTPException(status_code=409, detail=f"Git conflict: {msg}")
-    return {"status": "saved", "notebook": notebook, "note": note, "git": msg}
+    _atomic_write_text(note_path, body.get("content", ""))
+    request_sync()
+    return {"status": "saved", "notebook": notebook, "note": note}
 
 
 @app.post("/api/notebooks/{notebook}/notes")
@@ -1333,11 +1597,9 @@ async def create_note(notebook: str, request: Request):
     note_path = _safe_note_path(notebook, name)
     if note_path.exists():
         raise HTTPException(status_code=409, detail="Note already exists")
-    note_path.write_text(f"# {name[:-3]}\n", encoding="utf-8")
-    ok, msg = git_push(f"New note: {name.replace('.md', '')}")
-    if not ok:
-        raise HTTPException(status_code=409, detail=f"Git conflict: {msg}")
-    return {"status": "created", "notebook": notebook, "note": name, "git": msg}
+    _atomic_write_text(note_path, f"# {name[:-3]}\n")
+    request_sync()
+    return {"status": "created", "notebook": notebook, "note": name}
 
 
 @app.delete("/api/notebooks/{notebook}/notes/{note}")
@@ -1346,10 +1608,83 @@ async def delete_note(notebook: str, note: str):
     if not note_path.exists():
         raise HTTPException(status_code=404, detail="Note not found")
     note_path.unlink()
-    ok, msg = git_push(f"Deleted: {note.replace('.md', '')}")
-    if not ok:
-        raise HTTPException(status_code=409, detail=f"Git conflict: {msg}")
-    return {"status": "deleted", "notebook": notebook, "note": note, "git": msg}
+    request_sync()
+    return {"status": "deleted", "notebook": notebook, "note": note}
+
+
+def _normalize_note_name(name: str) -> str:
+    name = name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Note name is required")
+    if "/" in name or "\\" in name:
+        raise HTTPException(status_code=400, detail="Invalid note name")
+    return name if name.endswith(".md") else name + ".md"
+
+
+@app.post("/api/notebooks/{notebook}/notes/{note}/rename")
+async def rename_note(notebook: str, note: str, request: Request):
+    src = _safe_note_path(notebook, note)
+    if not src.exists():
+        raise HTTPException(status_code=404, detail="Note not found")
+    body = await request.json()
+    new_name = _normalize_note_name(body.get("new_name", ""))
+    dst = _safe_note_path(notebook, new_name)
+    if dst.exists():
+        raise HTTPException(status_code=409, detail="A note with that name already exists")
+    src.rename(dst)
+    request_sync()
+    return {"status": "renamed", "notebook": notebook, "note": new_name}
+
+
+@app.post("/api/notebooks/{notebook}/notes/{note}/move")
+async def move_note(notebook: str, note: str, request: Request):
+    src = _safe_note_path(notebook, note)
+    if not src.exists():
+        raise HTTPException(status_code=404, detail="Note not found")
+    body = await request.json()
+    target = (body.get("target_notebook") or "").strip()
+    if not target:
+        raise HTTPException(status_code=400, detail="Target notebook is required")
+    target_dir = _safe_notebook_path(target)
+    if not target_dir.exists():
+        raise HTTPException(status_code=404, detail="Target notebook not found")
+    if target == notebook:
+        return {"status": "moved", "notebook": notebook, "note": note}
+    dst = _safe_note_path(target, note)
+    if dst.exists():
+        raise HTTPException(status_code=409, detail="A note with that name already exists in the target")
+    src.rename(dst)
+    request_sync()
+    return {"status": "moved", "notebook": target, "note": note}
+
+
+@app.post("/api/notebooks/{notebook}/rename")
+async def rename_notebook(notebook: str, request: Request):
+    src = _safe_notebook_path(notebook)
+    if not src.exists():
+        raise HTTPException(status_code=404, detail="Notebook not found")
+    body = await request.json()
+    new_name = (body.get("new_name") or "").strip()
+    if not new_name:
+        raise HTTPException(status_code=400, detail="Notebook name is required")
+    if "/" in new_name or "\\" in new_name:
+        raise HTTPException(status_code=400, detail="Invalid notebook name")
+    dst = _safe_notebook_path(new_name)
+    if dst.exists():
+        raise HTTPException(status_code=409, detail="A notebook with that name already exists")
+    src.rename(dst)
+    request_sync()
+    return {"status": "renamed", "name": new_name}
+
+
+@app.delete("/api/notebooks/{notebook}")
+async def delete_notebook(notebook: str):
+    nb_path = _safe_notebook_path(notebook)
+    if not nb_path.exists():
+        raise HTTPException(status_code=404, detail="Notebook not found")
+    shutil.rmtree(nb_path)
+    request_sync()
+    return {"status": "deleted", "name": notebook}
 
 
 # ── Note assets (images referenced relatively from notes) ───
