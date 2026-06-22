@@ -551,8 +551,9 @@ async def agent_image(request: Request):
     if not settings["openrouter_api_key"]:
         raise HTTPException(status_code=400, detail="No OpenRouter API key configured in assistant settings")
 
+    notes_root = NOTES_DIR.resolve()
     notebook_dir = (NOTES_DIR / notebook).resolve()
-    if not str(notebook_dir).startswith(str(NOTES_DIR.resolve())) or not notebook_dir.is_dir():
+    if notebook_dir == notes_root or not notebook_dir.is_relative_to(notes_root) or not notebook_dir.is_dir():
         raise HTTPException(status_code=404, detail="Notebook not found")
 
     try:

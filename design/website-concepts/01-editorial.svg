@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900">
+  <rect width="1440" height="900" fill="#f5f2ea"/>
+  <style>
+    .sans { font-family: Inter, "Helvetica Neue", Arial, sans-serif; }
+    .mono { font-family: "SFMono-Regular", Consolas, monospace; }
+  </style>
+
+  <!-- Navigation -->
+  <g class="sans" fill="#1d1f1c">
+    <circle cx="74" cy="54" r="17" fill="#32674b"/>
+    <path d="M65 54h18M74 45v18" stroke="#fffdf8" stroke-width="2"/>
+    <text x="104" y="62" font-size="23" font-weight="700">EverFree</text>
+    <text x="1110" y="61" font-size="14" fill="#6d6b63">How it works</text>
+    <text x="1218" y="61" font-size="14" fill="#6d6b63">GitHub</text>
+    <rect x="1290" y="34" width="112" height="40" rx="6" fill="#32674b"/>
+    <text x="1346" y="59" font-size="13" fill="#fffdf8" text-anchor="middle">Open web app</text>
+  </g>
+  <line x1="38" y1="94" x2="1402" y2="94" stroke="#d9d4c8"/>
+
+  <!-- Hero copy -->
+  <g class="sans">
+    <text x="70" y="175" font-size="13" font-weight="700" letter-spacing="2.5" fill="#32674b">PLAIN TEXT · PRIVATE REPO</text>
+    <text x="66" y="263" font-size="72" font-weight="650" letter-spacing="-3.8" fill="#1d1f1c">Your notes are</text>
+    <text x="66" y="340" font-size="72" font-weight="650" letter-spacing="-3.8" fill="#1d1f1c">files again.</text>
+    <text x="70" y="400" font-size="20" fill="#56584f">Move from Evernote to plain Markdown.</text>
+    <text x="70" y="431" font-size="20" fill="#56584f">Keep everything in your private GitHub repository.</text>
+    <rect x="70" y="478" width="170" height="50" rx="6" fill="#32674b"/>
+    <text x="155" y="509" font-size="15" font-weight="650" fill="#fffdf8" text-anchor="middle">Download for Mac</text>
+    <rect x="252" y="478" width="140" height="50" rx="6" fill="none" stroke="#9d998e"/>
+    <text x="322" y="509" font-size="15" fill="#1d1f1c" text-anchor="middle">See how it works</text>
+  </g>
+
+  <!-- Product screenshot -->
+  <g transform="translate(610 145)">
+    <rect width="760" height="468" rx="9" fill="#fffdf8" stroke="#cfc9bb"/>
+    <rect width="760" height="38" rx="9" fill="#ebe7dd"/>
+    <circle cx="20" cy="19" r="5" fill="#c5bfb2"/>
+    <circle cx="37" cy="19" r="5" fill="#c5bfb2"/>
+    <circle cx="54" cy="19" r="5" fill="#c5bfb2"/>
+    <text x="380" y="24" class="mono" font-size="10" fill="#777268" text-anchor="middle">EverFree — private/everfree-notes</text>
+
+    <rect y="38" width="206" height="430" fill="#f1eee6"/>
+    <text x="24" y="78" class="sans" font-size="15" font-weight="700" fill="#1d1f1c">Notes</text>
+    <rect x="18" y="95" width="170" height="31" rx="5" fill="#e5e1d7"/>
+    <text x="31" y="115" class="sans" font-size="11" fill="#777268">Search notes…</text>
+    <text x="24" y="158" class="sans" font-size="11" font-weight="700" fill="#777268">JOURNAL</text>
+    <rect x="18" y="171" width="170" height="35" rx="5" fill="#dfe9e1"/>
+    <text x="35" y="193" class="sans" font-size="12" fill="#32674b">Monday, June 22</text>
+    <text x="35" y="229" class="sans" font-size="12" fill="#56584f">Reading notes</text>
+    <text x="35" y="258" class="sans" font-size="12" fill="#56584f">Ideas</text>
+    <text x="24" y="307" class="sans" font-size="11" font-weight="700" fill="#777268">PROJECTS</text>
+    <text x="35" y="340" class="sans" font-size="12" fill="#56584f">EverFree roadmap</text>
+    <text x="35" y="369" class="sans" font-size="12" fill="#56584f">Garden</text>
+
+    <text x="246" y="78" class="mono" font-size="10" fill="#777268">Journal / Monday, June 22.md</text>
+    <line x1="230" y1="95" x2="730" y2="95" stroke="#e2ddd2"/>
+    <text x="252" y="148" class="sans" font-size="30" font-weight="650" fill="#1d1f1c">Monday, June 22</text>
+    <text x="252" y="193" class="sans" font-size="15" fill="#56584f">A quieter system for keeping useful things.</text>
+    <text x="252" y="242" class="sans" font-size="15" fill="#1d1f1c">Today I moved the archive out of Evernote.</text>
+    <text x="252" y="271" class="sans" font-size="15" fill="#1d1f1c">Every note is ordinary Markdown now—easy to</text>
+    <text x="252" y="300" class="sans" font-size="15" fill="#1d1f1c">search, edit, clone, and keep.</text>
+    <rect x="252" y="338" width="426" height="72" rx="5" fill="#f1eee6"/>
+    <text x="271" y="365" class="mono" font-size="11" fill="#32674b">~/everfree-notes/Journal/Monday, June 22.md</text>
+    <text x="271" y="389" class="mono" font-size="11" fill="#777268">committed 2 minutes ago · private repository</text>
+  </g>
+
+  <!-- Proof row -->
+  <line x1="70" y1="675" x2="1370" y2="675" stroke="#d9d4c8"/>
+  <g class="sans" fill="#1d1f1c">
+    <text x="70" y="713" font-size="14" font-weight="650">Markdown files</text>
+    <text x="252" y="713" font-size="14" font-weight="650">Private by default</text>
+    <text x="461" y="713" font-size="14" font-weight="650">No subscription</text>
+  </g>
+  <line x1="70" y1="744" x2="1370" y2="744" stroke="#d9d4c8"/>
+
+  <!-- Three ideas -->
+  <g class="sans">
+    <text x="70" y="793" font-size="12" class="mono" fill="#32674b">01</text>
+    <text x="70" y="826" font-size="22" font-weight="650" fill="#1d1f1c">Import once</text>
+    <text x="70" y="855" font-size="14" fill="#6d6b63">Bring your Evernote archive with you.</text>
+    <line x1="480" y1="776" x2="480" y2="865" stroke="#d9d4c8"/>
+    <text x="520" y="793" font-size="12" class="mono" fill="#32674b">02</text>
+    <text x="520" y="826" font-size="22" font-weight="650" fill="#1d1f1c">Write anywhere</text>
+    <text x="520" y="855" font-size="14" fill="#6d6b63">Mac, web, mobile, or any text editor.</text>
+    <line x1="930" y1="776" x2="930" y2="865" stroke="#d9d4c8"/>
+    <text x="970" y="793" font-size="12" class="mono" fill="#32674b">03</text>
+    <text x="970" y="826" font-size="22" font-weight="650" fill="#1d1f1c">Own forever</text>
+    <text x="970" y="855" font-size="14" fill="#6d6b63">Your files, repository, and history.</text>
+  </g>
+</svg>

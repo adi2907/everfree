@@ -290,7 +290,8 @@ def _atomic_write_text(path: Path, text: str) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(text)
-        os.replace(tmp, path)
+        with _repo_lock:
+            os.replace(tmp, path)
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
@@ -308,6 +309,10 @@ SYNC_PULL_INTERVAL = float(os.environ.get("EVERFREE_SYNC_PULL_INTERVAL", 45.0))
 SYNC_BRANCH = os.environ.get("EVERFREE_SYNC_BRANCH", "main")
 
 _sync_lock = threading.Lock()
+# Guards every working-tree mutation (note writes AND the worker's merge) so a
+# pull can never overwrite an edit that is in flight. Held only for fast local
+# git ops — never across the network fetch/push.
+_repo_lock = threading.RLock()
 _sync_wanted = threading.Event()   # set when local changes need pushing
 _sync_now = threading.Event()      # set by a manual sync to skip the debounce
 _sync_stop = threading.Event()
@@ -396,37 +401,50 @@ def _sync_cycle(push: bool) -> None:
 
     _set_sync_state(status="syncing", detail="Syncing…")
     try:
-        # 1. Commit any local changes first so a merge has something to work with.
-        _git("add", "-A", check=True)
-        has_local = bool(_git("status", "--porcelain", check=True).stdout.strip())
-        if has_local:
-            _git("commit", "-m", "EverFree: save notes", check=True)
-
-        # 2. Pull + merge (auto-merges non-overlapping edits to the same file).
-        new_conflicts: list[str] = []
-        pull = _git("pull", "--no-edit", "origin", SYNC_BRANCH, check=False)
-        if pull.returncode != 0:
-            if _is_network_error(pull.stderr):
+        # 1. Fetch remote (network) without holding the working-tree lock.
+        fetch = _git("fetch", "origin", SYNC_BRANCH, check=False)
+        if fetch.returncode != 0:
+            if _is_network_error(fetch.stderr):
                 _set_sync_state(status="offline", online=False,
                                 detail="Offline — will sync when reconnected")
                 return
-            # Merge conflict: keep local, preserve remote copy, then commit.
-            new_conflicts = _resolve_merge_conflicts()
-            if new_conflicts:
-                _git("commit", "--no-edit", check=False)
-            else:
-                _git("merge", "--abort", check=False)
+            _set_sync_state(status="error", online=True,
+                            detail=fetch.stderr.strip()[:200] or "Fetch failed")
+            return
 
-        # 3. Push if we have anything outstanding.
-        if push or has_local or new_conflicts:
+        # 2. Commit + merge under the lock so a concurrent note write can never
+        #    be clobbered by the merge (these are fast, local-only git ops).
+        new_conflicts: list[str] = []
+        with _repo_lock:
+            _git("add", "-A", check=True)
+            has_local = bool(_git("status", "--porcelain", check=True).stdout.strip())
+            if has_local:
+                _git("commit", "-m", "EverFree: save notes", check=True)
+
+            # Merge the fetched remote (auto-merges non-overlapping edits).
+            merge = _git("merge", "--no-edit", "FETCH_HEAD", check=False)
+            if merge.returncode != 0:
+                # Real conflict: keep local, preserve remote copy, then commit.
+                new_conflicts = _resolve_merge_conflicts()
+                if new_conflicts:
+                    _git("commit", "--no-edit", check=False)
+                else:
+                    _git("merge", "--abort", check=False)
+
+        # 3. Push if our branch is ahead of the remote (network, no lock).
+        ahead_res = _git("rev-list", "--count", f"origin/{SYNC_BRANCH}..HEAD", check=False)
+        try:
+            ahead = int(ahead_res.stdout.strip() or "0")
+        except ValueError:
+            ahead = 1
+        if ahead > 0:
             pushed = _git("push", "origin", SYNC_BRANCH, check=False)
             if pushed.returncode != 0:
                 if _is_network_error(pushed.stderr):
                     _set_sync_state(status="offline", online=False,
                                     detail="Offline — will sync when reconnected")
                     return
-                # Likely the remote moved between pull and push; let the next
-                # cycle pull again. Keep pending so we retry.
+                # Likely the remote moved between fetch and push; retry next cycle.
                 _set_sync_state(status="error", online=True,
                                 detail=pushed.stderr.strip()[:200] or "Push failed")
                 _sync_wanted.set()
@@ -1317,9 +1335,18 @@ async def root():
 
 
 # ── Helpers ──────────────────────────────────────────────────
+def _is_within(base: Path, target: Path) -> bool:
+    """True if `target` is strictly inside `base` (not equal to it). Uses path
+    containment, not string prefix — so a sibling like `<dir>-backup` is
+    correctly rejected."""
+    base = base.resolve()
+    target = target.resolve()
+    return target != base and target.is_relative_to(base)
+
+
 def _safe_notebook_path(name: str) -> Path:
     resolved = (NOTES_DIR / name).resolve()
-    if not str(resolved).startswith(str(NOTES_DIR.resolve())):
+    if not _is_within(NOTES_DIR, resolved):
         raise HTTPException(status_code=400, detail="Invalid notebook name")
     return resolved
 
@@ -1327,7 +1354,7 @@ def _safe_notebook_path(name: str) -> Path:
 def _safe_note_path(notebook: str, note: str) -> Path:
     nb_path = _safe_notebook_path(notebook)
     resolved = (nb_path / note).resolve()
-    if not str(resolved).startswith(str(nb_path.resolve())):
+    if not _is_within(nb_path, resolved):
         raise HTTPException(status_code=400, detail="Invalid note name")
     return resolved
 
@@ -1546,8 +1573,9 @@ async def create_notebook(request: Request):
     nb_path = _safe_notebook_path(name)
     if nb_path.exists():
         raise HTTPException(status_code=409, detail="Notebook already exists")
-    nb_path.mkdir(parents=True)
-    (nb_path / ".gitkeep").touch()
+    with _repo_lock:
+        nb_path.mkdir(parents=True)
+        (nb_path / ".gitkeep").touch()
     request_sync()
     return {"status": "created", "name": name}
 
@@ -1574,11 +1602,15 @@ async def read_note(notebook: str, note: str):
 @app.put("/api/notebooks/{notebook}/notes/{note}")
 async def update_note(notebook: str, note: str, request: Request):
     note_path = _safe_note_path(notebook, note)
-    nb_path = _safe_notebook_path(notebook)
-    if not nb_path.exists():
-        raise HTTPException(status_code=404, detail="Notebook not found")
     body = await request.json()
-    _atomic_write_text(note_path, body.get("content", ""))
+    # Save updates an existing note only. Refusing to write a missing file stops
+    # a late/in-flight autosave from resurrecting a note that was just renamed,
+    # moved, or deleted. Hold the repo lock for the exists-check + write so the
+    # decision can't race a rename/delete running on the worker side.
+    with _repo_lock:
+        if not note_path.exists():
+            raise HTTPException(status_code=404, detail="Note no longer exists")
+        _atomic_write_text(note_path, body.get("content", ""))
     request_sync()
     return {"status": "saved", "notebook": notebook, "note": note}
 
@@ -1607,7 +1639,8 @@ async def delete_note(notebook: str, note: str):
     note_path = _safe_note_path(notebook, note)
     if not note_path.exists():
         raise HTTPException(status_code=404, detail="Note not found")
-    note_path.unlink()
+    with _repo_lock:
+        note_path.unlink()
     request_sync()
     return {"status": "deleted", "notebook": notebook, "note": note}
 
@@ -1631,7 +1664,8 @@ async def rename_note(notebook: str, note: str, request: Request):
     dst = _safe_note_path(notebook, new_name)
     if dst.exists():
         raise HTTPException(status_code=409, detail="A note with that name already exists")
-    src.rename(dst)
+    with _repo_lock:
+        src.rename(dst)
     request_sync()
     return {"status": "renamed", "notebook": notebook, "note": new_name}
 
@@ -1653,7 +1687,8 @@ async def move_note(notebook: str, note: str, request: Request):
     dst = _safe_note_path(target, note)
     if dst.exists():
         raise HTTPException(status_code=409, detail="A note with that name already exists in the target")
-    src.rename(dst)
+    with _repo_lock:
+        src.rename(dst)
     request_sync()
     return {"status": "moved", "notebook": target, "note": note}
 
@@ -1672,7 +1707,8 @@ async def rename_notebook(notebook: str, request: Request):
     dst = _safe_notebook_path(new_name)
     if dst.exists():
         raise HTTPException(status_code=409, detail="A notebook with that name already exists")
-    src.rename(dst)
+    with _repo_lock:
+        src.rename(dst)
     request_sync()
     return {"status": "renamed", "name": new_name}
 
@@ -1682,7 +1718,8 @@ async def delete_notebook(notebook: str):
     nb_path = _safe_notebook_path(notebook)
     if not nb_path.exists():
         raise HTTPException(status_code=404, detail="Notebook not found")
-    shutil.rmtree(nb_path)
+    with _repo_lock:
+        shutil.rmtree(nb_path)
     request_sync()
     return {"status": "deleted", "name": notebook}
 
@@ -1691,7 +1728,7 @@ async def delete_notebook(notebook: str):
 @app.get("/notes/{file_path:path}")
 async def serve_note_asset(file_path: str):
     resolved = (NOTES_DIR / file_path).resolve()
-    if not str(resolved).startswith(str(NOTES_DIR.resolve())) or ".git" in resolved.parts:
+    if not _is_within(NOTES_DIR, resolved) or ".git" in resolved.parts:
         raise HTTPException(status_code=404, detail="Not found")
     if not resolved.is_file():
         raise HTTPException(status_code=404, detail="Not found")

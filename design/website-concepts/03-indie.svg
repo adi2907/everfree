@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900">
+  <rect width="1440" height="900" fill="#f3e8cf"/>
+  <style>
+    .sans { font-family: Inter, "Helvetica Neue", Arial, sans-serif; }
+    .cond { font-family: Impact, "Arial Narrow", sans-serif; }
+    .mono { font-family: "SFMono-Regular", Consolas, monospace; }
+  </style>
+
+  <rect x="24" y="22" width="1392" height="64" fill="#f3e8cf" stroke="#171713" stroke-width="2"/>
+  <rect x="38" y="34" width="34" height="38" fill="#3155d9"/>
+  <text x="89" y="63" class="sans" font-size="23" font-weight="800" fill="#171713">EVERFREE</text>
+  <text x="1045" y="61" class="mono" font-size="11" fill="#171713">HOW IT WORKS</text>
+  <text x="1184" y="61" class="mono" font-size="11" fill="#171713">GITHUB ↗</text>
+  <rect x="1280" y="34" width="120" height="38" fill="#e9e45a" stroke="#171713" stroke-width="2"/>
+  <text x="1340" y="58" class="mono" font-size="11" font-weight="700" fill="#171713" text-anchor="middle">WEB APP →</text>
+
+  <!-- Headline -->
+  <g>
+    <rect x="55" y="134" width="490" height="57" fill="#e9533f" transform="rotate(-1 55 134)"/>
+    <text x="66" y="184" class="cond" font-size="67" letter-spacing="1" fill="#171713">BREAK UP WITH</text>
+    <text x="60" y="266" class="cond" font-size="86" letter-spacing="1" fill="#3155d9">YOUR NOTES APP.</text>
+    <text x="64" y="331" class="sans" font-size="28" font-weight="800" fill="#171713">Take every note with you.</text>
+    <text x="65" y="379" class="sans" font-size="17" fill="#34342e">EverFree turns Evernote archives into ordinary</text>
+    <text x="65" y="407" class="sans" font-size="17" fill="#34342e">Markdown files, then backs them up to your private</text>
+    <text x="65" y="435" class="sans" font-size="17" fill="#34342e">GitHub repo.</text>
+    <rect x="65" y="479" width="175" height="53" fill="#3155d9" stroke="#171713" stroke-width="2"/>
+    <text x="152" y="512" class="sans" font-size="14" font-weight="800" fill="#fff" text-anchor="middle">GET THE MAC APP</text>
+    <text x="273" y="511" class="mono" font-size="13" text-decoration="underline" fill="#171713">TRY THE WEB APP →</text>
+  </g>
+
+  <!-- Tilted product window -->
+  <g transform="translate(625 128) rotate(2 360 245)">
+    <rect x="8" y="10" width="732" height="492" fill="#171713"/>
+    <rect width="732" height="492" fill="#fffaf0" stroke="#171713" stroke-width="3"/>
+    <rect width="732" height="42" fill="#e9e45a" stroke="#171713" stroke-width="3"/>
+    <circle cx="22" cy="21" r="6" fill="#e9533f" stroke="#171713"/>
+    <circle cx="43" cy="21" r="6" fill="#3155d9" stroke="#171713"/>
+    <text x="365" y="27" class="mono" font-size="10" fill="#171713" text-anchor="middle">EVERFREE / MY-PRIVATE-NOTES</text>
+
+    <rect y="42" width="205" height="450" fill="#e5d8bb" stroke="#171713" stroke-width="3"/>
+    <text x="18" y="78" class="mono" font-size="11" font-weight="700" fill="#171713">FILES</text>
+    <rect x="13" y="91" width="179" height="37" fill="#3155d9"/>
+    <text x="28" y="115" class="mono" font-size="11" fill="#fff">▾ Journal</text>
+    <text x="34" y="156" class="mono" font-size="11" fill="#171713">today.md</text>
+    <text x="34" y="186" class="mono" font-size="11" fill="#171713">ideas.md</text>
+    <text x="21" y="231" class="mono" font-size="11" font-weight="700" fill="#171713">▸ Projects</text>
+    <text x="21" y="265" class="mono" font-size="11" font-weight="700" fill="#171713">▸ Archive</text>
+    <rect x="16" y="405" width="172" height="57" fill="#e9533f" stroke="#171713" stroke-width="2"/>
+    <text x="28" y="430" class="mono" font-size="10" fill="#fff">✓ COMMITTED</text>
+    <text x="28" y="449" class="mono" font-size="9" fill="#fff">private · main</text>
+
+    <rect x="205" y="42" width="527" height="34" fill="#fffaf0" stroke="#171713" stroke-width="3"/>
+    <rect x="218" y="50" width="112" height="25" fill="#e9533f"/>
+    <text x="274" y="67" class="mono" font-size="9" fill="#fff" text-anchor="middle">today.md ×</text>
+    <text x="350" y="67" class="mono" font-size="9" fill="#171713">ideas.md</text>
+    <text x="246" y="125" class="sans" font-size="31" font-weight="800" fill="#171713">TODAY, IN PLAIN TEXT</text>
+    <path d="M246 141h362" stroke="#3155d9" stroke-width="7"/>
+    <text x="246" y="185" class="sans" font-size="15" fill="#171713">I can finally see where my notes live.</text>
+    <text x="246" y="224" class="sans" font-size="14" fill="#34342e">No special export format. No mystery sync database.</text>
+    <text x="246" y="251" class="sans" font-size="14" fill="#34342e">Just folders, Markdown, and a complete Git history.</text>
+    <rect x="245" y="287" width="435" height="98" fill="#f3e8cf" stroke="#171713" stroke-width="2"/>
+    <text x="262" y="315" class="mono" font-size="11" fill="#3155d9">Journal/today.md</text>
+    <text x="262" y="342" class="mono" font-size="11" fill="#171713">modified: just now</text>
+    <text x="262" y="368" class="mono" font-size="11" fill="#171713">storage: github.com/me/everfree-notes</text>
+    <text x="246" y="433" class="sans" font-size="16" font-weight="800" fill="#e9533f">THIS FILE IS YOURS. REALLY.</text>
+  </g>
+
+  <!-- Annotation -->
+  <path d="M577 325 C610 309, 635 304, 673 310" fill="none" stroke="#e9533f" stroke-width="4"/>
+  <path d="M663 300l15 10-17 7" fill="none" stroke="#e9533f" stroke-width="4"/>
+  <text x="497" y="298" class="mono" font-size="12" font-weight="700" fill="#e9533f" transform="rotate(-7 497 298)">ACTUAL FILES!</text>
+
+  <!-- Bottom process strip -->
+  <rect x="24" y="672" width="1392" height="184" fill="#171713"/>
+  <rect x="43" y="691" width="418" height="145" fill="#e9e45a"/>
+  <rect x="511" y="691" width="418" height="145" fill="#3155d9"/>
+  <rect x="979" y="691" width="418" height="145" fill="#e9533f"/>
+  <g class="sans" font-weight="800">
+    <text x="66" y="729" class="mono" font-size="12" fill="#171713">01</text>
+    <text x="66" y="779" font-size="35" fill="#171713">IMPORT</text>
+    <text x="66" y="811" font-size="14" fill="#171713">Bring the whole archive.</text>
+    <text x="534" y="729" class="mono" font-size="12" fill="#fff">02</text>
+    <text x="534" y="779" font-size="35" fill="#fff">CONVERT</text>
+    <text x="534" y="811" font-size="14" fill="#fff">Turn everything into .md.</text>
+    <text x="1002" y="729" class="mono" font-size="12" fill="#fff">03</text>
+    <text x="1002" y="779" font-size="35" fill="#fff">KEEP FOREVER</text>
+    <text x="1002" y="811" font-size="14" fill="#fff">Your repo. Zero rent.</text>
+  </g>
+  <rect x="316" y="861" width="808" height="31" fill="#f3e8cf"/>
+  <text x="720" y="883" class="mono" font-size="13" font-weight="700" fill="#171713" text-anchor="middle">PLAIN TEXT. PRIVATE REPO. ZERO RENT.</text>
+</svg>
