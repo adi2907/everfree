@@ -34,6 +34,11 @@
     const $context = document.getElementById("assist-context");
     const $contextText = document.getElementById("assist-context-text");
     const $contextDel = document.getElementById("assist-context-del");
+    const $providerQuick = document.getElementById("assist-provider-quick");
+    const $researchBtn = document.getElementById("assist-research-btn");
+    const $setResearchProvider = document.getElementById("assist-set-research-provider");
+    const $setResearchModel = document.getElementById("assist-set-research-model");
+    const $btnAssistToolbar = document.getElementById("btn-assist");
 
     // Text the user selected in the note and attached with ⌘L. Folded into the
     // next prompt sent to the model, then cleared.
@@ -84,6 +89,9 @@
         if (visible) {
             $input.focus();
             refreshStatus();
+            if ($btnAssistToolbar) $btnAssistToolbar.classList.remove("has-badge");
+            const note = bridge() && bridge().getNote();
+            if (note) attachResearch(note.notebook, note.note);
         }
     }
 
@@ -91,18 +99,32 @@
         try {
             const r = await fetch("/api/agent/status");
             const data = await r.json();
+            if ($providerQuick && data.provider) $providerQuick.value = data.provider;
             if (data.ready) {
-                $status.textContent = `● ${data.provider_label}${data.model ? ` · ${data.model}` : ""}`;
+                // The provider name lives in the dropdown now; show just the model.
+                $status.textContent = data.model ? `● ${data.model}` : "● ready";
                 $status.className = "assist-status ok";
                 $status.title = `${data.provider_label} is configured`;
             } else {
-                $status.textContent = `● ${data.provider_label || "Assistant"} not configured`;
+                $status.textContent = "● not configured";
                 $status.className = "assist-status err";
                 $status.title = data.detail || "Open assistant settings to configure a provider.";
             }
         } catch {
             $status.textContent = "";
         }
+    }
+
+    // Flip the active provider from the header dropdown (persisted server-side).
+    async function switchProvider(provider) {
+        try {
+            await fetch("/api/agent/settings", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ active_provider: provider }),
+            });
+        } catch { /* keep the dropdown value; refreshStatus will reconcile */ }
+        refreshStatus();
     }
 
     // ── Message rendering ───────────────────────────────────
@@ -186,15 +208,49 @@
         return `Selected excerpt from my note:\n\n> ${quoted}\n\n${prompt}`;
     }
 
+    const TOOL_LABELS = {
+        web_search: ["🔍", "Searching the web"],
+        read_page: ["📖", "Reading page"],
+        search_notes: ["🗂", "Searching your notes"],
+        read_note: ["📄", "Reading note"],
+        list_notebooks: ["🗂", "Listing notebooks"],
+        list_notes: ["🗂", "Listing notes"],
+        create_note: ["📝", "Creating note"],
+    };
+
     function addToolLine(name, detail) {
         const $line = document.createElement("div");
         $line.className = "assist-tool";
-        const icon = name === "web_search" ? "🔍" : "📖";
-        const label = name === "web_search" ? "Searching" : "Reading";
-        $line.textContent = `${icon} ${label}: ${detail}`;
+        const [icon, label] = TOOL_LABELS[name] || ["🔧", name || "Working"];
+        $line.textContent = detail ? `${icon} ${label}: ${detail}` : `${icon} ${label}`;
         $messages.appendChild($line);
         scrollToBottom();
         return $line;
+    }
+
+    // A collapsible trace the agent's reasoning streams into.
+    function addReasoningBlock() {
+        const $d = document.createElement("details");
+        $d.className = "assist-reasoning";
+        $d.open = true;
+        const $s = document.createElement("summary");
+        $s.textContent = "Thinking";
+        const $body = document.createElement("div");
+        $body.className = "assist-reasoning-body";
+        $d.appendChild($s);
+        $d.appendChild($body);
+        $messages.appendChild($d);
+        scrollToBottom();
+        return { $d, $body };
+    }
+
+    // An assistant bubble that answer tokens stream into as they arrive.
+    function addStreamingBubble() {
+        const $b = document.createElement("div");
+        $b.className = "assist-msg assist-assistant";
+        $messages.appendChild($b);
+        scrollToBottom();
+        return $b;
     }
 
     function addErrorLine(detail) {
@@ -264,18 +320,20 @@
         currentChat = newSession(notebook, note);
         clearContext();
         clearMessages();
+        let opened = false;
         try {
             const list = await fetch(
                 `/api/agent/chats?notebook=${enc(notebook)}&note=${enc(note)}`
             ).then((r) => r.json());
             if (list.length) {
                 await openChat(list[0].id);
-                return;
+                opened = true;
             }
         } catch {
             /* fall through to empty state */
         }
-        showHint();
+        if (!opened) showHint();
+        attachResearch(notebook, note);
     }
 
     async function openChat(id) {
@@ -372,14 +430,27 @@
         $messages.appendChild($thinking);
         scrollToBottom();
 
+        let reasoning = null;   // { $d, $body } created on the first reason token
+        let $bubble = null;     // assistant bubble created on the first answer token
+        const dropThinking = () => { if ($thinking.parentNode) $thinking.remove(); };
+
         const handleEvent = (event) => {
-            if (event.type === "delta") {
+            if (event.type === "reason") {
+                dropThinking();
+                if (!reasoning) reasoning = addReasoningBlock();
+                reasoning.$body.append(event.text);
+                scrollToBottom();
+            } else if (event.type === "delta") {
+                dropThinking();
+                if (!$bubble) $bubble = addStreamingBubble();
                 fullText += event.text;
+                $bubble.append(event.text);
+                scrollToBottom();
             } else if (event.type === "tool") {
-                $thinking.remove();
+                dropThinking();
                 addToolLine(event.name, event.detail);
             } else if (event.type === "error") {
-                $thinking.remove();
+                dropThinking();
                 addErrorLine(event.detail);
             }
         };
@@ -395,8 +466,10 @@
                 try { handleEvent(JSON.parse(line)); } catch { /* skip bad line */ }
             }
         }
-        $thinking.remove();
-        if (fullText) addBubble("assistant", fullText);
+        dropThinking();
+        // Collapse the reasoning trace once a real answer exists; keep it open if
+        // reasoning was all we got back.
+        if (reasoning && fullText) reasoning.$d.open = false;
         return fullText;
     }
 
@@ -501,6 +574,155 @@
         }
     }
 
+    // ── Deep research (runs in the background) ───────────────
+    const researchPolls = new Map();   // job id → setTimeout handle
+
+    function startResearch(topic) {
+        topic = (topic || "").trim();
+        const note = bridge() && bridge().getNote();
+        addBubble("user", `🔬 Research: ${topic}`);
+        if (!topic) {
+            addErrorLine("Give a topic, e.g. /research the history of color theory.");
+            return;
+        }
+        const $card = renderResearchCard({ topic, status: "running" });
+        fetch("/api/agent/research", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                topic,
+                notebook: note ? note.notebook : "",
+                note: note ? note.note : "",
+            }),
+        })
+            .then((r) => r.json().then((d) => {
+                if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+                return d;
+            }))
+            .then((job) => {
+                $card.dataset.id = job.id;
+                pollResearch(job.id, $card);
+            })
+            .catch((err) => setResearchCard($card, { topic, status: "error", error: err.message }));
+    }
+
+    function renderResearchCard(job) {
+        const $card = document.createElement("div");
+        $card.className = "assist-research";
+        if (job.id) $card.dataset.id = job.id;
+        $card.innerHTML =
+            '<div class="assist-research-head">' +
+            '<span class="assist-research-badge">🔬 Deep research</span>' +
+            '<span class="assist-research-state"></span></div>' +
+            '<div class="assist-research-topic"></div>' +
+            '<div class="assist-research-log"></div>' +
+            '<div class="assist-research-actions"></div>';
+        $card.querySelector(".assist-research-topic").textContent = job.topic || "";
+        $messages.appendChild($card);
+        scrollToBottom();
+        setResearchCard($card, job);
+        return $card;
+    }
+
+    function setResearchCard($card, job) {
+        const status = job.status || "running";
+        $card.dataset.status = status;
+        const stateText = {
+            running: "● working…", done: "✓ done",
+            error: "⚠ failed", interrupted: "⚠ interrupted",
+        }[status] || status;
+        $card.querySelector(".assist-research-state").textContent = stateText;
+
+        if (Array.isArray(job.events)) {
+            const $log = $card.querySelector(".assist-research-log");
+            $log.innerHTML = "";
+            for (const ev of job.events.slice(-8)) {
+                const $row = document.createElement("div");
+                $row.className = "assist-research-logrow";
+                if (ev.type === "tool") {
+                    const [icon, label] = TOOL_LABELS[ev.name] || ["🔧", ev.name || "tool"];
+                    $row.textContent = ev.detail ? `${icon} ${label}: ${ev.detail}` : `${icon} ${label}`;
+                } else if (ev.type === "note") {
+                    $row.textContent = `📝 Saved ${ev.detail}`;
+                } else if (ev.type === "error") {
+                    $row.textContent = `⚠ ${ev.detail}`;
+                }
+                $log.appendChild($row);
+            }
+        }
+
+        const $actions = $card.querySelector(".assist-research-actions");
+        $actions.innerHTML = "";
+        if (status === "done") {
+            if (job.new_note) {
+                const $saved = document.createElement("div");
+                $saved.className = "assist-research-saved";
+                $saved.textContent = `Saved as ${(job.notebook ? job.notebook + "/" : "") + job.new_note}`;
+                $actions.appendChild($saved);
+            }
+            if (job.result) {
+                const $insert = document.createElement("button");
+                $insert.className = "btn btn-ghost assist-insert-btn";
+                $insert.textContent = "Insert into note";
+                $insert.addEventListener("click", () => {
+                    if (bridge() && bridge().insertMarkdown(job.result)) {
+                        $insert.textContent = "✓ Inserted";
+                        $insert.disabled = true;
+                    } else {
+                        addErrorLine("Open a note first, then insert.");
+                    }
+                });
+                $actions.appendChild($insert);
+            }
+        } else if (job.error && status !== "running") {
+            const $err = document.createElement("div");
+            $err.className = "assist-research-err";
+            $err.textContent = job.error;
+            $actions.appendChild($err);
+        }
+    }
+
+    function pollResearch(id, $card) {
+        const tick = async () => {
+            let job;
+            try {
+                job = await fetch(`/api/agent/research/${id}`).then((r) => r.json());
+            } catch {
+                researchPolls.set(id, setTimeout(tick, 2500));
+                return;
+            }
+            setResearchCard($card, job);
+            if (job.status === "running") {
+                researchPolls.set(id, setTimeout(tick, 1800));
+            } else {
+                researchPolls.delete(id);
+                if (job.status === "done") {
+                    if (bridge() && bridge().refreshLibrary) bridge().refreshLibrary();
+                    if ($panel.hidden && $btnAssistToolbar) $btnAssistToolbar.classList.add("has-badge");
+                }
+            }
+        };
+        if (researchPolls.has(id)) clearTimeout(researchPolls.get(id));
+        researchPolls.set(id, setTimeout(tick, 600));
+    }
+
+    // On note load / panel open, re-show and resume polling any research still
+    // running for this note (state lives server-side, so it survived).
+    async function attachResearch(notebook, note) {
+        try {
+            const params = new URLSearchParams();
+            if (notebook) params.set("notebook", notebook);
+            if (note) params.set("note", note);
+            const list = await fetch(`/api/agent/research?${params.toString()}`).then((r) => r.json());
+            for (const job of list) {
+                if (job.status !== "running") continue;
+                if (researchPolls.has(job.id)) continue;
+                if ($messages.querySelector(`.assist-research[data-id="${job.id}"]`)) continue;
+                pollResearch(job.id, renderResearchCard(job));
+            }
+        } catch { /* non-fatal */ }
+    }
+
     async function listSavedChats(query) {
         const note = bridge() && bridge().getNote();
         addBubble("user", query ? `/chats ${query}` : "/chats");
@@ -528,6 +750,8 @@
         let m;
         if ((m = text.match(/^\/chats(?:\s+(.+))?$/s))) {
             listSavedChats((m[1] || "").trim());
+        } else if ((m = text.match(/^\/research\s+(.+)/s))) {
+            startResearch(stripQuotes(m[1]));
         } else if ((m = text.match(/^\/image\s+(.+)/s))) {
             generateImage(stripQuotes(m[1]));
         } else if ((m = text.match(/^\/search\s+(.+)/s))) {
@@ -594,6 +818,8 @@
             $setOpenrouterModel.value = settings.openrouter_model;
             $setGeminiModel.value = settings.gemini_model;
             $setImageModel.value = settings.image_model;
+            $setResearchProvider.value = settings.research_provider || "";
+            $setResearchModel.value = settings.research_model || "";
             $setSerper.value = "";
             $setSerper.placeholder = settings.serper_api_key_set ? "•••••• (saved — leave blank to keep)" : "";
             $setOpenrouter.value = "";
@@ -619,6 +845,8 @@
             openrouter_model: $setOpenrouterModel.value.trim(),
             gemini_model: $setGeminiModel.value.trim(),
             image_model: $setImageModel.value.trim() || "google/gemini-2.5-flash-image",
+            research_provider: $setResearchProvider.value,
+            research_model: $setResearchModel.value.trim(),
         };
         if ($setSerper.value.trim()) body.serper_api_key = $setSerper.value.trim();
         if ($setOpenrouter.value.trim()) body.openrouter_api_key = $setOpenrouter.value.trim();
@@ -657,6 +885,22 @@
     $setOpenrouterModel.addEventListener("focus", () => loadProviderModels("openrouter"));
     $setGeminiModel.addEventListener("focus", () => loadProviderModels("gemini"));
     $send.addEventListener("click", () => handleInput($input.value));
+    if ($providerQuick) {
+        $providerQuick.addEventListener("change", () => switchProvider($providerQuick.value));
+    }
+    if ($researchBtn) {
+        $researchBtn.addEventListener("click", () => {
+            const topic = $input.value.trim().replace(/^\/(research|search)\s*/i, "");
+            if (topic) {
+                $input.value = "";
+                startResearch(topic);
+            } else {
+                togglePanel(true);
+                $input.value = "/research ";
+                $input.focus();
+            }
+        });
+    }
 
     $input.addEventListener("keydown", (e) => {
         if (e.key === "Enter" && !e.shiftKey) {

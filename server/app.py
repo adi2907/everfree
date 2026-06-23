@@ -1578,6 +1578,39 @@ async def list_notebooks():
     return notebooks
 
 
+@app.get("/api/library")
+async def get_library():
+    """Return the notebook list and each notebook's note names in one request.
+
+    The three-pane desktop UI needs the complete note index for "All notes".
+    Returning it as one payload avoids one HTTP request per notebook while
+    preserving the same server-side ordering used by the individual endpoints.
+    """
+    if not NOTES_DIR.exists():
+        return {"notebooks": [], "notes": {}}
+
+    with _repo_lock:
+        notebook_paths = [
+            path for path in NOTES_DIR.iterdir()
+            if path.is_dir() and not path.name.startswith(".")
+        ]
+        notebook_paths.sort(key=lambda path: _get_notebook_sort_key(path.name))
+
+        notes: dict[str, list[str]] = {}
+        for notebook_path in notebook_paths:
+            note_paths = [
+                path for path in notebook_path.iterdir()
+                if path.is_file() and path.suffix == ".md"
+            ]
+            note_paths.sort(key=_get_note_sort_key)
+            notes[notebook_path.name] = [path.name for path in note_paths]
+
+    return {
+        "notebooks": [path.name for path in notebook_paths],
+        "notes": notes,
+    }
+
+
 @app.post("/api/notebooks")
 async def create_notebook(request: Request):
     body = await request.json()

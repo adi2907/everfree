@@ -14,6 +14,8 @@
     let editor = null;
     let isDirty = false;
     let searchSeq = 0;
+    let noteBrowserRenderSeq = 0;
+    const NOTE_CARD_BATCH_SIZE = 100;
 
     // ── DOM References ──────────────────────────────────────
     const $notebookList = document.getElementById("notebook-list");
@@ -173,15 +175,9 @@
     // ── Load notebooks ──────────────────────────────────────
     async function loadNotebooks() {
         try {
-            notebooks = await API.get("/api/notebooks");
-            const entries = await Promise.all(notebooks.map(async (nb) => {
-                try {
-                    return [nb, await API.get(`/api/notebooks/${encodeURIComponent(nb)}/notes`)];
-                } catch {
-                    return [nb, []];
-                }
-            }));
-            notesByNotebook = Object.fromEntries(entries);
+            const library = await API.get("/api/library");
+            notebooks = library.notebooks || [];
+            notesByNotebook = library.notes || {};
             if (currentNotebook && notebooks.includes(currentNotebook)) {
                 selectedNotebook = currentNotebook;
             } else if (selectedNotebook && !notebooks.includes(selectedNotebook)) {
@@ -256,6 +252,7 @@
     }
 
     function renderNoteBrowser() {
+        const renderSeq = ++noteBrowserRenderSeq;
         const visible = selectedNotebook
             ? (notesByNotebook[selectedNotebook] || []).map((note) => ({ notebook: selectedNotebook, note }))
             : notebooks.flatMap((notebook) => (notesByNotebook[notebook] || []).map((note) => ({ notebook, note })));
@@ -268,27 +265,43 @@
             return;
         }
 
-        for (const item of visible) {
-            const $note = document.createElement("button");
-            $note.type = "button";
-            $note.className = "note-card";
-            if (currentNotebook === item.notebook && currentNote === item.note) {
-                $note.classList.add("active");
+        function appendBatch(start) {
+            if (renderSeq !== noteBrowserRenderSeq) return;
+            const fragment = document.createDocumentFragment();
+            const end = Math.min(start + NOTE_CARD_BATCH_SIZE, visible.length);
+            for (let i = start; i < end; i += 1) {
+                fragment.appendChild(createNoteCard(visible[i]));
             }
-            $note.innerHTML = `
-                <span class="note-card-title">${escapeHtml(item.note.replace(/\.md$/, ""))}</span>
-                <span class="note-card-preview">Markdown note</span>
-                <span class="note-card-meta">${escapeHtml(item.notebook)}</span>`;
-            $note.addEventListener("click", () => openNote(item.notebook, item.note));
-            $note.addEventListener("contextmenu", (e) => {
-                e.preventDefault();
-                showNoteMenu(e, item.notebook, item.note);
-            });
-            $noteBrowserList.appendChild($note);
+            $noteBrowserList.appendChild(fragment);
+            if (end < visible.length) {
+                requestAnimationFrame(() => appendBatch(end));
+            }
         }
+
+        appendBatch(0);
+    }
+
+    function createNoteCard(item) {
+        const $note = document.createElement("button");
+        $note.type = "button";
+        $note.className = "note-card";
+        if (currentNotebook === item.notebook && currentNote === item.note) {
+            $note.classList.add("active");
+        }
+        $note.innerHTML = `
+            <span class="note-card-title">${escapeHtml(item.note.replace(/\.md$/, ""))}</span>
+            <span class="note-card-preview">Markdown note</span>
+            <span class="note-card-meta">${escapeHtml(item.notebook)}</span>`;
+        $note.addEventListener("click", () => openNote(item.notebook, item.note));
+        $note.addEventListener("contextmenu", (e) => {
+            e.preventDefault();
+            showNoteMenu(e, item.notebook, item.note);
+        });
+        return $note;
     }
 
     async function renderSearchResults(query) {
+        noteBrowserRenderSeq += 1;
         const seq = ++searchSeq;
         $noteBrowserTitle.textContent = "Search";
         $noteBrowserList.innerHTML = '<div class="notebook-loading">Searching…</div>';
@@ -934,6 +947,10 @@
             return true;
         },
         saveNote,
+        // Lets the assistant surface a note it just created (e.g. deep research).
+        refreshLibrary() {
+            loadNotebooks();
+        },
     };
 
     // ── Init ────────────────────────────────────────────────

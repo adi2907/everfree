@@ -165,6 +165,17 @@
                 Assistant
             </span>
             <span class="assist-status" id="assist-status" title=""></span>
+            <select class="assist-provider-quick" id="assist-provider-quick" title="Model provider" aria-label="Model provider">
+                <option value="lmstudio">Local</option>
+                <option value="openrouter">OpenRouter</option>
+                <option value="gemini">Gemini</option>
+            </select>
+            <button class="btn-icon" id="assist-research-btn" title="Deep research — runs in the background" aria-label="Deep research">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M9 3h6"/><path d="M10 3v6.5L4.5 18a2 2 0 001.8 3h11.4a2 2 0 001.8-3L14 9.5V3"/><path d="M7.5 14h9"/>
+                </svg>
+            </button>
             <button class="btn-icon" id="assist-new-btn" title="New chat" aria-label="New chat">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                     stroke-linecap="round" stroke-linejoin="round">
@@ -246,8 +257,19 @@
             </div>
 
             <div class="assist-settings-common">
-                <label>Serper API key <span class="assist-label-hint">(for /search)</span>
+                <label>Serper API key <span class="assist-label-hint">(for /search and research)</span>
                     <input type="password" id="assist-set-serper" placeholder="">
+                </label>
+                <label>Deep-research provider <span class="assist-label-hint">(used by 🔬 research)</span>
+                    <select id="assist-set-research-provider">
+                        <option value="">Same as chat</option>
+                        <option value="lmstudio">Local LLM</option>
+                        <option value="openrouter">OpenRouter</option>
+                        <option value="gemini">Gemini</option>
+                    </select>
+                </label>
+                <label>Deep-research model <span class="assist-label-hint">(blank = that provider's chat model)</span>
+                    <input type="text" id="assist-set-research-model" placeholder="e.g. a larger reasoning model">
                 </label>
             </div>
             <div class="assist-settings-actions">
@@ -258,7 +280,8 @@
 
         <div class="assist-messages" id="assist-messages">
             <div class="assist-hint">
-                Ask anything about your note, or:<br>
+                Ask anything — the assistant can reason, read your other notes, and search the web before answering.<br>
+                <code>/research</code> a topic — runs a deep research agent in the background and saves a new note when done<br>
                 <code>/search</code> a topic — researches the web and drafts a passage with sources<br>
                 <code>/image</code> a prompt — generates an image into your note's assets<br>
                 <code>/chats</code> [text] — browse this note's past chats (optionally filtered)<br>

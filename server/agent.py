@@ -12,12 +12,14 @@ Settings (provider URLs, models, and API keys) live in
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
 import os
 import re
 import time
+import uuid
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import quote
@@ -35,6 +37,9 @@ SETTINGS_FILE = Path.home() / ".everfree_agent.json"
 # Chat sessions live on local disk, outside the notes repo so they are never
 # pushed to GitHub. One JSON file per chat, indexed by the note it belongs to.
 CHATS_DIR = Path(os.environ.get("EVERFREE_CHATS_DIR", Path.home() / ".everfree_chats"))
+# Background deep-research jobs persist here (outside the notes repo) so they
+# survive panel close, note switches, and server restarts. One JSON per job.
+RESEARCH_DIR = Path(os.environ.get("EVERFREE_RESEARCH_DIR", Path.home() / ".everfree_research"))
 
 DEFAULT_SETTINGS = {
     "active_provider": "lmstudio",
@@ -46,9 +51,18 @@ DEFAULT_SETTINGS = {
     "gemini_model": "gemini-2.5-flash",
     "serper_api_key": "",
     "image_model": "google/gemini-2.5-flash-image",
+    # Deep research can run on a separate, usually larger model. Blank values
+    # fall back to the active provider / its normal model.
+    "research_provider": "",
+    "research_model": "",
 }
 
-MAX_TOOL_ROUNDS = 6
+PROVIDERS = {"lmstudio", "openrouter", "gemini"}
+
+# Foreground chat allows a handful of tool rounds; background research plans
+# over many more searches and page reads before it synthesizes a report.
+MAX_TOOL_ROUNDS = 8
+RESEARCH_MAX_ROUNDS = 18
 NOTE_CONTEXT_LIMIT = 8000
 PAGE_TEXT_LIMIT = 6000
 SEARCH_RESULT_COUNT = 6
@@ -80,6 +94,8 @@ def _public_settings(settings: dict) -> dict:
         "openrouter_model": settings["openrouter_model"],
         "gemini_model": settings["gemini_model"],
         "image_model": settings["image_model"],
+        "research_provider": settings["research_provider"],
+        "research_model": settings["research_model"],
         "openrouter_api_key_set": bool(settings["openrouter_api_key"]),
         "gemini_api_key_set": bool(settings["gemini_api_key"]),
         "serper_api_key_set": bool(settings["serper_api_key"]),
@@ -98,8 +114,10 @@ async def update_settings(request: Request):
     for key in DEFAULT_SETTINGS:
         if key in body and isinstance(body[key], str):
             settings[key] = body[key].strip()
-    if settings["active_provider"] not in {"lmstudio", "openrouter", "gemini"}:
+    if settings["active_provider"] not in PROVIDERS:
         raise HTTPException(status_code=400, detail="Invalid AI provider")
+    if settings["research_provider"] and settings["research_provider"] not in PROVIDERS:
+        raise HTTPException(status_code=400, detail="Invalid research provider")
     _save_settings(settings)
     return _public_settings(settings)
 
@@ -365,7 +383,86 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_notes",
+            "description": (
+                "Full-text search the user's own notes (across every notebook). "
+                "Returns matching notes as 'notebook/note — snippet' lines. "
+                "Use this to ground answers in what the user has already written."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Words or phrase to look for"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_note",
+            "description": "Read the full Markdown content of one of the user's notes.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "notebook": {"type": "string", "description": "Notebook (folder) name"},
+                    "note": {"type": "string", "description": "Note file name, e.g. 'Ideas.md'"},
+                },
+                "required": ["notebook", "note"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_notebooks",
+            "description": "List the user's notebook (folder) names.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_notes",
+            "description": "List the note file names inside one notebook.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "notebook": {"type": "string", "description": "Notebook (folder) name"},
+                },
+                "required": ["notebook"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_note",
+            "description": (
+                "Create a NEW Markdown note. Never overwrites: if the title is taken, "
+                "a numbered suffix is added. Use only when the user asks you to save or "
+                "create a note; for normal answers just reply and let the user insert."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "notebook": {"type": "string", "description": "Notebook to create the note in (created if missing)"},
+                    "title": {"type": "string", "description": "Title / file name for the new note"},
+                    "content": {"type": "string", "description": "Full Markdown body of the note"},
+                },
+                "required": ["notebook", "title", "content"],
+            },
+        },
+    },
 ]
+
+# Tools offered to background research: read + web only. The single output
+# note is written by the research runner itself, not by a tool call.
+RESEARCH_TOOLS = [t for t in TOOLS if t["function"]["name"] != "create_note"]
 
 
 async def _tool_web_search(query: str, settings: dict) -> str:
@@ -420,13 +517,165 @@ async def _tool_read_page(url: str) -> str:
     return text or "No readable text found on the page."
 
 
+# ── Note tools (reuse server.app helpers; imported lazily to avoid the
+#    app→agent import cycle) ────────────────────────────────────────────
+async def _tool_search_notes(query: str) -> str:
+    if not (query or "").strip():
+        return "Error: empty search query."
+    from server import app as app_module
+    results = await asyncio.to_thread(app_module._run_search, query)
+    if not results:
+        return "No matching notes."
+    lines = []
+    for r in results[:12]:
+        snippet = r.get("snippet") or ""
+        line = f"- {r['notebook']}/{r['note']} — {r['title']}"
+        if snippet:
+            line += f": {snippet}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+async def _tool_read_note(notebook: str, note: str) -> str:
+    from server import app as app_module
+    note = (note or "").strip()
+    if note and not note.endswith(".md"):
+        note += ".md"
+    try:
+        path = app_module._safe_note_path(notebook, note)
+    except Exception:
+        return f"Error: invalid note path {notebook}/{note}."
+    if not path.exists():
+        return f"Error: note not found: {notebook}/{note}."
+    text = await asyncio.to_thread(app_module._cached_note_text, path)
+    if len(text) > NOTE_CONTEXT_LIMIT:
+        text = text[:NOTE_CONTEXT_LIMIT] + "\n[truncated]"
+    return text or "(this note is empty)"
+
+
+async def _tool_list_notebooks() -> str:
+    def _list() -> list[str]:
+        if not NOTES_DIR.exists():
+            return []
+        names = [d.name for d in NOTES_DIR.iterdir() if d.is_dir() and not d.name.startswith(".")]
+        return sorted(names, key=str.lower)
+    names = await asyncio.to_thread(_list)
+    return "\n".join(f"- {n}" for n in names) or "No notebooks yet."
+
+
+async def _tool_list_notes(notebook: str) -> str:
+    from server import app as app_module
+    try:
+        nb_path = app_module._safe_notebook_path(notebook)
+    except Exception:
+        return f"Error: invalid notebook {notebook}."
+    if not nb_path.exists():
+        return f"Error: notebook not found: {notebook}."
+
+    def _list() -> list[str]:
+        names = [f.name for f in nb_path.iterdir() if f.is_file() and f.suffix == ".md"]
+        return sorted(names, key=str.lower)
+    notes = await asyncio.to_thread(_list)
+    return "\n".join(f"- {n}" for n in notes) or "(no notes in this notebook)"
+
+
+async def _create_note_file(notebook: str, title: str, content: str) -> str:
+    """Create a new note, never overwriting. Returns the final file name.
+    Raises on invalid input. Shared by the create_note tool and research."""
+    from server import app as app_module
+    notebook = (notebook or "").strip()
+    title = (title or "").strip()
+    if not notebook or not title:
+        raise ValueError("both notebook and title are required")
+    stem = re.sub(r"[\\/]+", "-", title).strip().removesuffix(".md").strip()
+    if not stem:
+        raise ValueError("invalid title")
+    app_module._safe_notebook_path(notebook)  # validate early
+
+    def _write() -> str:
+        nb_path = app_module._safe_notebook_path(notebook)
+        nb_path.mkdir(parents=True, exist_ok=True)
+        name = f"{stem}.md"
+        candidate = app_module._safe_note_path(notebook, name)
+        n = 2
+        while candidate.exists():
+            name = f"{stem} {n}.md"
+            candidate = app_module._safe_note_path(notebook, name)
+            n += 1
+        body = content or ""
+        if not body.lstrip().startswith("#"):
+            body = f"# {stem}\n\n{body}"
+        app_module._atomic_write_text(candidate, body)
+        return name
+
+    name = await asyncio.to_thread(_write)
+    app_module.request_sync()
+    return name
+
+
+async def _tool_create_note(notebook: str, title: str, content: str) -> str:
+    try:
+        name = await _create_note_file(notebook, title, content)
+    except Exception as exc:
+        return f"Error creating note: {exc}"
+    return f"Created note '{name}' in notebook '{notebook}'."
+
+
+# ── Streamed-reasoning helpers ───────────────────────────────
+def _safe_emit_len(buf: str, tag: str) -> int:
+    """Length of `buf` that is safe to emit without slicing through a partial
+    occurrence of `tag` sitting at the very end (tags can straddle chunks)."""
+    for k in range(min(len(tag) - 1, len(buf)), 0, -1):
+        if buf.endswith(tag[:k]):
+            return len(buf) - k
+    return len(buf)
+
+
+def _split_think(buf: str, in_think: bool) -> tuple[list[tuple[str, str]], str, bool]:
+    """Split streamed `content` into ('reason', text) inside <think>…</think>
+    and ('answer', text) outside it. Consumes only the unambiguous prefix of
+    `buf`, returning (events, remaining_buf, in_think) so partial tags carry
+    over to the next chunk. Local reasoning models emit thinking this way."""
+    open_tag, close_tag = "<think>", "</think>"
+    events: list[tuple[str, str]] = []
+    while buf:
+        if in_think:
+            idx = buf.find(close_tag)
+            if idx == -1:
+                cut = _safe_emit_len(buf, close_tag)
+                if cut:
+                    events.append(("reason", buf[:cut]))
+                    buf = buf[cut:]
+                break
+            if idx:
+                events.append(("reason", buf[:idx]))
+            buf = buf[idx + len(close_tag):]
+            in_think = False
+        else:
+            idx = buf.find(open_tag)
+            if idx == -1:
+                cut = _safe_emit_len(buf, open_tag)
+                if cut:
+                    events.append(("answer", buf[:cut]))
+                    buf = buf[cut:]
+                break
+            if idx:
+                events.append(("answer", buf[:idx]))
+            buf = buf[idx + len(open_tag):]
+            in_think = True
+    return events, buf, in_think
+
+
 # ── Prompts ──────────────────────────────────────────────────
-CHAT_SYSTEM_PROMPT = """You are the writing assistant built into EverFree, a Markdown note-taking app.
+CHAT_SYSTEM_PROMPT = """You are the agentic writing assistant built into EverFree, a Markdown note-taking app.
 The user is writing a note; its current content may be provided below. Match its tone, voice, and formatting.
 
-You have tools: web_search (Google search) and read_page (fetch a page's readable text).
-When the user asks you to research or search a topic, first call web_search, then call read_page on the 2-3 most promising results, then write your answer grounded in what you read.
-When you researched online, end your passage with a "Sources:" line listing the pages you used as Markdown links.
+Think before you act. Decide whether a question is best answered from the note in front of you, from the user's other notes, or from the web, then use tools to gather what you need before replying.
+
+Tools:
+- search_notes / read_note / list_notebooks / list_notes — search and read the user's own notes. Prefer these to ground answers in what they have already written.
+- web_search (Google) then read_page — for external facts. Read the 2-3 most promising results before answering, and end such a passage with a "Sources:" line of Markdown links.
+- create_note — only when the user explicitly asks you to save or create a note. It never overwrites existing notes.
 
 Your final reply is inserted directly into the note, so reply with clean Markdown only — no preamble like "Here is...", no code fences wrapping the whole reply, no commentary about what you did."""
 
@@ -454,6 +703,20 @@ async def _run_tool(name: str, args: dict, settings: dict) -> tuple[str, str]:
     if name == "read_page":
         detail = args.get("url", "")
         return detail, await _tool_read_page(detail)
+    if name == "search_notes":
+        detail = args.get("query", "")
+        return detail, await _tool_search_notes(detail)
+    if name == "read_note":
+        notebook, note = args.get("notebook", ""), args.get("note", "")
+        return f"{notebook}/{note}".strip("/"), await _tool_read_note(notebook, note)
+    if name == "list_notebooks":
+        return "", await _tool_list_notebooks()
+    if name == "list_notes":
+        notebook = args.get("notebook", "")
+        return notebook, await _tool_list_notes(notebook)
+    if name == "create_note":
+        notebook, title = args.get("notebook", ""), args.get("title", "")
+        return f"{notebook}/{title}".strip("/"), await _tool_create_note(notebook, title, args.get("content", ""))
     return "", f"Error: unknown tool {name}"
 
 
@@ -471,15 +734,15 @@ def _empty_completion_event(finish_reason: str | None) -> dict:
 
 
 async def _openai_compatible_events(
-    messages: list[dict], use_tools: bool, settings: dict, max_tokens: int,
-    no_thinking: bool = False,
+    messages: list[dict], tools: list | None, settings: dict, max_tokens: int,
+    no_thinking: bool = False, max_rounds: int = MAX_TOOL_ROUNDS,
 ):
-    """Run a non-streaming OpenAI-compatible tool loop.
+    """Stream an OpenAI-compatible tool loop, surfacing reasoning live.
 
-    The endpoint response is buffered so the UI receives complete passages
-    instead of visually filling them in word by word. (`no_thinking` has no
-    portable equivalent here, so continuations rely on a generous token budget
-    to leave room for any reasoning the model does.)
+    `reasoning` / `reasoning_content` deltas (OpenRouter) and inline
+    <think>…</think> spans (local models) become `reason` events; visible
+    answer text becomes `delta` events. Streamed tool-call fragments are
+    reassembled across chunks, executed, and the loop continues.
     """
     provider = settings["active_provider"]
     if provider == "lmstudio":
@@ -499,48 +762,106 @@ async def _openai_compatible_events(
             if not model:
                 raise RuntimeError("Select an OpenRouter chat model in assistant settings.")
 
-        for _ in range(MAX_TOOL_ROUNDS):
+        for _ in range(max_rounds):
             payload = {
                 "model": model,
                 "messages": messages,
                 "temperature": 0.7,
                 "max_tokens": max_tokens,
+                "stream": True,
             }
-            if use_tools:
-                payload["tools"] = TOOLS
+            if tools:
+                payload["tools"] = tools
 
-            resp = await client.post(f"{base_url}/chat/completions", json=payload)
-            if resp.status_code != 200:
-                label = "LM Studio" if provider == "lmstudio" else "OpenRouter"
-                raise RuntimeError(f"{label} error HTTP {resp.status_code}: {resp.text[:300]}")
+            answer_text = ""           # visible answer with <think> spans removed
+            tool_acc: dict[int, dict] = {}
+            finish_reason = None
+            think_buf, in_think = "", False
 
-            choices = resp.json().get("choices") or []
-            if not choices:
-                raise RuntimeError("The model returned no response.")
-            message = choices[0].get("message") or {}
-            tool_calls = message.get("tool_calls") or []
+            async with client.stream("POST", f"{base_url}/chat/completions", json=payload) as resp:
+                if resp.status_code != 200:
+                    raw = (await resp.aread()).decode("utf-8", "replace")
+                    label = "LM Studio" if provider == "lmstudio" else "OpenRouter"
+                    raise RuntimeError(f"{label} error HTTP {resp.status_code}: {raw[:300]}")
+                async for line in resp.aiter_lines():
+                    line = line.strip()
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data)
+                    except ValueError:
+                        continue
+                    choice = (chunk.get("choices") or [{}])[0]
+                    if choice.get("finish_reason"):
+                        finish_reason = choice["finish_reason"]
+                    delta = choice.get("delta") or {}
+
+                    reason = delta.get("reasoning") or delta.get("reasoning_content")
+                    if reason:
+                        yield {"type": "reason", "text": reason}
+
+                    content = delta.get("content")
+                    if content:
+                        pieces, think_buf, in_think = _split_think(think_buf + content, in_think)
+                        for kind, text in pieces:
+                            if kind == "reason":
+                                yield {"type": "reason", "text": text}
+                            else:
+                                answer_text += text
+                                yield {"type": "delta", "text": text}
+
+                    for tc in delta.get("tool_calls") or []:
+                        slot = tool_acc.setdefault(
+                            tc.get("index", 0), {"id": None, "name": "", "arguments": ""}
+                        )
+                        if tc.get("id"):
+                            slot["id"] = tc["id"]
+                        fn = tc.get("function") or {}
+                        if fn.get("name"):
+                            slot["name"] += fn["name"]
+                        if fn.get("arguments"):
+                            slot["arguments"] += fn["arguments"]
+
+            if think_buf:  # flush text held back as a possible partial tag
+                if in_think:
+                    yield {"type": "reason", "text": think_buf}
+                else:
+                    answer_text += think_buf
+                    yield {"type": "delta", "text": think_buf}
+
+            tool_calls = [tool_acc[i] for i in sorted(tool_acc)]
             if not tool_calls:
-                text = message.get("content") or ""
-                if text:
-                    yield {"type": "delta", "text": text}
+                if answer_text:
                     yield {"type": "done"}
                 else:
-                    yield _empty_completion_event(choices[0].get("finish_reason"))
+                    yield _empty_completion_event(finish_reason)
                 return
 
-            messages.append(message)
-            for i, call in enumerate(tool_calls):
-                fn = call.get("function") or {}
-                name = fn.get("name", "")
+            messages.append({
+                "role": "assistant",
+                "content": answer_text or None,
+                "tool_calls": [
+                    {
+                        "id": tc["id"] or f"call_{i}",
+                        "type": "function",
+                        "function": {"name": tc["name"], "arguments": tc["arguments"] or "{}"},
+                    }
+                    for i, tc in enumerate(tool_calls)
+                ],
+            })
+            for i, tc in enumerate(tool_calls):
                 try:
-                    args = json.loads(fn.get("arguments") or "{}")
+                    args = json.loads(tc["arguments"] or "{}")
                 except ValueError:
                     args = {}
-                detail, result = await _run_tool(name, args, settings)
-                yield {"type": "tool", "name": name, "detail": detail}
+                detail, result = await _run_tool(tc["name"], args, settings)
+                yield {"type": "tool", "name": tc["name"], "detail": detail}
                 messages.append({
                     "role": "tool",
-                    "tool_call_id": call.get("id") or f"call_{i}",
+                    "tool_call_id": tc["id"] or f"call_{i}",
                     "content": result,
                 })
 
@@ -563,22 +884,21 @@ def _gemini_request(messages: list[dict]) -> tuple[dict | None, list[dict]]:
     return system_instruction, contents
 
 
-def _gemini_tools() -> list[dict]:
-    return [{
-        "functionDeclarations": [
-            {
-                "name": tool["function"]["name"],
-                "description": tool["function"]["description"],
-                "parameters": tool["function"]["parameters"],
-            }
-            for tool in TOOLS
-        ]
-    }]
+def _gemini_tools(tools: list) -> list[dict]:
+    decls = []
+    for tool in tools:
+        fn = tool["function"]
+        decl = {"name": fn["name"], "description": fn["description"]}
+        params = fn.get("parameters") or {}
+        if params.get("properties"):  # Gemini rejects empty parameter objects
+            decl["parameters"] = params
+        decls.append(decl)
+    return [{"functionDeclarations": decls}]
 
 
 async def _gemini_events(
-    messages: list[dict], use_tools: bool, settings: dict, max_tokens: int,
-    no_thinking: bool = False,
+    messages: list[dict], tools: list | None, settings: dict, max_tokens: int,
+    no_thinking: bool = False, max_rounds: int = MAX_TOOL_ROUNDS,
 ):
     if not settings["gemini_api_key"]:
         raise RuntimeError("Add a Gemini API key in assistant settings.")
@@ -589,51 +909,72 @@ async def _gemini_events(
     system_instruction, contents = _gemini_request(messages)
     url = (
         "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{model}:generateContent"
+        f"{model}:streamGenerateContent?alt=sse"
     )
 
     async with httpx.AsyncClient(
         timeout=LLM_TIMEOUT,
         headers={"x-goog-api-key": settings["gemini_api_key"]},
     ) as client:
-        for _ in range(MAX_TOOL_ROUNDS):
-            generation_config = {
-                "temperature": 0.7,
-                "maxOutputTokens": max_tokens,
-            }
-            # Gemini 2.5 models "think" by default, and thinking tokens count
-            # against maxOutputTokens — for a short continuation that can consume
-            # the whole budget and return empty text. Disable thinking there.
+        for _ in range(max_rounds):
+            generation_config = {"temperature": 0.7, "maxOutputTokens": max_tokens}
+            # Gemini 2.5 models "think" by default; thinking tokens count against
+            # maxOutputTokens. For a short continuation that can eat the whole
+            # budget, so disable it; otherwise ask for thought summaries to stream.
             if no_thinking:
                 generation_config["thinkingConfig"] = {"thinkingBudget": 0}
-            payload = {
-                "contents": contents,
-                "generationConfig": generation_config,
-            }
+            else:
+                generation_config["thinkingConfig"] = {"includeThoughts": True}
+            payload = {"contents": contents, "generationConfig": generation_config}
             if system_instruction:
                 payload["systemInstruction"] = system_instruction
-            if use_tools:
-                payload["tools"] = _gemini_tools()
+            if tools:
+                payload["tools"] = _gemini_tools(tools)
 
-            resp = await client.post(url, json=payload)
-            if resp.status_code != 200:
-                raise RuntimeError(f"Gemini error HTTP {resp.status_code}: {resp.text[:300]}")
-            candidates = resp.json().get("candidates") or []
-            if not candidates:
-                raise RuntimeError("Gemini returned no response.")
-            content = candidates[0].get("content") or {}
-            parts = content.get("parts") or []
-            function_calls = [part["functionCall"] for part in parts if part.get("functionCall")]
+            answer_text = ""
+            function_calls = []
+            model_parts = []           # functionCall parts echoed back (keep signatures)
+            finish_reason = None
+
+            async with client.stream("POST", url, json=payload) as resp:
+                if resp.status_code != 200:
+                    raw = (await resp.aread()).decode("utf-8", "replace")
+                    raise RuntimeError(f"Gemini error HTTP {resp.status_code}: {raw[:300]}")
+                async for line in resp.aiter_lines():
+                    line = line.strip()
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if not data or data == "[DONE]":
+                        continue
+                    try:
+                        chunk = json.loads(data)
+                    except ValueError:
+                        continue
+                    cand = (chunk.get("candidates") or [{}])[0]
+                    if cand.get("finishReason"):
+                        finish_reason = cand["finishReason"]
+                    for part in (cand.get("content") or {}).get("parts") or []:
+                        if part.get("functionCall"):
+                            function_calls.append(part["functionCall"])
+                            model_parts.append(part)
+                        elif "text" in part:
+                            if part.get("thought"):
+                                yield {"type": "reason", "text": part["text"]}
+                            else:
+                                answer_text += part["text"]
+                                yield {"type": "delta", "text": part["text"]}
+
             if not function_calls:
-                text = "".join(part.get("text", "") for part in parts)
-                if text:
-                    yield {"type": "delta", "text": text}
+                if answer_text:
                     yield {"type": "done"}
                 else:
-                    yield _empty_completion_event(candidates[0].get("finishReason"))
+                    yield _empty_completion_event(finish_reason)
                 return
 
-            contents.append({"role": "model", "parts": parts})
+            if answer_text:
+                model_parts.append({"text": answer_text})
+            contents.append({"role": "model", "parts": model_parts})
             response_parts = []
             for call in function_calls:
                 name = call.get("name", "")
@@ -641,26 +982,47 @@ async def _gemini_events(
                 detail, result = await _run_tool(name, args, settings)
                 yield {"type": "tool", "name": name, "detail": detail}
                 response_parts.append({
-                    "functionResponse": {
-                        "name": name,
-                        "response": {"result": result},
-                    }
+                    "functionResponse": {"name": name, "response": {"result": result}}
                 })
             contents.append({"role": "user", "parts": response_parts})
 
         yield {"type": "error", "detail": "The agent hit the tool-call limit without finishing."}
 
 
-async def _agent_events(messages: list[dict], use_tools: bool, max_tokens: int, no_thinking: bool = False):
-    """Run the selected provider and yield UI events."""
+def _resolve_settings(override: dict | None = None) -> dict:
+    """Load settings, optionally swapping the active provider/model for one
+    run (used by the deep-research override and any per-request override)."""
     settings = _load_settings()
+    if override:
+        settings = dict(settings)
+        provider = override.get("provider")
+        if provider in PROVIDERS:
+            settings["active_provider"] = provider
+        model = override.get("model")
+        if model:
+            settings[f"{settings['active_provider']}_model"] = model
+    return settings
+
+
+def _override_from(body: dict) -> dict | None:
+    provider, model = body.get("provider"), body.get("model")
+    return {"provider": provider, "model": model} if (provider or model) else None
+
+
+async def _agent_events(
+    messages: list[dict], tools: list | None, max_tokens: int,
+    no_thinking: bool = False, override: dict | None = None,
+    max_rounds: int = MAX_TOOL_ROUNDS,
+):
+    """Run the selected provider and yield UI events."""
+    settings = _resolve_settings(override)
     try:
         if settings["active_provider"] == "gemini":
-            async for event in _gemini_events(messages, use_tools, settings, max_tokens, no_thinking):
-                yield event
+            gen = _gemini_events(messages, tools, settings, max_tokens, no_thinking, max_rounds)
         else:
-            async for event in _openai_compatible_events(messages, use_tools, settings, max_tokens, no_thinking):
-                yield event
+            gen = _openai_compatible_events(messages, tools, settings, max_tokens, no_thinking, max_rounds)
+        async for event in gen:
+            yield event
     except httpx.ConnectError:
         yield {
             "type": "error",
@@ -681,6 +1043,7 @@ async def agent_chat(request: Request):
     mode = body.get("mode", "chat")
     note = body.get("note") or {}
     history = body.get("messages") or []
+    override = _override_from(body)
 
     note_content = (note.get("content") or "").strip()
 
@@ -691,7 +1054,7 @@ async def agent_chat(request: Request):
             {"role": "system", "content": CONTINUE_SYSTEM_PROMPT},
             {"role": "user", "content": f"Continue this note:\n\n{note_content[-NOTE_CONTEXT_LIMIT:]}"},
         ]
-        use_tools = False
+        tools = None
         # Brevity is enforced by the prompt; the budget just needs to be large
         # enough that a reasoning model's hidden thinking doesn't crowd out the
         # short continuation. Gemini additionally has thinking disabled below.
@@ -706,14 +1069,215 @@ async def agent_chat(request: Request):
         for msg in history[-12:]:
             if msg.get("role") in ("user", "assistant") and isinstance(msg.get("content"), str):
                 messages.append({"role": msg["role"], "content": msg["content"]})
-        use_tools = True
-        max_tokens = 1200
+        tools = TOOLS
+        # Room for live reasoning plus a multi-tool agent run before the answer.
+        max_tokens = 2048
         no_thinking = False
 
     return StreamingResponse(
-        (_ndjson(event) async for event in _agent_events(messages, use_tools, max_tokens, no_thinking)),
+        (_ndjson(event) async for event in _agent_events(messages, tools, max_tokens, no_thinking, override)),
         media_type="application/x-ndjson",
     )
+
+
+# ── Deep research (background agent) ─────────────────────────
+RESEARCH_SYSTEM_PROMPT = """You are a deep-research agent inside EverFree, a Markdown note-taking app.
+You are given a topic. Investigate it thoroughly, then produce a well-structured Markdown report the user can keep as a note.
+
+Method:
+- Plan the questions you need to answer.
+- Use web_search to find sources, then read_page on the most credible ones before drawing conclusions. Corroborate important claims across more than one source.
+- Use search_notes / read_note to fold in anything relevant the user has already written.
+- Keep going until you can write a confident, specific report — don't stop after a single search.
+
+Output: a Markdown document that starts with a '# ' title, uses clear sections and bullet points where useful, and ends with a '## Sources' list of the pages you actually used as Markdown links. Write the report itself as your final message — no meta commentary about the process."""
+
+# In-memory mirror of job records + their live asyncio tasks. Records also
+# persist to RESEARCH_DIR so they survive panel close, note switches, restarts.
+RESEARCH_JOBS: dict[str, dict] = {}
+RESEARCH_TASKS: dict[str, asyncio.Task] = {}
+
+
+def _ensure_research_dir() -> None:
+    RESEARCH_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _safe_research_path(job_id: str) -> Path:
+    if not re.match(r"^[A-Za-z0-9_-]{1,128}$", job_id or ""):
+        raise HTTPException(status_code=400, detail="Invalid research id")
+    return RESEARCH_DIR / f"{job_id}.json"
+
+
+def _save_research(job: dict) -> None:
+    _ensure_research_dir()
+    job["updated_at"] = time.time()
+    _safe_research_path(job["id"]).write_text(json.dumps(job, ensure_ascii=False, indent=2))
+
+
+def _research_log(job: dict, entry: dict) -> None:
+    entry["at"] = time.time()
+    job.setdefault("events", []).append(entry)
+    _save_research(job)
+
+
+def _finish_research(job: dict, status: str, result: str = "", error: str = "") -> None:
+    job["status"] = status
+    if result:
+        job["result"] = result
+    if error:
+        job["error"] = error
+    _save_research(job)
+
+
+def _research_summary(job: dict) -> dict:
+    return {
+        "id": job["id"],
+        "topic": job.get("topic", ""),
+        "notebook": job.get("notebook", ""),
+        "note": job.get("note", ""),
+        "status": job.get("status"),
+        "new_note": job.get("new_note", ""),
+        "provider": job.get("provider", ""),
+        "error": job.get("error", ""),
+        "event_count": len(job.get("events") or []),
+        "created_at": job.get("created_at"),
+        "updated_at": job.get("updated_at"),
+    }
+
+
+def _load_research(job_id: str) -> dict | None:
+    if job_id in RESEARCH_JOBS:
+        return RESEARCH_JOBS[job_id]
+    path = _safe_research_path(job_id)
+    if path.exists():
+        try:
+            return json.loads(path.read_text())
+        except Exception:
+            return None
+    return None
+
+
+def _all_research_jobs() -> list[dict]:
+    jobs = dict(RESEARCH_JOBS)
+    _ensure_research_dir()
+    for path in RESEARCH_DIR.glob("*.json"):
+        if path.stem in jobs:
+            continue
+        try:
+            jobs[path.stem] = json.loads(path.read_text())
+        except Exception:
+            continue
+    return list(jobs.values())
+
+
+def _reap_stale_research() -> None:
+    """A job persisted as 'running' with no live task in this process means the
+    server restarted mid-run. Mark it interrupted so it never shows a phantom
+    spinner forever."""
+    for job in _all_research_jobs():
+        if job.get("status") == "running" and job["id"] not in RESEARCH_TASKS:
+            job["status"] = "interrupted"
+            job["error"] = job.get("error") or "The server restarted before this run finished."
+            RESEARCH_JOBS[job["id"]] = job
+            _save_research(job)
+
+
+async def _run_research(job_id: str) -> None:
+    job = RESEARCH_JOBS.get(job_id)
+    if not job:
+        return
+    settings = _load_settings()
+    provider = settings["research_provider"] or settings["active_provider"]
+    override = {"provider": provider, "model": settings["research_model"] or None}
+
+    messages = [
+        {"role": "system", "content": RESEARCH_SYSTEM_PROMPT},
+        {"role": "user", "content": f"Research topic:\n\n{job['topic']}"},
+    ]
+    report, last_error = "", ""
+    try:
+        async for event in _agent_events(
+            messages, RESEARCH_TOOLS, max_tokens=4096,
+            no_thinking=False, override=override, max_rounds=RESEARCH_MAX_ROUNDS,
+        ):
+            etype = event.get("type")
+            if etype == "delta":
+                report += event["text"]
+            elif etype == "tool":
+                _research_log(job, {"type": "tool", "name": event.get("name"), "detail": event.get("detail", "")})
+            elif etype == "error":
+                last_error = event.get("detail", "")
+                _research_log(job, {"type": "error", "detail": last_error})
+
+        report = report.strip()
+        if not report:
+            _finish_research(job, status="error", error=last_error or "The research run produced no report.")
+            return
+
+        notebook = job.get("notebook") or "Research"
+        try:
+            name = await _create_note_file(notebook, f"Research — {job['topic'][:60]}", report)
+            job["new_note"] = name
+            job["notebook"] = notebook
+            _research_log(job, {"type": "note", "detail": f"{notebook}/{name}"})
+        except Exception as exc:
+            _research_log(job, {"type": "error", "detail": f"Could not save the report as a note: {exc}"})
+        _finish_research(job, status="done", result=report)
+    except Exception as exc:
+        logger.exception("Research job failed")
+        _finish_research(job, status="error", error=str(exc))
+    finally:
+        RESEARCH_TASKS.pop(job_id, None)
+
+
+@router.post("/research")
+async def start_research(request: Request):
+    body = await request.json()
+    topic = (body.get("topic") or "").strip()
+    if not topic:
+        raise HTTPException(status_code=400, detail="A research topic is required")
+    settings = _load_settings()
+    provider = settings["research_provider"] or settings["active_provider"]
+    job_id = uuid.uuid4().hex
+    job = {
+        "id": job_id,
+        "topic": topic,
+        "notebook": (body.get("notebook") or "").strip(),
+        "note": (body.get("note") or "").strip(),
+        "provider": provider,
+        "status": "running",
+        "events": [],
+        "result": "",
+        "new_note": "",
+        "error": "",
+        "created_at": time.time(),
+        "updated_at": time.time(),
+    }
+    RESEARCH_JOBS[job_id] = job
+    _save_research(job)
+    RESEARCH_TASKS[job_id] = asyncio.create_task(_run_research(job_id))
+    return _research_summary(job)
+
+
+@router.get("/research")
+async def list_research(notebook: str = "", note: str = ""):
+    _reap_stale_research()
+    out = [
+        _research_summary(job)
+        for job in _all_research_jobs()
+        if (not notebook or job.get("notebook") == notebook)
+        and (not note or job.get("note") == note)
+    ]
+    out.sort(key=lambda j: j.get("updated_at") or 0, reverse=True)
+    return out
+
+
+@router.get("/research/{job_id}")
+async def get_research(job_id: str):
+    job = _load_research(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Research job not found")
+    return job
 
 
 # ── Image generation (OpenRouter → Gemini) ───────────────────

@@ -786,6 +786,116 @@ body {
 .assist-status.ok { color: var(--success); }
 .assist-status.err { color: var(--danger); }
 
+/* Header provider quick-switch */
+.assist-provider-quick {
+    font-size: 11px;
+    color: var(--text-secondary);
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 2px 4px;
+    max-width: 110px;
+    cursor: pointer;
+}
+.assist-provider-quick:hover { border-color: var(--border-light); }
+
+/* Streamed reasoning trace */
+.assist-reasoning {
+    font-size: 12px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 6px 10px;
+}
+.assist-reasoning > summary {
+    cursor: pointer;
+    color: var(--text-secondary);
+    font-weight: 600;
+    list-style: none;
+}
+.assist-reasoning > summary::before { content: "🧠 "; }
+.assist-reasoning-body {
+    margin-top: 6px;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 220px;
+    overflow-y: auto;
+}
+
+/* Deep-research card */
+.assist-research {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--radius);
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.assist-research-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+.assist-research-badge {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--accent);
+}
+.assist-research-state {
+    font-size: 11px;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+}
+.assist-research[data-status="done"] .assist-research-state { color: var(--success); }
+.assist-research[data-status="error"] .assist-research-state,
+.assist-research[data-status="interrupted"] .assist-research-state { color: var(--danger); }
+.assist-research-topic {
+    font-size: 13px;
+    color: var(--text-primary);
+    font-weight: 500;
+}
+.assist-research-log {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.assist-research-logrow {
+    font-size: 11px;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.assist-research-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.assist-research-saved { font-size: 11px; color: var(--text-muted); }
+.assist-research-err { font-size: 12px; color: var(--danger); }
+
+/* Notification dot on the toolbar assistant button after a background run */
+#btn-assist { position: relative; }
+#btn-assist.has-badge::after {
+    content: "";
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 2px var(--bg-sidebar);
+}
+
 .assist-messages {
     flex: 1;
     overflow-y: auto;
