@@ -362,6 +362,8 @@
 
             $emptyState.style.display = "none";
             $editorContainer.style.display = "flex";
+            // Phone single-pane: hand the screen to the editor (CSS-gated to mobile).
+            document.body.classList.add("mobile-edit");
             $breadcrumb.textContent = `${notebook} / ${note.replace(/\.md$/, "")}`;
             $saveStatus.textContent = "";
 
@@ -569,6 +571,7 @@
         isDirty = false;
         $editorContainer.style.display = "none";
         $emptyState.style.display = "flex";
+        document.body.classList.remove("mobile-edit");
         try {
             await API.del(`/api/notebooks/${encodeURIComponent(nb)}/notes/${encodeURIComponent(nt)}`);
             await loadNotebooks();
@@ -660,6 +663,7 @@
                         isDirty = false;
                         $editorContainer.style.display = "none";
                         $emptyState.style.display = "flex";
+                        document.body.classList.remove("mobile-edit");
                     } else {
                         await waitForWriter();         // unrelated note: keep open note's autosave
                     }
@@ -705,6 +709,7 @@
                         isDirty = false;
                         $editorContainer.style.display = "none";
                         $emptyState.style.display = "flex";
+                        document.body.classList.remove("mobile-edit");
                     } else {
                         await waitForWriter();         // unrelated notebook: keep open note's autosave
                     }
@@ -826,6 +831,13 @@
     $btnSave.addEventListener("click", () => saveNote().catch(() => {}));
     $btnDeleteNote.addEventListener("click", deleteNote);
     $btnSync.addEventListener("click", triggerSync);
+    // Phone single-pane: return from the editor to the note list.
+    const $btnMobileBack = document.getElementById("btn-mobile-back");
+    if ($btnMobileBack) {
+        $btnMobileBack.addEventListener("click", () => {
+            document.body.classList.remove("mobile-edit");
+        });
+    }
     $modalCancel.addEventListener("click", hideModal);
     $modalConfirm.addEventListener("click", confirmModal);
     $searchInput.addEventListener("input", onSearch);

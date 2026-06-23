@@ -12,7 +12,7 @@ landing page and lets you connect GitHub.
 ## Quick Links
 
 - **Hosted web and mobile app:** [everfree.vercel.app](https://everfree.vercel.app)
-- **Download Mac DMG:** [EverFree.dmg](https://github.com/adi2907/everfree/releases/download/v1.0.0/EverFree.dmg)
+- **Download Mac DMG:** [EverFree.dmg](https://github.com/adi2907/everfree/releases/download/v1.0.1/EverFree.dmg)
 - **Self-host or inspect the code:** [github.com/adi2907/everfree](https://github.com/adi2907/everfree)
 - **Default notes repo:** `everfree-notes` in your own GitHub account
 
@@ -150,7 +150,7 @@ README.
 Current public DMG:
 
 ```text
-https://github.com/adi2907/everfree/releases/download/v1.0.0/EverFree.dmg
+https://github.com/adi2907/everfree/releases/download/v1.0.1/EverFree.dmg
 ```
 
 Public macOS releases should be signed with an Apple Developer ID Application
