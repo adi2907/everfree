@@ -104,7 +104,7 @@
         }
         const status = data.status || "idle";
         const [dot, label] = SYNC_LABELS[status] || SYNC_LABELS.idle;
-        let text = data.pending && status !== "syncing" ? "Saving…" : label;
+        let text = data.pending && status !== "syncing" ? "Saved locally" : label;
         if (status === "idle" && !data.remote) {
             setSyncStatus("warn", "Git repo (no remote)");
             return;
@@ -475,8 +475,8 @@
     }
 
     // ── Autosave ────────────────────────────────────────────
-    // Writes to disk are instant and the push happens in the background, so we
-    // can save on a short idle debounce without ever blocking the user.
+    // Writes to disk are instant. GitHub pushes happen only on explicit Save,
+    // explicit Sync, or clean server shutdown.
     let autosaveTimer = null;
     let changeSeq = 0;          // bumped on every edit
     let writerActive = false;   // true while the single save-writer loop runs
@@ -513,8 +513,12 @@
     async function saveNote(opts = {}) {
         if (!currentNotebook || !currentNote || !editor) return;
         clearTimeout(autosaveTimer);
-        if (!isDirty) return;       // nothing outstanding to persist
-        await startWriter();        // rejects if a PUT fails, so callers can react
+        if (isDirty) {
+            await startWriter();    // rejects if a PUT fails, so callers can react
+        }
+        if (opts.sync) {
+            await triggerSync();
+        }
     }
 
     async function _doSaveOnce() {
@@ -828,7 +832,7 @@
     applyTheme(localStorage.getItem("everfree-theme") || "light");
 
     // ── Event Bindings ──────────────────────────────────────
-    $btnSave.addEventListener("click", () => saveNote().catch(() => {}));
+    $btnSave.addEventListener("click", () => saveNote({ sync: true }).catch(() => {}));
     $btnDeleteNote.addEventListener("click", deleteNote);
     $btnSync.addEventListener("click", triggerSync);
     // Phone single-pane: return from the editor to the note list.
@@ -906,7 +910,7 @@
     document.addEventListener("keydown", (e) => {
         if ((e.ctrlKey || e.metaKey) && e.key === "s") {
             e.preventDefault();
-            saveNote().catch(() => {});
+            saveNote({ sync: true }).catch(() => {});
         }
     });
 

@@ -313,12 +313,10 @@ def _atomic_write_bytes(path: Path, data: bytes) -> None:
 
 # ══════════════════════════════════════════════════════════════
 #  BACKGROUND SYNC WORKER
-#  Saves write to disk instantly and enqueue a sync; this worker
-#  coalesces edits into batched commits, pulls periodically, and
-#  retries on its own when the network is down — so the request
-#  path never blocks on git and edits are never lost offline.
+#  Saves write to disk instantly and mark local changes pending. The worker
+#  only pushes when the user explicitly requests sync/save, or when the server
+#  shuts down cleanly.
 # ══════════════════════════════════════════════════════════════
-SYNC_DEBOUNCE = float(os.environ.get("EVERFREE_SYNC_DEBOUNCE", 2.0))
 SYNC_PULL_INTERVAL = float(os.environ.get("EVERFREE_SYNC_PULL_INTERVAL", 45.0))
 SYNC_BRANCH = os.environ.get("EVERFREE_SYNC_BRANCH", "main")
 
@@ -349,10 +347,11 @@ def _set_sync_state(**kwargs) -> None:
 
 
 def request_sync(*, immediate: bool = False) -> None:
-    """Mark that local changes are waiting to be synced."""
+    """Mark local changes pending; wake the worker only for explicit sync."""
     _set_sync_state(pending=True)
-    if immediate:
-        _sync_now.set()
+    if not immediate:
+        return
+    _sync_now.set()
     _sync_wanted.set()
 
 
@@ -428,8 +427,20 @@ def _sync_cycle(push: bool) -> None:
 
         # 2. Commit + merge under the lock so a concurrent note write can never
         #    be clobbered by the merge (these are fast, local-only git ops).
+        #    Background pull cycles never commit dirty local edits; those wait
+        #    for explicit Save/Sync or clean shutdown.
         new_conflicts: list[str] = []
         with _repo_lock:
+            has_local = bool(_git("status", "--porcelain", check=True).stdout.strip())
+            if has_local and not push:
+                _set_sync_state(
+                    status="idle",
+                    online=True,
+                    pending=True,
+                    detail="Saved locally",
+                )
+                return
+
             _git("add", "-A", check=True)
             has_local = bool(_git("status", "--porcelain", check=True).stdout.strip())
             if has_local:
@@ -451,7 +462,7 @@ def _sync_cycle(push: bool) -> None:
             ahead = int(ahead_res.stdout.strip() or "0")
         except ValueError:
             ahead = 1
-        if ahead > 0:
+        if push and ahead > 0:
             pushed = _git("push", "origin", SYNC_BRANCH, check=False)
             if pushed.returncode != 0:
                 if _is_network_error(pushed.stderr):
@@ -461,13 +472,14 @@ def _sync_cycle(push: bool) -> None:
                 # Likely the remote moved between fetch and push; retry next cycle.
                 _set_sync_state(status="error", online=True,
                                 detail=pushed.stderr.strip()[:200] or "Push failed")
-                _sync_wanted.set()
                 return
 
         remote = None
         r = _git("remote", "get-url", "origin", check=False)
         if r.returncode == 0:
             remote = r.stdout.strip()
+
+        pending = ahead > 0 and not push
 
         with _sync_lock:
             if new_conflicts:
@@ -476,10 +488,14 @@ def _sync_cycle(push: bool) -> None:
             sync_state.update({
                 "status": "conflict" if (sync_state.get("conflicts")) else "idle",
                 "online": True,
-                "pending": False,
+                "pending": pending,
                 "last_synced": time.time(),
                 "remote": remote,
-                "detail": "Saved remote copies of conflicts" if new_conflicts else "Synced to GitHub",
+                "detail": (
+                    "Saved remote copies of conflicts"
+                    if new_conflicts else
+                    "Saved locally" if pending else "Synced to GitHub"
+                ),
             })
     except subprocess.TimeoutExpired:
         _set_sync_state(status="offline", online=False, detail="Sync timed out — will retry")
@@ -497,10 +513,6 @@ def _sync_worker_loop() -> None:
             break
         if triggered:
             _sync_wanted.clear()
-            # Debounce: coalesce a burst of edits into one commit unless the
-            # user asked for an immediate (manual) sync.
-            if not _sync_now.is_set():
-                _sync_stop.wait(SYNC_DEBOUNCE)
             _sync_now.clear()
             if _sync_stop.is_set():
                 break
@@ -519,11 +531,13 @@ def start_sync_worker() -> None:
     _sync_thread.start()
 
 
-def stop_sync_worker() -> None:
+def stop_sync_worker(*, flush: bool = False) -> None:
     _sync_stop.set()
     _sync_wanted.set()
     if _sync_thread:
         _sync_thread.join(timeout=5)
+    if flush and _is_git_repo():
+        _sync_cycle(push=True)
 
 
 # ── Lifespan ─────────────────────────────────────────────────
@@ -541,7 +555,7 @@ async def lifespan(app: FastAPI):
 
     asyncio.create_task(_open_browser())
     yield
-    stop_sync_worker()
+    stop_sync_worker(flush=True)
 
 
 app = FastAPI(title="EverFree", version="4.0.0", lifespan=lifespan)
