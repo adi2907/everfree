@@ -12,6 +12,7 @@
     let currentNotebook = null;
     let currentNote = null;
     let editor = null;
+    let editorDictation = null;
     let isDirty = false;
     let searchSeq = 0;
     let noteBrowserRenderSeq = 0;
@@ -31,6 +32,7 @@
     const $editorContainer = document.getElementById("editor-container");
     const $breadcrumb = document.getElementById("note-breadcrumb");
     const $saveStatus = document.getElementById("save-status");
+    const $btnEditorMic = document.getElementById("btn-editor-mic");
     const $btnSave = document.getElementById("btn-save");
     const $btnDeleteNote = document.getElementById("btn-delete-note");
     const $btnNewNotebook = document.getElementById("btn-new-notebook");
@@ -289,9 +291,7 @@
             $note.classList.add("active");
         }
         $note.innerHTML = `
-            <span class="note-card-title">${escapeHtml(item.note.replace(/\.md$/, ""))}</span>
-            <span class="note-card-preview">Markdown note</span>
-            <span class="note-card-meta">${escapeHtml(item.notebook)}</span>`;
+            <span class="note-card-title">${escapeHtml(item.note.replace(/\.md$/, ""))}</span>`;
         $note.addEventListener("click", () => openNote(item.notebook, item.note));
         $note.addEventListener("contextmenu", (e) => {
             e.preventDefault();
@@ -349,6 +349,7 @@
     // ── Open a Note ─────────────────────────────────────────
     async function openNote(notebook, note) {
         if (isDirty && !confirm("You have unsaved changes. Discard?")) return;
+        stopEditorDictation();
 
         try {
             const data = await API.get(
@@ -472,6 +473,62 @@
             alert("Couldn't add image: " + (err.message || err));
             return null;
         }
+    }
+
+    // ── Editor voice input ──────────────────────────────────
+    function setEditorMicActive(active) {
+        if (!$btnEditorMic) return;
+        $btnEditorMic.classList.toggle("is-listening", active);
+        $btnEditorMic.setAttribute("aria-pressed", active ? "true" : "false");
+        $btnEditorMic.title = active ? "Stop dictation" : "Dictate into note (voice input)";
+    }
+
+    function stopEditorDictation() {
+        if (editorDictation && editorDictation.active) editorDictation.stop();
+    }
+
+    function appendDictationToEditor(text) {
+        const spoken = (text || "").trim();
+        if (!spoken || !editor) return;
+        editor.focus();
+        editor.insertText(spoken + " ");
+    }
+
+    function setupEditorDictation() {
+        if (!$btnEditorMic) return;
+        if (typeof window.createDictation !== "function" || !window.voiceInputSupported) {
+            $btnEditorMic.disabled = true;
+            $btnEditorMic.title = "Voice input is not supported in this browser";
+            $btnEditorMic.setAttribute("aria-disabled", "true");
+            return;
+        }
+
+        editorDictation = window.createDictation({
+            onFinal: appendDictationToEditor,
+            onState: setEditorMicActive,
+            onError(error) {
+                setEditorMicActive(false);
+                $saveStatus.textContent =
+                    error === "not-allowed"
+                        ? "Microphone permission denied"
+                        : error === "audio-capture"
+                            ? "No microphone found"
+                            : "Voice input stopped";
+                $saveStatus.className = "save-status";
+            },
+        });
+        if (!editorDictation) {
+            $btnEditorMic.disabled = true;
+            $btnEditorMic.title = "Voice input is not supported in this browser";
+            $btnEditorMic.setAttribute("aria-disabled", "true");
+            return;
+        }
+
+        $btnEditorMic.setAttribute("aria-pressed", "false");
+        $btnEditorMic.addEventListener("click", () => {
+            if (!currentNotebook || !currentNote || !editor) return;
+            editorDictation.toggle();
+        });
     }
 
     // ── Autosave ────────────────────────────────────────────
@@ -970,6 +1027,7 @@
     };
 
     // ── Init ────────────────────────────────────────────────
+    setupEditorDictation();
     loadNotebooks();
     pollSyncStatus();
     // Reflect the background sync worker's state (and remote edits pulled in).

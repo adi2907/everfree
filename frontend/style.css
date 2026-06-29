@@ -552,6 +552,16 @@ body {
     color: var(--accent);
 }
 
+.btn-icon:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.editor-mic.is-listening {
+    background: color-mix(in srgb, var(--danger) 14%, transparent);
+    color: var(--danger);
+}
+
 .btn-save {
     background: var(--accent);
     color: var(--bg-body);
@@ -1578,8 +1588,8 @@ body {
 
 .note-card {
     width: 100%;
-    min-height: 88px;
-    padding: 15px 16px;
+    min-height: 48px;
+    padding: 13px 16px;
     display: flex;
     flex-direction: column;
     align-items: flex-start;
@@ -1626,6 +1636,7 @@ body {
 }
 
 .search-result-item {
+    min-height: 88px;
     align-items: stretch;
     white-space: normal;
 }
