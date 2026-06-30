@@ -30,6 +30,8 @@
     let devicePollTimer = null;
     let searchSeq = 0;
     let browseSearchTimer = null;
+    let captureDictation = null;
+    let noteDictation = null;
 
     // ── DOM ──────────────────────────────────────────────────
     const $ = id => document.getElementById(id);
@@ -38,6 +40,7 @@
     const VIEWS = ['signin', 'loading', 'repo-picker', 'app', 'note-edit'];
 
     function showView(name) {
+        if (name !== 'note-edit') stopDictation(noteDictation);
         VIEWS.forEach(v => {
             const el = $(`view-${v}`);
             if (!el) return;
@@ -630,6 +633,7 @@
 
     // ── Note Editor ──────────────────────────────────────────
     async function openNoteEdit(notebook, note) {
+        stopAllDictation();
         editingNotebook = notebook;
         editingNote = note;
         $('editor-title').textContent = note.replace(/\.md$/, '');
@@ -663,6 +667,100 @@
             btn.textContent = 'Save';
             btn.disabled = false;
         }
+    }
+
+    // ── Voice Input ─────────────────────────────────────────
+    function setMicState(id, active) {
+        const btn = $(id);
+        if (!btn) return;
+        btn.classList.toggle('is-listening', active);
+        btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+        btn.title = active ? 'Stop dictation' : 'Dictate';
+    }
+
+    function stopDictation(controller) {
+        if (controller && controller.active) controller.stop();
+    }
+
+    function stopAllDictation() {
+        stopDictation(captureDictation);
+        stopDictation(noteDictation);
+    }
+
+    function insertIntoTextarea(textarea, text) {
+        const spoken = String(text || '').trim();
+        if (!textarea || !spoken || textarea.disabled) return;
+        const suffix = spoken + ' ';
+        const start = textarea.selectionStart ?? textarea.value.length;
+        const end = textarea.selectionEnd ?? textarea.value.length;
+        textarea.value = textarea.value.slice(0, start) + suffix + textarea.value.slice(end);
+        const cursor = start + suffix.length;
+        textarea.selectionStart = cursor;
+        textarea.selectionEnd = cursor;
+        textarea.focus();
+        textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+
+    function setupDictationButton({ buttonId, textareaId, onFinal, onError }) {
+        const btn = $(buttonId);
+        if (!btn) return null;
+        if (typeof window.createDictation !== 'function' || !window.voiceInputSupported) {
+            btn.disabled = true;
+            btn.title = 'Voice input is not supported in this browser';
+            btn.setAttribute('aria-disabled', 'true');
+            return null;
+        }
+
+        const controller = window.createDictation({
+            onFinal(text) {
+                insertIntoTextarea($(textareaId), text);
+                if (onFinal) onFinal();
+            },
+            onState(active) {
+                setMicState(buttonId, active);
+            },
+            onError(error) {
+                setMicState(buttonId, false);
+                if (onError) onError(error);
+            },
+        });
+
+        if (!controller) {
+            btn.disabled = true;
+            btn.title = 'Voice input is not supported in this browser';
+            btn.setAttribute('aria-disabled', 'true');
+            return null;
+        }
+
+        btn.setAttribute('aria-pressed', 'false');
+        btn.addEventListener('click', () => {
+            if ($(textareaId)?.disabled) return;
+            if (buttonId === 'btn-capture-mic') stopDictation(noteDictation);
+            if (buttonId === 'btn-note-mic') stopDictation(captureDictation);
+            controller.toggle();
+        });
+        return controller;
+    }
+
+    function setupVoiceInput() {
+        captureDictation = setupDictationButton({
+            buttonId: 'btn-capture-mic',
+            textareaId: 'capture-area',
+            onFinal() {
+                $('btn-save').disabled = $('capture-area').value.trim() === '';
+            },
+            onError(error) {
+                showToast(error === 'not-allowed' ? 'Microphone permission denied' : 'Voice input stopped', 'error');
+            },
+        });
+
+        noteDictation = setupDictationButton({
+            buttonId: 'btn-note-mic',
+            textareaId: 'note-edit-area',
+            onError(error) {
+                showToast(error === 'not-allowed' ? 'Microphone permission denied' : 'Voice input stopped', 'error');
+            },
+        });
     }
 
     // ── Target Picker ────────────────────────────────────────
@@ -783,6 +881,8 @@
 
     // ── Tab Switching ────────────────────────────────────────
     function switchTab(name) {
+        if (name !== 'capture') stopDictation(captureDictation);
+        if (name !== 'browse') stopDictation(noteDictation);
         ['capture', 'browse', 'account'].forEach(t => {
             const pane = $(`tab-${t}`);
             pane.classList.toggle('active', t === name);
@@ -846,7 +946,10 @@
         browseSearchTimer = setTimeout(() => renderNoteList(e.target.value), 250);
     });
 
-    $('btn-back-browse').addEventListener('click', () => showView('app'));
+    $('btn-back-browse').addEventListener('click', () => {
+        stopDictation(noteDictation);
+        showView('app');
+    });
     $('btn-save-note').addEventListener('click', saveNoteEdit);
 
     $('btn-signout').addEventListener('click', signOut);
@@ -871,6 +974,7 @@
     });
 
     // ── Init ─────────────────────────────────────────────────
+    setupVoiceInput();
     if (token && user && repoFull) {
         showView('loading');
         $('loading-text').textContent = 'Loading your notes…';

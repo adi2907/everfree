@@ -880,6 +880,14 @@ html, body {
     background: var(--bg-sidebar-hover);
     color: var(--accent);
 }
+.btn-icon:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+.editor-mic.is-listening {
+    background: color-mix(in srgb, var(--danger) 14%, transparent);
+    color: var(--danger);
+}
 
 .btn-save { background: var(--accent); color: var(--bg-body); }
 .btn-save:hover {

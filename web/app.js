@@ -29,6 +29,7 @@
     let currentNote = null;
     let selectedNotebook = null; // notebook filter for the note browser (null = All notes)
     let editor = null;
+    let editorDictation = null;
     let isDirty = false;
     let searchSeq = 0;
     let noteBrowserRenderSeq = 0;
@@ -737,6 +738,7 @@
     // ── Open Note ───────────────────────────────────────────
     async function openNote(notebook, note) {
         if (isDirty && !confirm("You have unsaved changes. Discard?")) return;
+        stopEditorDictation();
 
         try {
             setSyncStatus("syncing", "Loading note…");
@@ -787,6 +789,66 @@
         });
     }
 
+    // ── Editor voice input ──────────────────────────────────
+    function setEditorMicActive(active) {
+        const $mic = $("btn-editor-mic");
+        if (!$mic) return;
+        $mic.classList.toggle("is-listening", active);
+        $mic.setAttribute("aria-pressed", active ? "true" : "false");
+        $mic.title = active ? "Stop dictation" : "Dictate into note (voice input)";
+    }
+
+    function stopEditorDictation() {
+        if (editorDictation && editorDictation.active) editorDictation.stop();
+    }
+
+    function appendDictationToEditor(text) {
+        const spoken = (text || "").trim();
+        if (!spoken || !editor) return;
+        editor.focus();
+        editor.insertText(spoken + " ");
+    }
+
+    function setupEditorDictation() {
+        const $mic = $("btn-editor-mic");
+        if (!$mic) return;
+        if (typeof window.createDictation !== "function" || !window.voiceInputSupported) {
+            $mic.disabled = true;
+            $mic.title = "Voice input is not supported in this browser";
+            $mic.setAttribute("aria-disabled", "true");
+            return;
+        }
+
+        editorDictation = window.createDictation({
+            onFinal: appendDictationToEditor,
+            onState: setEditorMicActive,
+            onError(error) {
+                setEditorMicActive(false);
+                const $s = $("save-status");
+                $s.textContent =
+                    error === "not-allowed"
+                        ? "Microphone permission denied"
+                        : error === "audio-capture"
+                            ? "No microphone found"
+                            : "Voice input stopped";
+                $s.className = "save-status";
+            },
+        });
+
+        if (!editorDictation) {
+            $mic.disabled = true;
+            $mic.title = "Voice input is not supported in this browser";
+            $mic.setAttribute("aria-disabled", "true");
+            return;
+        }
+
+        $mic.setAttribute("aria-pressed", "false");
+        $mic.addEventListener("click", () => {
+            if (!currentNotebook || !currentNote || !editor) return;
+            editorDictation.toggle();
+        });
+    }
+
     // ── Save Note ───────────────────────────────────────────
     async function saveNote() {
         if (!currentNotebook || !currentNote || !editor) return;
@@ -819,6 +881,7 @@
     async function deleteNote() {
         if (!currentNotebook || !currentNote) return;
         if (!confirm(`Delete "${currentNote}"? This cannot be undone.`)) return;
+        stopEditorDictation();
 
         try {
             setSyncStatus("syncing", "Deleting…");
@@ -1019,6 +1082,7 @@
     });
 
     // ── Init ────────────────────────────────────────────────
+    setupEditorDictation();
     applyTheme(getInitialTheme());
 
     if (token && user) {
