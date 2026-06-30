@@ -10,6 +10,7 @@
     const LS_USER = "everfree-user";
     const LS_REPO = "everfree-repo";
     const LS_THEME = "everfree-theme";
+    const LS_LIGHT_THEME_MIGRATED = "everfree-light-theme-migrated";
     const DEFAULT_REPO = "everfree-notes";
     const EVERFREE_REPO_DESCRIPTION_MARKER = "git-backed markdown notes";
 
@@ -26,9 +27,12 @@
     let noteModifiedCache = {}; // "notebook/note.md" -> timestamp (ms)
     let currentNotebook = null;
     let currentNote = null;
+    let selectedNotebook = null; // notebook filter for the note browser (null = All notes)
     let editor = null;
     let isDirty = false;
     let searchSeq = 0;
+    let noteBrowserRenderSeq = 0;
+    const NOTE_CARD_BATCH_SIZE = 100;
 
     let devicePollTimer = null;
 
@@ -546,78 +550,46 @@
         }
     }
 
-    // ── Render Sidebar ──────────────────────────────────────
+    // ── Render: notebook rail + note browser (three-pane) ───
     async function renderSidebar(filter = "") {
-        const query = filter.trim();
-        if (query) {
-            await renderSearchResults(query);
-            return;
-        }
-
+        renderNotebookLibrary();
+        const query = (filter || "").trim();
+        if (query) { await renderSearchResults(query); return; }
         searchSeq += 1;
+        renderNoteBrowser();
+    }
+
+    function renderNotebookLibrary() {
         const $list = $("notebook-list");
         $list.innerHTML = "";
+        const total = notebooks.reduce((sum, nb) => sum + (notesByNotebook[nb] || []).length, 0);
+        $("library-total").textContent = total ? String(total) : "";
+        $("btn-all-notes").classList.toggle("active", !selectedNotebook);
 
         for (const nb of notebooks) {
-            const notes = notesByNotebook[nb] || [];
-
-            const $item = document.createElement("div");
-            $item.className = "notebook-item";
-
             const $header = document.createElement("div");
             $header.className = "notebook-header";
-            if (currentNotebook === nb) $header.classList.add("active", "expanded");
-
+            if (selectedNotebook === nb) $header.classList.add("active");
             $header.innerHTML = `
-                <svg class="notebook-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none"
-                     stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <polyline points="9 18 15 12 9 6"/>
-                </svg>
                 <span class="notebook-name">${escapeHtml(nb)}</span>
-                <span class="notebook-count">${notes.length}</span>
+                <span class="notebook-count">${(notesByNotebook[nb] || []).length}</span>
                 <button class="notebook-add-note" title="New Note" data-notebook="${escapeAttr(nb)}">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                          stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M12 5v14M5 12h14"/>
                     </svg>
-                </button>
-            `;
-
-            const $noteList = document.createElement("div");
-            $noteList.className = "note-list";
-            if (currentNotebook === nb) $noteList.classList.add("expanded");
-
-            for (const note of notes) {
-                const $note = document.createElement("div");
-                $note.className = "note-item";
-                if (currentNotebook === nb && currentNote === note) {
-                    $note.classList.add("active");
-                }
-                $note.innerHTML = `<span class="note-item-icon">📄</span> ${escapeHtml(note.replace(/\.md$/, ""))}`;
-                $note.addEventListener("click", () => openNote(nb, note));
-                $noteList.appendChild($note);
-            }
-
+                </button>`;
             $header.addEventListener("click", (e) => {
                 if (e.target.closest(".notebook-add-note")) return;
-                const isExpanded = $header.classList.toggle("expanded");
-                $noteList.classList.toggle("expanded", isExpanded);
+                selectedNotebook = nb;
+                $("search-input").value = "";
+                renderSidebar();
             });
-
             $header.querySelector(".notebook-add-note").addEventListener("click", (e) => {
                 e.stopPropagation();
-                showModal("New Note", `Note name (in "${nb}")`, async (name) => {
-                    const noteName = name.endsWith(".md") ? name : name + ".md";
-                    setSyncStatus("syncing", "Creating…");
-                    await putFile(`${nb}/${noteName}`, `# ${name.replace(/\.md$/, "")}\n\n`, `Create note ${nb}/${noteName}`);
-                    await loadNotebooks();
-                    openNote(nb, noteName);
-                });
+                createNoteIn(nb);
             });
-
-            $item.appendChild($header);
-            $item.appendChild($noteList);
-            $list.appendChild($item);
+            $list.appendChild($header);
         }
 
         if (notebooks.length === 0) {
@@ -625,19 +597,62 @@
         }
     }
 
+    function renderNoteBrowser() {
+        const renderSeq = ++noteBrowserRenderSeq;
+        const visible = selectedNotebook
+            ? (notesByNotebook[selectedNotebook] || []).map((note) => ({ notebook: selectedNotebook, note }))
+            : notebooks.flatMap((nb) => (notesByNotebook[nb] || []).map((note) => ({ notebook: nb, note })));
+
+        $("note-browser-title").textContent = selectedNotebook || "All notes";
+        const $list = $("note-browser-list");
+        $list.innerHTML = "";
+
+        if (visible.length === 0) {
+            $list.innerHTML = '<div class="notebook-loading">No notes here yet.</div>';
+            return;
+        }
+
+        function appendBatch(start) {
+            if (renderSeq !== noteBrowserRenderSeq) return;
+            const frag = document.createDocumentFragment();
+            const end = Math.min(start + NOTE_CARD_BATCH_SIZE, visible.length);
+            for (let i = start; i < end; i++) frag.appendChild(createNoteCard(visible[i]));
+            $list.appendChild(frag);
+            if (end < visible.length) requestAnimationFrame(() => appendBatch(end));
+        }
+        appendBatch(0);
+    }
+
+    function createNoteCard(item) {
+        const $note = document.createElement("button");
+        $note.type = "button";
+        $note.className = "note-card";
+        if (currentNotebook === item.notebook && currentNote === item.note) $note.classList.add("active");
+        $note.innerHTML = `
+            <span class="note-card-title">${escapeHtml(item.note.replace(/\.md$/, ""))}</span>`;
+        $note.addEventListener("click", () => openNote(item.notebook, item.note));
+        return $note;
+    }
+
+    function createNoteIn(nb) {
+        showModal("New Note", `Create note in "${nb}"`, async (name) => {
+            const noteName = name.endsWith(".md") ? name : name + ".md";
+            setSyncStatus("syncing", "Creating…");
+            await putFile(`${nb}/${noteName}`, `# ${name.replace(/\.md$/, "")}\n\n`, `Create note ${nb}/${noteName}`);
+            await loadNotebooks();
+            openNote(nb, noteName);
+        });
+    }
+
     async function renderSearchResults(query) {
         const seq = ++searchSeq;
-        const $list = $("notebook-list");
+        $("note-browser-title").textContent = "Search";
+        const $list = $("note-browser-list");
         $list.innerHTML = '<div class="notebook-loading">Searching note contents…</div>';
 
         try {
             const results = await searchNotes(query);
             if (seq !== searchSeq) return;
-
-            if (results.length === 0) {
-                $list.innerHTML = '<div class="notebook-loading">No matching notes.</div>';
-                return;
-            }
 
             $list.innerHTML = "";
             const $header = document.createElement("div");
@@ -645,20 +660,23 @@
             $header.textContent = `${results.length} result${results.length === 1 ? "" : "s"}`;
             $list.appendChild($header);
 
+            if (results.length === 0) {
+                const $none = document.createElement("div");
+                $none.className = "notebook-loading";
+                $none.textContent = "No matching notes.";
+                $list.appendChild($none);
+                return;
+            }
+
             for (const result of results) {
-                const $note = document.createElement("div");
-                $note.className = "note-item search-result-item";
-                if (currentNotebook === result.notebook && currentNote === result.note) {
-                    $note.classList.add("active");
-                }
+                const $note = document.createElement("button");
+                $note.type = "button";
+                $note.className = "note-card search-result-item";
+                if (currentNotebook === result.notebook && currentNote === result.note) $note.classList.add("active");
                 $note.innerHTML = `
-                    <span class="note-item-icon">📄</span>
-                    <span class="search-result-body">
-                        <span>${escapeHtml(result.title)}</span>
-                        <span class="search-result-meta">${escapeHtml(result.notebook)}</span>
-                        ${result.snippet ? `<span class="search-result-snippet">${escapeHtml(result.snippet)}</span>` : ""}
-                    </span>
-                `;
+                    <span class="note-card-title">${escapeHtml(result.title)}</span>
+                    <span class="note-card-preview">${result.snippet ? escapeHtml(result.snippet) : "Markdown note"}</span>
+                    <span class="note-card-meta">${escapeHtml(result.notebook)}</span>`;
                 $note.addEventListener("click", () => openNote(result.notebook, result.note));
                 $list.appendChild($note);
             }
@@ -731,6 +749,7 @@
 
             $("empty-state").style.display = "none";
             $("editor-container").style.display = "flex";
+            document.body.classList.add("mobile-edit"); // phone single-pane → editor full screen
             $("note-breadcrumb").textContent = `${notebook} / ${note.replace(/\.md$/, "")}`;
             $("save-status").textContent = "";
 
@@ -754,7 +773,7 @@
             placeholder: "Start writing…",
         });
 
-        const isDark = (localStorage.getItem(LS_THEME) || "dark") === "dark";
+        const isDark = (localStorage.getItem(LS_THEME) || "light") === "dark";
         const tuiWrapper = document.querySelector(".toastui-editor-defaultUI");
         if (tuiWrapper) tuiWrapper.classList.toggle("toastui-editor-dark", isDark);
 
@@ -811,6 +830,7 @@
             isDirty = false;
             $("editor-container").style.display = "none";
             $("empty-state").style.display = "flex";
+            document.body.classList.remove("mobile-edit");
 
             setSyncStatus("ok", repoFull);
             await loadNotebooks();
@@ -884,6 +904,15 @@
         localStorage.setItem(LS_THEME, theme);
     }
 
+    function getInitialTheme() {
+        const stored = localStorage.getItem(LS_THEME);
+        if (!localStorage.getItem(LS_LIGHT_THEME_MIGRATED)) {
+            localStorage.setItem(LS_LIGHT_THEME_MIGRATED, "1");
+            if (stored === "dark") return "light";
+        }
+        return stored || "light";
+    }
+
     // ── Account Popover ─────────────────────────────────────
     function toggleAccountPopover() {
         const $pop = $("account-popover");
@@ -923,7 +952,7 @@
     });
 
     $("btn-theme").addEventListener("click", () => {
-        const current = document.documentElement.getAttribute("data-theme") || "dark";
+        const current = document.documentElement.getAttribute("data-theme") || "light";
         applyTheme(current === "dark" ? "light" : "dark");
     });
 
@@ -941,13 +970,41 @@
         if (e.key === "Escape") hideModal();
     });
 
-    $("btn-new-notebook").addEventListener("click", () => {
+    function newNotebook() {
         showModal("New Notebook", "Notebook name…", async (name) => {
             setSyncStatus("syncing", "Creating notebook…");
             // Create a .gitkeep file in the new folder
             await putFile(`${name}/.gitkeep`, "", `Create notebook ${name}`);
             await loadNotebooks();
         });
+    }
+    $("btn-new-notebook").addEventListener("click", newNotebook);
+    $("btn-new-notebook-inline").addEventListener("click", newNotebook);
+
+    // Library "All notes" home — clears the notebook filter.
+    $("btn-all-notes").addEventListener("click", () => {
+        selectedNotebook = null;
+        $("search-input").value = "";
+        renderSidebar();
+    });
+
+    // Note-browser "+" — create a note in the selected (or first) notebook.
+    $("btn-new-note").addEventListener("click", () => {
+        const nb = selectedNotebook || currentNotebook || notebooks[0];
+        if (!nb) { newNotebook(); return; }
+        createNoteIn(nb);
+    });
+
+    // Collapsed-rail actions (shown on narrow widths).
+    $("btn-show-notes").addEventListener("click", () => {
+        selectedNotebook = null;
+        renderSidebar();
+    });
+    $("btn-rail-search").addEventListener("click", () => $("search-input").focus());
+
+    // Phone single-pane: return from the editor to the note list.
+    $("btn-mobile-back").addEventListener("click", () => {
+        document.body.classList.remove("mobile-edit");
     });
 
     document.addEventListener("keydown", (e) => {
@@ -962,7 +1019,7 @@
     });
 
     // ── Init ────────────────────────────────────────────────
-    applyTheme(localStorage.getItem(LS_THEME) || "dark");
+    applyTheme(getInitialTheme());
 
     if (token && user) {
         if (repoFull) {

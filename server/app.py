@@ -553,7 +553,8 @@ async def lifespan(app: FastAPI):
         await asyncio.sleep(0.5)
         webbrowser.open(f"http://127.0.0.1:{PORT}")
 
-    asyncio.create_task(_open_browser())
+    if not os.environ.get("EVERFREE_NO_BROWSER"):
+        asyncio.create_task(_open_browser())
     yield
     stop_sync_worker(flush=True)
 

@@ -3,21 +3,23 @@
    ════════════════════════════════════════════════════════════ */
 
 :root {
-    --bg-body:      #0f1117;
-    --bg-surface:   #1a1c2a;
-    --bg-input:     #1e2030;
-    --bg-elevated:  #22243a;
-    --border:       #2a2d3e;
-    --border-light: #353850;
+    /* Warm green light palette — matches the refreshed desktop app. */
+    --bg-body:      #ffffff;
+    --bg-surface:   #f4f4ef;
+    --bg-input:     #e8e8e3;
+    --bg-elevated:  #ffffff;
+    --border:       #deded8;
+    --border-light: #cecfca;
 
-    --text-primary:   #e2e4f0;
-    --text-secondary: #8b8faa;
-    --text-muted:     #5c5f78;
+    --text-primary:   #262722;
+    --text-secondary: #686a64;
+    --text-muted:     #92938d;
 
-    --accent:       #4fd1c5;
-    --accent-hover: #38b2ac;
-    --danger:       #f56565;
-    --success:      #68d391;
+    --accent:       #47735a;
+    --accent-hover: #355f47;
+    --accent-subtle: #dce7df;
+    --danger:       #b64f4f;
+    --success:      #4c9466;
 
     --font: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     --font-mono: 'SF Mono', 'Menlo', 'Fira Code', monospace;
@@ -66,9 +68,9 @@ button { cursor: pointer; font-family: var(--font); background: none; border: no
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
     background:
-        radial-gradient(circle at 12% 4%, rgba(79, 209, 197, 0.2), transparent 34%),
-        radial-gradient(circle at 92% 0%, rgba(246, 173, 85, 0.12), transparent 28%),
-        linear-gradient(160deg, #0b0f14 0%, var(--bg-body) 58%, #15120c 100%);
+        radial-gradient(circle at 12% 4%, rgba(71, 115, 90, 0.12), transparent 34%),
+        radial-gradient(circle at 92% 0%, rgba(182, 123, 49, 0.08), transparent 28%),
+        linear-gradient(160deg, #eef0ea 0%, var(--bg-body) 56%, #f4f1e9 100%);
 }
 
 .signin-box {
@@ -133,10 +135,10 @@ button { cursor: pointer; font-family: var(--font); background: none; border: no
     gap: 10px;
     margin-top: 4px;
     padding: 16px;
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    border: 1px solid var(--border);
     border-radius: 18px;
-    background: rgba(26, 28, 42, 0.78);
-    box-shadow: 0 18px 54px rgba(0, 0, 0, 0.25);
+    background: var(--bg-surface);
+    box-shadow: 0 14px 40px rgba(38, 39, 34, 0.08);
 }
 
 .mobile-download,
@@ -199,7 +201,7 @@ button { cursor: pointer; font-family: var(--font); background: none; border: no
     gap: 10px;
     padding: 14px 24px;
     background: var(--text-primary);
-    color: #0f1117;
+    color: #fff;
     border-radius: var(--radius);
     font-size: 15px;
     font-weight: 600;
@@ -384,7 +386,7 @@ button { cursor: pointer; font-family: var(--font); background: none; border: no
     flex-shrink: 0;
     padding: 9px 18px;
     background: var(--accent);
-    color: #0f1117;
+    color: #fff;
     border-radius: 20px;
     font-size: 14px;
     font-weight: 600;
@@ -629,7 +631,7 @@ button { cursor: pointer; font-family: var(--font); background: none; border: no
 .btn-save-note {
     padding: 8px 16px;
     background: var(--accent);
-    color: #0f1117;
+    color: #fff;
     border-radius: 20px;
     font-size: 14px;
     font-weight: 600;
@@ -658,7 +660,7 @@ button { cursor: pointer; font-family: var(--font); background: none; border: no
 .drawer-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.6);
+    background: rgba(38, 39, 34, 0.38);
     z-index: 100;
 }
 .drawer-overlay.hidden { display: none; }
@@ -761,7 +763,7 @@ button { cursor: pointer; font-family: var(--font); background: none; border: no
     pointer-events: none;
 }
 .toast.hidden { display: none; }
-.toast-success { background: var(--success); color: #0f1117; }
+.toast-success { background: var(--success); color: #fff; }
 .toast-error { background: var(--danger); color: #fff; }
 
 /* ── SPINNER ────────────────────────────────────────────────── */
