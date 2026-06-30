@@ -733,6 +733,45 @@ def _empty_completion_event(finish_reason: str | None) -> dict:
     return {"type": "error", "detail": detail}
 
 
+def _content_text(value) -> str:
+    """Normalize OpenAI/OpenRouter content shapes into visible text.
+
+    Most providers stream a string in delta.content, but OpenRouter can expose
+    provider-native structured content parts. Treat only text-like parts as
+    visible answer text and ignore images/tool annotations here.
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        parts = []
+        for item in value:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text") or item.get("content")
+                if isinstance(text, str):
+                    parts.append(text)
+        return "".join(parts)
+    if isinstance(value, dict):
+        text = value.get("text") or value.get("content")
+        return text if isinstance(text, str) else ""
+    return ""
+
+
+def _append_visible_text(text: str, answer_text: str, think_buf: str, in_think: bool):
+    if not text:
+        return answer_text, think_buf, in_think, []
+    pieces, think_buf, in_think = _split_think(think_buf + text, in_think)
+    events = []
+    for kind, piece in pieces:
+        if kind == "reason":
+            events.append({"type": "reason", "text": piece})
+        else:
+            answer_text += piece
+            events.append({"type": "delta", "text": piece})
+    return answer_text, think_buf, in_think, events
+
+
 async def _openai_compatible_events(
     messages: list[dict], tools: list | None, settings: dict, max_tokens: int,
     no_thinking: bool = False, max_rounds: int = MAX_TOOL_ROUNDS,
@@ -767,13 +806,19 @@ async def _openai_compatible_events(
                 "model": model,
                 "messages": messages,
                 "temperature": 0.7,
-                "max_tokens": max_tokens,
                 "stream": True,
             }
+            if provider == "openrouter":
+                payload["max_completion_tokens"] = max_tokens
+                if no_thinking:
+                    payload["reasoning"] = {"effort": "minimal", "exclude": True}
+            else:
+                payload["max_tokens"] = max_tokens
             if tools:
                 payload["tools"] = tools
 
             answer_text = ""           # visible answer with <think> spans removed
+            snapshot_text = ""         # full-message snapshots some providers stream
             tool_acc: dict[int, dict] = {}
             finish_reason = None
             think_buf, in_think = "", False
@@ -800,18 +845,26 @@ async def _openai_compatible_events(
                     delta = choice.get("delta") or {}
 
                     reason = delta.get("reasoning") or delta.get("reasoning_content")
+                    if not reason:
+                        reason = (choice.get("message") or {}).get("reasoning")
                     if reason:
                         yield {"type": "reason", "text": reason}
 
-                    content = delta.get("content")
-                    if content:
-                        pieces, think_buf, in_think = _split_think(think_buf + content, in_think)
-                        for kind, text in pieces:
-                            if kind == "reason":
-                                yield {"type": "reason", "text": text}
+                    content = _content_text(delta.get("content"))
+                    if not content:
+                        message_content = _content_text((choice.get("message") or {}).get("content"))
+                        if message_content:
+                            if message_content.startswith(snapshot_text):
+                                content = message_content[len(snapshot_text):]
                             else:
-                                answer_text += text
-                                yield {"type": "delta", "text": text}
+                                content = message_content
+                            snapshot_text = message_content
+
+                    answer_text, think_buf, in_think, events = _append_visible_text(
+                        content, answer_text, think_buf, in_think
+                    )
+                    for event in events:
+                        yield event
 
                     for tc in delta.get("tool_calls") or []:
                         slot = tool_acc.setdefault(
