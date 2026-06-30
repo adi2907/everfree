@@ -446,10 +446,9 @@ body {
     display: none !important;
 }
 
-/* Toolbar */
+/* Toast UI's built-in toolbar duplicates EverFree's own top controls. */
 .toastui-editor-defaultUI .toastui-editor-toolbar {
-    background: var(--bg-surface) !important;
-    border-bottom: 1px solid var(--border) !important;
+    display: none !important;
 }
 
 .toastui-editor-defaultUI .toastui-editor-toolbar-icons {
@@ -1694,18 +1693,7 @@ body {
 }
 
 .toastui-editor-defaultUI .toastui-editor-toolbar {
-    position: absolute !important;
-    z-index: 5;
-    bottom: 18px;
-    left: 50%;
-    width: max-content;
-    max-width: calc(100% - 40px);
-    padding: 4px 8px !important;
-    transform: translateX(-50%);
-    border: 1px solid var(--border) !important;
-    border-radius: 9px;
-    background: color-mix(in srgb, var(--bg-surface) 94%, transparent) !important;
-    box-shadow: 0 8px 24px rgba(32, 36, 30, 0.08);
+    display: none !important;
 }
 
 .toastui-editor-defaultUI .toastui-editor-toolbar-group {
