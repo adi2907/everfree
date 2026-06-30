@@ -144,7 +144,7 @@
             "<code>/search</code> a topic — research the web and draft a passage with sources<br>" +
             "<code>/image</code> a prompt — generate an image into your note's assets<br>" +
             "<code>/chats</code> [text] — browse this note's past chats (optionally filtered)<br>" +
-            "<kbd>⌘.</kbd> continue writing · <kbd>⌘K</kbd> toggle panel · the ✎ icon starts a new chat";
+            "<kbd>⌘.</kbd> continue writing · <kbd>⌘K</kbd> toggle panel · use Clear chat to start fresh";
         $messages.appendChild(h);
     }
 
@@ -314,6 +314,15 @@
         showHint();
         if ($panel.hidden) togglePanel(true);
         else $input.focus();
+    }
+
+    function clearChat() {
+        if (busy) return;
+        const hasChat = currentChat.messages.length > 0 || $messages.querySelector(".assist-msg");
+        if (hasChat && !confirm("Clear this chat and start fresh? Saved chats remain available through /chats.")) {
+            return;
+        }
+        startNewChat();
     }
 
     async function loadNoteChats(notebook, note) {
@@ -868,7 +877,7 @@
     // ── Events ──────────────────────────────────────────────
     if ($btnAssist) $btnAssist.addEventListener("click", () => togglePanel());
     $btnClose.addEventListener("click", () => togglePanel(false));
-    $btnNew.addEventListener("click", startNewChat);
+    $btnNew.addEventListener("click", clearChat);
     $btnSettings.addEventListener("click", () => {
         if ($settings.hidden) openSettings();
         else $settings.hidden = true;
