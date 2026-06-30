@@ -261,25 +261,6 @@
         scrollToBottom();
     }
 
-    function addInsertButton(onInsert) {
-        const $bar = document.createElement("div");
-        $bar.className = "assist-actions-row";
-        const $btn = document.createElement("button");
-        $btn.className = "btn btn-ghost assist-insert-btn";
-        $btn.textContent = "Insert into note";
-        $btn.addEventListener("click", () => {
-            if (onInsert()) {
-                $btn.textContent = "✓ Inserted";
-                $btn.disabled = true;
-            } else {
-                addErrorLine("Open a note first, then insert.");
-            }
-        });
-        $bar.appendChild($btn);
-        $messages.appendChild($bar);
-        scrollToBottom();
-    }
-
     function setBusy(value) {
         busy = value;
         $send.disabled = value;
@@ -366,7 +347,6 @@
                 } else {
                     const text = m.content;
                     addBubble("assistant", text);
-                    addInsertButton(() => bridge() && bridge().insertMarkdown(text));
                 }
             }
         } catch {
@@ -510,8 +490,6 @@
             const text = await streamChat({ mode: "chat", messages: currentChat.messages, note });
             if (text) {
                 currentChat.messages.push({ role: "assistant", content: text });
-                const toInsert = text;
-                addInsertButton(() => bridge() && bridge().insertMarkdown(toInsert));
                 await persistChat();
             }
         } catch (err) {
@@ -532,11 +510,7 @@
         addBubble("user", "⌘. Continue writing");
         setBusy(true);
         try {
-            const text = await streamChat({ mode: "continue", note });
-            if (text) {
-                const toInsert = text;
-                addInsertButton(() => bridge() && bridge().insertAtCursor(toInsert));
-            }
+            await streamChat({ mode: "continue", note });
         } catch (err) {
             addErrorLine(err.message);
         } finally {
@@ -574,7 +548,6 @@
             $img.alt = prompt;
             $wrap.appendChild($img);
             $messages.appendChild($wrap);
-            addInsertButton(() => bridge() && bridge().insertImage(data.rel_path, prompt));
         } catch (err) {
             $line.remove();
             addErrorLine(err.message);
@@ -668,20 +641,6 @@
                 $saved.className = "assist-research-saved";
                 $saved.textContent = `Saved as ${(job.notebook ? job.notebook + "/" : "") + job.new_note}`;
                 $actions.appendChild($saved);
-            }
-            if (job.result) {
-                const $insert = document.createElement("button");
-                $insert.className = "btn btn-ghost assist-insert-btn";
-                $insert.textContent = "Insert into note";
-                $insert.addEventListener("click", () => {
-                    if (bridge() && bridge().insertMarkdown(job.result)) {
-                        $insert.textContent = "✓ Inserted";
-                        $insert.disabled = true;
-                    } else {
-                        addErrorLine("Open a note first, then insert.");
-                    }
-                });
-                $actions.appendChild($insert);
             }
         } else if (job.error && status !== "running") {
             const $err = document.createElement("div");
