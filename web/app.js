@@ -759,6 +759,7 @@
             initEditor(content);
             renderSidebar($("search-input").value);
             setSyncStatus("ok", repoFull);
+            window.dispatchEvent(new CustomEvent("everfree:note-changed", { detail: { notebook, note } }));
         } catch (err) {
             console.error("Failed to open note:", err);
             alert("Failed to open note: " + err.message);
@@ -1080,6 +1081,20 @@
     window.addEventListener("beforeunload", (e) => {
         if (isDirty) { e.preventDefault(); e.returnValue = ""; }
     });
+
+    // ── Assistant bridge ────────────────────────────────────
+    // Lets assist.js read the open note and the user's selection without
+    // reaching into this module's private state.
+    window.EverFreeBridge = {
+        getNote() {
+            if (!currentNotebook || !currentNote || !editor) return null;
+            return { notebook: currentNotebook, note: currentNote, content: editor.getMarkdown() };
+        },
+        getSelection() {
+            if (!editor || !editor.getSelectedText) return "";
+            try { return (editor.getSelectedText() || "").trim(); } catch { return ""; }
+        },
+    };
 
     // ── Init ────────────────────────────────────────────────
     setupEditorDictation();

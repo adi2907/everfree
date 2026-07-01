@@ -647,6 +647,7 @@
             $('note-edit-area').value = content;
             $('note-edit-area').disabled = false;
             $('btn-save-note').disabled = false;
+            window.dispatchEvent(new CustomEvent('everfree:note-changed', { detail: { notebook, note } }));
         } catch (err) {
             $('note-edit-area').value = `Error loading note: ${err.message}`;
         }
@@ -972,6 +973,20 @@
     document.querySelectorAll('.nav-btn').forEach(btn => {
         btn.addEventListener('click', () => switchTab(btn.dataset.tab));
     });
+
+    // ── Assistant bridge ─────────────────────────────────────
+    window.EverFreeBridge = {
+        getNote() {
+            const ta = $('note-edit-area');
+            if (!editingNotebook || !editingNote || !ta) return null;
+            return { notebook: editingNotebook, note: editingNote, content: ta.value };
+        },
+        getSelection() {
+            const ta = $('note-edit-area');
+            if (!ta) return '';
+            return (ta.value.slice(ta.selectionStart || 0, ta.selectionEnd || 0) || '').trim();
+        },
+    };
 
     // ── Init ─────────────────────────────────────────────────
     setupVoiceInput();
