@@ -835,76 +835,6 @@ body {
     overflow-y: auto;
 }
 
-/* Deep-research card */
-.assist-research {
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-left: 3px solid var(--accent);
-    border-radius: var(--radius);
-    padding: 10px 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-}
-.assist-research-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-}
-.assist-research-badge {
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--accent);
-}
-.assist-research-state {
-    font-size: 11px;
-    color: var(--text-secondary);
-    font-family: var(--font-mono);
-}
-.assist-research[data-status="done"] .assist-research-state { color: var(--success); }
-.assist-research[data-status="error"] .assist-research-state,
-.assist-research[data-status="interrupted"] .assist-research-state { color: var(--danger); }
-.assist-research-topic {
-    font-size: 13px;
-    color: var(--text-primary);
-    font-weight: 500;
-}
-.assist-research-log {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-}
-.assist-research-logrow {
-    font-size: 11px;
-    color: var(--text-secondary);
-    font-family: var(--font-mono);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-.assist-research-actions {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-}
-.assist-research-saved { font-size: 11px; color: var(--text-muted); }
-.assist-research-err { font-size: 12px; color: var(--danger); }
-
-/* Notification dot on the toolbar assistant button after a background run */
-#btn-assist { position: relative; }
-#btn-assist.has-badge::after {
-    content: "";
-    position: absolute;
-    top: 4px;
-    right: 4px;
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: var(--accent);
-    box-shadow: 0 0 0 2px var(--bg-sidebar);
-}
-
 .assist-messages {
     flex: 1;
     overflow-y: auto;
@@ -965,6 +895,13 @@ body {
     display: block;
 }
 
+.assist-image-meta {
+    margin-top: 4px;
+    font-size: 10px;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+}
+
 .assist-tool {
     font-size: 11px;
     color: var(--text-secondary);
@@ -995,11 +932,53 @@ body {
 }
 
 .assist-inputbar {
+    position: relative;
     display: flex;
     align-items: flex-end;
     gap: 8px;
     padding: 12px 14px;
     border-top: 1px solid var(--border);
+}
+
+/* Claude Code–style slash command menu, floating above the input */
+.assist-slash-menu {
+    position: absolute;
+    left: 14px;
+    right: 14px;
+    bottom: calc(100% - 6px);
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.32);
+    overflow: hidden;
+    z-index: 20;
+}
+
+.assist-slash-menu[hidden] { display: none; }
+
+.assist-slash-item {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding: 8px 12px;
+    cursor: pointer;
+}
+
+.assist-slash-item.active { background: var(--bg-sidebar-hover); }
+
+.assist-slash-cmd {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--accent);
+    flex-shrink: 0;
+}
+
+.assist-slash-desc {
+    font-size: 11px;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .assist-inputbar textarea {
@@ -1082,23 +1061,24 @@ body {
     display: none;
 }
 
-.assist-provider-choice {
-    flex-direction: row !important;
-    align-items: center;
-    gap: 7px !important;
-    color: var(--text-primary);
-    font-weight: 600;
-}
-
-.assist-provider-choice input {
-    width: auto;
-    margin: 0;
-    accent-color: var(--accent);
+.assist-settings-hint {
+    color: var(--text-muted);
+    font-size: 11px;
+    margin: -2px 0 8px;
 }
 
 .assist-settings-common {
     padding-top: 10px;
     border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.assist-settings-section {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-primary);
 }
 
 .assist-label-hint {

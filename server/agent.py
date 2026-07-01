@@ -2,7 +2,8 @@
 EverFree — Writing Assist Agent
 
 Provider-selectable agent: text generation can run through LM Studio,
-OpenRouter, or the Gemini API. Image generation goes through OpenRouter.
+OpenRouter, or the Gemini API. Image generation prefers the (free-tier)
+Gemini API and falls back to OpenRouter when Gemini is unset or rate-limited.
 Web search uses Serper, and result pages are fetched and reduced to readable
 text with a stdlib HTML parser so no extra dependencies enter the bundle.
 
@@ -19,7 +20,6 @@ import logging
 import os
 import re
 import time
-import uuid
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import quote
@@ -37,9 +37,6 @@ SETTINGS_FILE = Path.home() / ".everfree_agent.json"
 # Chat sessions live on local disk, outside the notes repo so they are never
 # pushed to GitHub. One JSON file per chat, indexed by the note it belongs to.
 CHATS_DIR = Path(os.environ.get("EVERFREE_CHATS_DIR", Path.home() / ".everfree_chats"))
-# Background deep-research jobs persist here (outside the notes repo) so they
-# survive panel close, note switches, and server restarts. One JSON per job.
-RESEARCH_DIR = Path(os.environ.get("EVERFREE_RESEARCH_DIR", Path.home() / ".everfree_research"))
 
 DEFAULT_SETTINGS = {
     "active_provider": "lmstudio",
@@ -50,19 +47,16 @@ DEFAULT_SETTINGS = {
     "gemini_api_key": "",
     "gemini_model": "gemini-2.5-flash",
     "serper_api_key": "",
-    "image_model": "google/gemini-2.5-flash-image",
-    # Deep research can run on a separate, usually larger model. Blank values
-    # fall back to the active provider / its normal model.
-    "research_provider": "",
-    "research_model": "",
+    # Nano Banana 2 Lite. Stored as the OpenRouter slug; the direct Gemini API
+    # call derives its model id by dropping the leading "google/".
+    "image_model": "google/gemini-3.1-flash-lite-image",
 }
 
 PROVIDERS = {"lmstudio", "openrouter", "gemini"}
 
-# Foreground chat allows a handful of tool rounds; background research plans
-# over many more searches and page reads before it synthesizes a report.
+# Chat allows a handful of tool rounds so the agent can search the web and read
+# a couple of pages (or read your other notes) before it answers.
 MAX_TOOL_ROUNDS = 8
-RESEARCH_MAX_ROUNDS = 18
 NOTE_CONTEXT_LIMIT = 8000
 PAGE_TEXT_LIMIT = 6000
 SEARCH_RESULT_COUNT = 6
@@ -94,8 +88,6 @@ def _public_settings(settings: dict) -> dict:
         "openrouter_model": settings["openrouter_model"],
         "gemini_model": settings["gemini_model"],
         "image_model": settings["image_model"],
-        "research_provider": settings["research_provider"],
-        "research_model": settings["research_model"],
         "openrouter_api_key_set": bool(settings["openrouter_api_key"]),
         "gemini_api_key_set": bool(settings["gemini_api_key"]),
         "serper_api_key_set": bool(settings["serper_api_key"]),
@@ -116,8 +108,6 @@ async def update_settings(request: Request):
             settings[key] = body[key].strip()
     if settings["active_provider"] not in PROVIDERS:
         raise HTTPException(status_code=400, detail="Invalid AI provider")
-    if settings["research_provider"] and settings["research_provider"] not in PROVIDERS:
-        raise HTTPException(status_code=400, detail="Invalid research provider")
     _save_settings(settings)
     return _public_settings(settings)
 
@@ -460,10 +450,6 @@ TOOLS = [
     },
 ]
 
-# Tools offered to background research: read + web only. The single output
-# note is written by the research runner itself, not by a tool call.
-RESEARCH_TOOLS = [t for t in TOOLS if t["function"]["name"] != "create_note"]
-
 
 async def _tool_web_search(query: str, settings: dict) -> str:
     api_key = settings["serper_api_key"]
@@ -581,7 +567,7 @@ async def _tool_list_notes(notebook: str) -> str:
 
 async def _create_note_file(notebook: str, title: str, content: str) -> str:
     """Create a new note, never overwriting. Returns the final file name.
-    Raises on invalid input. Shared by the create_note tool and research."""
+    Raises on invalid input. Backs the create_note tool."""
     from server import app as app_module
     notebook = (notebook or "").strip()
     title = (title or "").strip()
@@ -1044,7 +1030,7 @@ async def _gemini_events(
 
 def _resolve_settings(override: dict | None = None) -> dict:
     """Load settings, optionally swapping the active provider/model for one
-    run (used by the deep-research override and any per-request override)."""
+    run (used by a per-request override)."""
     settings = _load_settings()
     if override:
         settings = dict(settings)
@@ -1133,207 +1119,62 @@ async def agent_chat(request: Request):
     )
 
 
-# ── Deep research (background agent) ─────────────────────────
-RESEARCH_SYSTEM_PROMPT = """You are a deep-research agent inside EverFree, a Markdown note-taking app.
-You are given a topic. Investigate it thoroughly, then produce a well-structured Markdown report the user can keep as a note.
-
-Method:
-- Plan the questions you need to answer.
-- Use web_search to find sources, then read_page on the most credible ones before drawing conclusions. Corroborate important claims across more than one source.
-- Use search_notes / read_note to fold in anything relevant the user has already written.
-- Keep going until you can write a confident, specific report — don't stop after a single search.
-
-Output: a Markdown document that starts with a '# ' title, uses clear sections and bullet points where useful, and ends with a '## Sources' list of the pages you actually used as Markdown links. Write the report itself as your final message — no meta commentary about the process."""
-
-# In-memory mirror of job records + their live asyncio tasks. Records also
-# persist to RESEARCH_DIR so they survive panel close, note switches, restarts.
-RESEARCH_JOBS: dict[str, dict] = {}
-RESEARCH_TASKS: dict[str, asyncio.Task] = {}
+# ── Image generation (Gemini free tier → OpenRouter fallback) ─
+def _ext_from_mime(mime: str) -> str:
+    subtype = (mime or "image/png").split("/")[-1].lower()
+    return {"jpeg": "jpg"}.get(subtype, subtype)
 
 
-def _ensure_research_dir() -> None:
-    RESEARCH_DIR.mkdir(parents=True, exist_ok=True)
+async def _gemini_image(prompt: str, model: str, api_key: str) -> tuple[str, bytes]:
+    """Generate one image through the direct Gemini API. Raises on any failure;
+    a 429 means the free tier is exhausted and the caller should fall back."""
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    async with httpx.AsyncClient(timeout=120) as client:
+        resp = await client.post(
+            url,
+            params={"key": api_key},
+            json={
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
+            },
+        )
+    if resp.status_code != 200:
+        raise RuntimeError(f"Gemini HTTP {resp.status_code}: {resp.text[:200]}")
+    parts = (((resp.json().get("candidates") or [{}])[0]).get("content") or {}).get("parts") or []
+    for part in parts:
+        inline = part.get("inlineData") or part.get("inline_data")
+        if inline and inline.get("data"):
+            mime = inline.get("mimeType") or inline.get("mime_type") or "image/png"
+            return _ext_from_mime(mime), base64.b64decode(inline["data"])
+    raise RuntimeError("Gemini returned no image")
 
 
-def _safe_research_path(job_id: str) -> Path:
-    if not re.match(r"^[A-Za-z0-9_-]{1,128}$", job_id or ""):
-        raise HTTPException(status_code=400, detail="Invalid research id")
-    return RESEARCH_DIR / f"{job_id}.json"
+async def _openrouter_image(prompt: str, model: str, api_key: str) -> tuple[str, bytes]:
+    """Generate one image through OpenRouter's chat-completions image modality."""
+    async with httpx.AsyncClient(timeout=120) as client:
+        resp = await client.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "modalities": ["image", "text"],
+            },
+        )
+    if resp.status_code != 200:
+        raise RuntimeError(f"OpenRouter HTTP {resp.status_code}: {resp.text[:200]}")
+    message = (resp.json().get("choices") or [{}])[0].get("message", {})
+    images = message.get("images") or []
+    if not images:
+        text = (message.get("content") or "no image returned").strip()
+        raise RuntimeError(f"no image returned: {text[:160]}")
+    image_url = images[0].get("image_url", {}).get("url", "")
+    match = re.match(r"^data:image/(\w+);base64,(.+)$", image_url, re.DOTALL)
+    if not match:
+        raise RuntimeError("unexpected image format")
+    return _ext_from_mime(f"image/{match.group(1)}"), base64.b64decode(match.group(2))
 
 
-def _save_research(job: dict) -> None:
-    _ensure_research_dir()
-    job["updated_at"] = time.time()
-    _safe_research_path(job["id"]).write_text(json.dumps(job, ensure_ascii=False, indent=2))
-
-
-def _research_log(job: dict, entry: dict) -> None:
-    entry["at"] = time.time()
-    job.setdefault("events", []).append(entry)
-    _save_research(job)
-
-
-def _finish_research(job: dict, status: str, result: str = "", error: str = "") -> None:
-    job["status"] = status
-    if result:
-        job["result"] = result
-    if error:
-        job["error"] = error
-    _save_research(job)
-
-
-def _research_summary(job: dict) -> dict:
-    return {
-        "id": job["id"],
-        "topic": job.get("topic", ""),
-        "notebook": job.get("notebook", ""),
-        "note": job.get("note", ""),
-        "status": job.get("status"),
-        "new_note": job.get("new_note", ""),
-        "provider": job.get("provider", ""),
-        "error": job.get("error", ""),
-        "event_count": len(job.get("events") or []),
-        "created_at": job.get("created_at"),
-        "updated_at": job.get("updated_at"),
-    }
-
-
-def _load_research(job_id: str) -> dict | None:
-    if job_id in RESEARCH_JOBS:
-        return RESEARCH_JOBS[job_id]
-    path = _safe_research_path(job_id)
-    if path.exists():
-        try:
-            return json.loads(path.read_text())
-        except Exception:
-            return None
-    return None
-
-
-def _all_research_jobs() -> list[dict]:
-    jobs = dict(RESEARCH_JOBS)
-    _ensure_research_dir()
-    for path in RESEARCH_DIR.glob("*.json"):
-        if path.stem in jobs:
-            continue
-        try:
-            jobs[path.stem] = json.loads(path.read_text())
-        except Exception:
-            continue
-    return list(jobs.values())
-
-
-def _reap_stale_research() -> None:
-    """A job persisted as 'running' with no live task in this process means the
-    server restarted mid-run. Mark it interrupted so it never shows a phantom
-    spinner forever."""
-    for job in _all_research_jobs():
-        if job.get("status") == "running" and job["id"] not in RESEARCH_TASKS:
-            job["status"] = "interrupted"
-            job["error"] = job.get("error") or "The server restarted before this run finished."
-            RESEARCH_JOBS[job["id"]] = job
-            _save_research(job)
-
-
-async def _run_research(job_id: str) -> None:
-    job = RESEARCH_JOBS.get(job_id)
-    if not job:
-        return
-    settings = _load_settings()
-    provider = settings["research_provider"] or settings["active_provider"]
-    override = {"provider": provider, "model": settings["research_model"] or None}
-
-    messages = [
-        {"role": "system", "content": RESEARCH_SYSTEM_PROMPT},
-        {"role": "user", "content": f"Research topic:\n\n{job['topic']}"},
-    ]
-    report, last_error = "", ""
-    try:
-        async for event in _agent_events(
-            messages, RESEARCH_TOOLS, max_tokens=4096,
-            no_thinking=False, override=override, max_rounds=RESEARCH_MAX_ROUNDS,
-        ):
-            etype = event.get("type")
-            if etype == "delta":
-                report += event["text"]
-            elif etype == "tool":
-                _research_log(job, {"type": "tool", "name": event.get("name"), "detail": event.get("detail", "")})
-            elif etype == "error":
-                last_error = event.get("detail", "")
-                _research_log(job, {"type": "error", "detail": last_error})
-
-        report = report.strip()
-        if not report:
-            _finish_research(job, status="error", error=last_error or "The research run produced no report.")
-            return
-
-        notebook = job.get("notebook") or "Research"
-        try:
-            name = await _create_note_file(notebook, f"Research — {job['topic'][:60]}", report)
-            job["new_note"] = name
-            job["notebook"] = notebook
-            _research_log(job, {"type": "note", "detail": f"{notebook}/{name}"})
-        except Exception as exc:
-            _research_log(job, {"type": "error", "detail": f"Could not save the report as a note: {exc}"})
-        _finish_research(job, status="done", result=report)
-    except Exception as exc:
-        logger.exception("Research job failed")
-        _finish_research(job, status="error", error=str(exc))
-    finally:
-        RESEARCH_TASKS.pop(job_id, None)
-
-
-@router.post("/research")
-async def start_research(request: Request):
-    body = await request.json()
-    topic = (body.get("topic") or "").strip()
-    if not topic:
-        raise HTTPException(status_code=400, detail="A research topic is required")
-    settings = _load_settings()
-    provider = settings["research_provider"] or settings["active_provider"]
-    job_id = uuid.uuid4().hex
-    job = {
-        "id": job_id,
-        "topic": topic,
-        "notebook": (body.get("notebook") or "").strip(),
-        "note": (body.get("note") or "").strip(),
-        "provider": provider,
-        "status": "running",
-        "events": [],
-        "result": "",
-        "new_note": "",
-        "error": "",
-        "created_at": time.time(),
-        "updated_at": time.time(),
-    }
-    RESEARCH_JOBS[job_id] = job
-    _save_research(job)
-    RESEARCH_TASKS[job_id] = asyncio.create_task(_run_research(job_id))
-    return _research_summary(job)
-
-
-@router.get("/research")
-async def list_research(notebook: str = "", note: str = ""):
-    _reap_stale_research()
-    out = [
-        _research_summary(job)
-        for job in _all_research_jobs()
-        if (not notebook or job.get("notebook") == notebook)
-        and (not note or job.get("note") == note)
-    ]
-    out.sort(key=lambda j: j.get("updated_at") or 0, reverse=True)
-    return out
-
-
-@router.get("/research/{job_id}")
-async def get_research(job_id: str):
-    job = _load_research(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Research job not found")
-    return job
-
-
-# ── Image generation (OpenRouter → Gemini) ───────────────────
 @router.post("/image")
 async def agent_image(request: Request):
     body = await request.json()
@@ -1345,53 +1186,52 @@ async def agent_image(request: Request):
         raise HTTPException(status_code=400, detail="Open a note first so the image can be saved next to it")
 
     settings = _load_settings()
-    if not settings["openrouter_api_key"]:
-        raise HTTPException(status_code=400, detail="No OpenRouter API key configured in assistant settings")
+    if not settings["gemini_api_key"] and not settings["openrouter_api_key"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Add a Gemini or OpenRouter API key in assistant settings to generate images",
+        )
 
     notes_root = NOTES_DIR.resolve()
     notebook_dir = (NOTES_DIR / notebook).resolve()
     if notebook_dir == notes_root or not notebook_dir.is_relative_to(notes_root) or not notebook_dir.is_dir():
         raise HTTPException(status_code=404, detail="Notebook not found")
 
-    try:
-        async with httpx.AsyncClient(timeout=120) as client:
-            resp = await client.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings['openrouter_api_key']}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": settings["image_model"],
-                    "messages": [{"role": "user", "content": prompt}],
-                    "modalities": ["image", "text"],
-                },
-            )
-    except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail=f"Could not reach OpenRouter: {exc}") from exc
-    if resp.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"OpenRouter error HTTP {resp.status_code}: {resp.text[:300]}")
+    # `image_model` is the OpenRouter slug; the Gemini API wants it without the
+    # "google/" vendor prefix (e.g. gemini-3.1-flash-lite-image).
+    or_model = settings["image_model"] or DEFAULT_SETTINGS["image_model"]
+    gemini_model = or_model.split("/", 1)[-1] if "/" in or_model else or_model
 
-    message = (resp.json().get("choices") or [{}])[0].get("message", {})
-    images = message.get("images") or []
-    if not images:
-        text = (message.get("content") or "no image returned").strip()
-        raise HTTPException(status_code=502, detail=f"Model returned no image: {text[:200]}")
+    # Prefer the free-tier Gemini key; fall back to OpenRouter when Gemini is
+    # unset, rate-limited, or otherwise fails.
+    result, provider, errors = None, "", []
+    if settings["gemini_api_key"]:
+        try:
+            result = await _gemini_image(prompt, gemini_model, settings["gemini_api_key"])
+            provider = "gemini"
+        except Exception as exc:
+            logger.info("Gemini image generation failed, will try OpenRouter: %s", exc)
+            errors.append(f"Gemini: {exc}")
+    if result is None and settings["openrouter_api_key"]:
+        try:
+            result = await _openrouter_image(prompt, or_model, settings["openrouter_api_key"])
+            provider = "openrouter"
+        except Exception as exc:
+            errors.append(f"OpenRouter: {exc}")
+    if result is None:
+        raise HTTPException(status_code=502, detail="Image generation failed — " + "; ".join(errors))
 
-    image_url = images[0].get("image_url", {}).get("url", "")
-    match = re.match(r"^data:image/(\w+);base64,(.+)$", image_url, re.DOTALL)
-    if not match:
-        raise HTTPException(status_code=502, detail="Unexpected image format from OpenRouter")
-
-    ext = {"jpeg": "jpg"}.get(match.group(1), match.group(1))
+    ext, data = result
     filename = f"agent-{time.strftime('%Y%m%d-%H%M%S')}.{ext}"
     assets_dir = notebook_dir / "assets"
     assets_dir.mkdir(exist_ok=True)
-    (assets_dir / filename).write_bytes(base64.b64decode(match.group(2)))
+    (assets_dir / filename).write_bytes(data)
 
     rel_path = f"assets/{filename}"
     return {
         "markdown": f"![{prompt[:60]}]({rel_path})",
         "rel_path": rel_path,
         "preview_url": f"/notes/{quote(notebook)}/{rel_path}",
+        "provider": provider,
+        "model": gemini_model if provider == "gemini" else or_model,
     }

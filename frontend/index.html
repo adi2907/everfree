@@ -185,12 +185,6 @@
                 <option value="openrouter">OpenRouter</option>
                 <option value="gemini">Gemini</option>
             </select>
-            <button class="btn-icon" id="assist-research-btn" title="Deep research — runs in the background" aria-label="Deep research">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                    stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M9 3h6"/><path d="M10 3v6.5L4.5 18a2 2 0 001.8 3h11.4a2 2 0 001.8-3L14 9.5V3"/><path d="M7.5 14h9"/>
-                </svg>
-            </button>
             <button class="btn-icon" id="assist-new-btn" title="Clear chat" aria-label="Clear chat">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                     stroke-linecap="round" stroke-linejoin="round">
@@ -222,12 +216,9 @@
                 <button type="button" class="assist-settings-tab" data-provider-tab="gemini"
                     role="tab" aria-selected="false">Gemini</button>
             </div>
+            <div class="assist-settings-hint">Enter credentials for any provider here. Pick which one answers with the dropdown at the top of the panel.</div>
 
             <div class="assist-provider-pane active" data-provider-pane="lmstudio">
-                <label class="assist-provider-choice">
-                    <input type="radio" name="assist-provider" value="lmstudio">
-                    Use Local LLM for chat
-                </label>
                 <label>LM Studio URL
                     <input type="text" id="assist-set-url" placeholder="http://localhost:1234/v1">
                 </label>
@@ -238,10 +229,6 @@
             </div>
 
             <div class="assist-provider-pane" data-provider-pane="openrouter" hidden>
-                <label class="assist-provider-choice">
-                    <input type="radio" name="assist-provider" value="openrouter">
-                    Use OpenRouter for chat
-                </label>
                 <label>API key
                     <input type="password" id="assist-set-openrouter" placeholder="">
                 </label>
@@ -250,17 +237,9 @@
                         list="assist-openrouter-model-list" placeholder="Select or enter a model">
                     <datalist id="assist-openrouter-model-list"></datalist>
                 </label>
-                <label>Image model
-                    <input type="text" id="assist-set-image-model"
-                        list="assist-openrouter-model-list" placeholder="google/gemini-2.5-flash-image">
-                </label>
             </div>
 
             <div class="assist-provider-pane" data-provider-pane="gemini" hidden>
-                <label class="assist-provider-choice">
-                    <input type="radio" name="assist-provider" value="gemini">
-                    Use Gemini for chat
-                </label>
                 <label>Gemini API key
                     <input type="password" id="assist-set-gemini" placeholder="">
                 </label>
@@ -272,19 +251,19 @@
             </div>
 
             <div class="assist-settings-common">
-                <label>Serper API key <span class="assist-label-hint">(for /search and research)</span>
+                <div class="assist-settings-section">Web search</div>
+                <label>Serper API key <span class="assist-label-hint">(lets the assistant search the web — works with any provider)</span>
                     <input type="password" id="assist-set-serper" placeholder="">
+                    <span class="assist-label-hint">Get a free key at serper.dev. Without it the assistant can't search the web.</span>
                 </label>
-                <label>Deep-research provider <span class="assist-label-hint">(used by 🔬 research)</span>
-                    <select id="assist-set-research-provider">
-                        <option value="">Same as chat</option>
-                        <option value="lmstudio">Local LLM</option>
-                        <option value="openrouter">OpenRouter</option>
-                        <option value="gemini">Gemini</option>
-                    </select>
-                </label>
-                <label>Deep-research model <span class="assist-label-hint">(blank = that provider's chat model)</span>
-                    <input type="text" id="assist-set-research-model" placeholder="e.g. a larger reasoning model">
+            </div>
+
+            <div class="assist-settings-common">
+                <div class="assist-settings-section">Images</div>
+                <label>Image model
+                    <input type="text" id="assist-set-image-model"
+                        list="assist-openrouter-model-list" placeholder="google/gemini-3.1-flash-lite-image">
+                    <span class="assist-label-hint">Uses your Gemini key first (free tier), then falls back to OpenRouter when it's rate-limited.</span>
                 </label>
             </div>
             <div class="assist-settings-actions">
@@ -296,10 +275,7 @@
         <div class="assist-messages" id="assist-messages">
             <div class="assist-hint">
                 Ask anything — the assistant can reason, read your other notes, and search the web before answering.<br>
-                <code>/research</code> a topic — runs a deep research agent in the background and saves a new note when done<br>
-                <code>/search</code> a topic — researches the web and drafts a passage with sources<br>
-                <code>/image</code> a prompt — generates an image into your note's assets<br>
-                <code>/chats</code> [text] — browse this note's past chats (optionally filtered)<br>
+                Type <code>/</code> for commands — <code>/image</code> a prompt, or <code>/chats</code> to browse past chats.<br>
                 Select text in your note + <kbd>⌘L</kbd> to ask about that excerpt<br>
                 <kbd>⌘.</kbd> continue writing · <kbd>⌘K</kbd> toggle panel · the ✎ icon starts a new chat
             </div>
@@ -312,7 +288,8 @@
         </div>
 
         <div class="assist-inputbar">
-            <textarea id="assist-input" rows="2" placeholder="Ask, /search …, or /image …"></textarea>
+            <div class="assist-slash-menu" id="assist-slash-menu" role="listbox" hidden></div>
+            <textarea id="assist-input" rows="2" placeholder="Ask anything, or type / for commands"></textarea>
             <button class="btn-icon assist-send" id="assist-send" title="Send (Enter)" aria-label="Send">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                     stroke-linecap="round" stroke-linejoin="round">

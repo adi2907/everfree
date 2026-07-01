@@ -1020,7 +1020,7 @@
             return true;
         },
         saveNote,
-        // Lets the assistant surface a note it just created (e.g. deep research).
+        // Lets the assistant surface a note it just created with create_note.
         refreshLibrary() {
             loadNotebooks();
         },

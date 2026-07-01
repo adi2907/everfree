@@ -1,7 +1,8 @@
 /* ════════════════════════════════════════════════════════════
    EverFree — Writing Assistant Panel
-   Shortcuts: ⌘K toggle panel · ⌘. continue writing
-   Slash commands: /search <topic> · /image <prompt> · /chats [text]
+   Shortcuts: ⌘K toggle panel · ⌘. continue writing · ⌘L attach selection
+   Slash commands: /image <prompt> · /chats [text]
+   The assistant searches the web and reads your notes on its own when useful.
    Chats persist on local disk, indexed by the note they belong to.
    ════════════════════════════════════════════════════════════ */
 
@@ -11,6 +12,7 @@
     const $panel = document.getElementById("assist-panel");
     const $messages = document.getElementById("assist-messages");
     const $input = document.getElementById("assist-input");
+    const $slashMenu = document.getElementById("assist-slash-menu");
     const $send = document.getElementById("assist-send");
     const $status = document.getElementById("assist-status");
     const $btnAssist = document.getElementById("btn-assist");
@@ -35,10 +37,6 @@
     const $contextText = document.getElementById("assist-context-text");
     const $contextDel = document.getElementById("assist-context-del");
     const $providerQuick = document.getElementById("assist-provider-quick");
-    const $researchBtn = document.getElementById("assist-research-btn");
-    const $setResearchProvider = document.getElementById("assist-set-research-provider");
-    const $setResearchModel = document.getElementById("assist-set-research-model");
-    const $btnAssistToolbar = document.getElementById("btn-assist");
 
     // Text the user selected in the note and attached with ⌘L. Folded into the
     // next prompt sent to the model, then cleared.
@@ -89,9 +87,6 @@
         if (visible) {
             $input.focus();
             refreshStatus();
-            if ($btnAssistToolbar) $btnAssistToolbar.classList.remove("has-badge");
-            const note = bridge() && bridge().getNote();
-            if (note) attachResearch(note.notebook, note.note);
         }
     }
 
@@ -140,10 +135,8 @@
         const h = document.createElement("div");
         h.className = "assist-hint";
         h.innerHTML =
-            "Ask anything about your note, or:<br>" +
-            "<code>/search</code> a topic — research the web and draft a passage with sources<br>" +
-            "<code>/image</code> a prompt — generate an image into your note's assets<br>" +
-            "<code>/chats</code> [text] — browse this note's past chats (optionally filtered)<br>" +
+            "Ask anything about your note — the assistant searches the web and reads your other notes when useful.<br>" +
+            "Type <code>/</code> for commands — <code>/image</code> a prompt, or <code>/chats</code> to browse past chats.<br>" +
             "<kbd>⌘.</kbd> continue writing · <kbd>⌘K</kbd> toggle panel · use Clear chat to start fresh";
         $messages.appendChild(h);
     }
@@ -323,7 +316,6 @@
             /* fall through to empty state */
         }
         if (!opened) showHint();
-        attachResearch(notebook, note);
     }
 
     async function openChat(id) {
@@ -438,6 +430,10 @@
             } else if (event.type === "tool") {
                 dropThinking();
                 addToolLine(event.name, event.detail);
+                // A note the agent just created should appear in the library now.
+                if (event.name === "create_note" && bridge() && bridge().refreshLibrary) {
+                    bridge().refreshLibrary();
+                }
             } else if (event.type === "error") {
                 dropThinking();
                 addErrorLine(event.detail);
@@ -547,6 +543,15 @@
             $img.src = data.preview_url;
             $img.alt = prompt;
             $wrap.appendChild($img);
+            // Small caption noting which provider served it, so the free-tier →
+            // OpenRouter fallback is observable.
+            const providerLabel = { gemini: "Gemini (free)", openrouter: "OpenRouter" }[data.provider];
+            if (providerLabel) {
+                const $meta = document.createElement("div");
+                $meta.className = "assist-image-meta";
+                $meta.textContent = data.model ? `via ${providerLabel} · ${data.model}` : `via ${providerLabel}`;
+                $wrap.appendChild($meta);
+            }
             $messages.appendChild($wrap);
         } catch (err) {
             $line.remove();
@@ -554,141 +559,6 @@
         } finally {
             setBusy(false);
         }
-    }
-
-    // ── Deep research (runs in the background) ───────────────
-    const researchPolls = new Map();   // job id → setTimeout handle
-
-    function startResearch(topic) {
-        topic = (topic || "").trim();
-        const note = bridge() && bridge().getNote();
-        addBubble("user", `🔬 Research: ${topic}`);
-        if (!topic) {
-            addErrorLine("Give a topic, e.g. /research the history of color theory.");
-            return;
-        }
-        const $card = renderResearchCard({ topic, status: "running" });
-        fetch("/api/agent/research", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                topic,
-                notebook: note ? note.notebook : "",
-                note: note ? note.note : "",
-            }),
-        })
-            .then((r) => r.json().then((d) => {
-                if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
-                return d;
-            }))
-            .then((job) => {
-                $card.dataset.id = job.id;
-                pollResearch(job.id, $card);
-            })
-            .catch((err) => setResearchCard($card, { topic, status: "error", error: err.message }));
-    }
-
-    function renderResearchCard(job) {
-        const $card = document.createElement("div");
-        $card.className = "assist-research";
-        if (job.id) $card.dataset.id = job.id;
-        $card.innerHTML =
-            '<div class="assist-research-head">' +
-            '<span class="assist-research-badge">🔬 Deep research</span>' +
-            '<span class="assist-research-state"></span></div>' +
-            '<div class="assist-research-topic"></div>' +
-            '<div class="assist-research-log"></div>' +
-            '<div class="assist-research-actions"></div>';
-        $card.querySelector(".assist-research-topic").textContent = job.topic || "";
-        $messages.appendChild($card);
-        scrollToBottom();
-        setResearchCard($card, job);
-        return $card;
-    }
-
-    function setResearchCard($card, job) {
-        const status = job.status || "running";
-        $card.dataset.status = status;
-        const stateText = {
-            running: "● working…", done: "✓ done",
-            error: "⚠ failed", interrupted: "⚠ interrupted",
-        }[status] || status;
-        $card.querySelector(".assist-research-state").textContent = stateText;
-
-        if (Array.isArray(job.events)) {
-            const $log = $card.querySelector(".assist-research-log");
-            $log.innerHTML = "";
-            for (const ev of job.events.slice(-8)) {
-                const $row = document.createElement("div");
-                $row.className = "assist-research-logrow";
-                if (ev.type === "tool") {
-                    const [icon, label] = TOOL_LABELS[ev.name] || ["🔧", ev.name || "tool"];
-                    $row.textContent = ev.detail ? `${icon} ${label}: ${ev.detail}` : `${icon} ${label}`;
-                } else if (ev.type === "note") {
-                    $row.textContent = `📝 Saved ${ev.detail}`;
-                } else if (ev.type === "error") {
-                    $row.textContent = `⚠ ${ev.detail}`;
-                }
-                $log.appendChild($row);
-            }
-        }
-
-        const $actions = $card.querySelector(".assist-research-actions");
-        $actions.innerHTML = "";
-        if (status === "done") {
-            if (job.new_note) {
-                const $saved = document.createElement("div");
-                $saved.className = "assist-research-saved";
-                $saved.textContent = `Saved as ${(job.notebook ? job.notebook + "/" : "") + job.new_note}`;
-                $actions.appendChild($saved);
-            }
-        } else if (job.error && status !== "running") {
-            const $err = document.createElement("div");
-            $err.className = "assist-research-err";
-            $err.textContent = job.error;
-            $actions.appendChild($err);
-        }
-    }
-
-    function pollResearch(id, $card) {
-        const tick = async () => {
-            let job;
-            try {
-                job = await fetch(`/api/agent/research/${id}`).then((r) => r.json());
-            } catch {
-                researchPolls.set(id, setTimeout(tick, 2500));
-                return;
-            }
-            setResearchCard($card, job);
-            if (job.status === "running") {
-                researchPolls.set(id, setTimeout(tick, 1800));
-            } else {
-                researchPolls.delete(id);
-                if (job.status === "done") {
-                    if (bridge() && bridge().refreshLibrary) bridge().refreshLibrary();
-                    if ($panel.hidden && $btnAssistToolbar) $btnAssistToolbar.classList.add("has-badge");
-                }
-            }
-        };
-        if (researchPolls.has(id)) clearTimeout(researchPolls.get(id));
-        researchPolls.set(id, setTimeout(tick, 600));
-    }
-
-    // On note load / panel open, re-show and resume polling any research still
-    // running for this note (state lives server-side, so it survived).
-    async function attachResearch(notebook, note) {
-        try {
-            const params = new URLSearchParams();
-            if (notebook) params.set("notebook", notebook);
-            if (note) params.set("note", note);
-            const list = await fetch(`/api/agent/research?${params.toString()}`).then((r) => r.json());
-            for (const job of list) {
-                if (job.status !== "running") continue;
-                if (researchPolls.has(job.id)) continue;
-                if ($messages.querySelector(`.assist-research[data-id="${job.id}"]`)) continue;
-                pollResearch(job.id, renderResearchCard(job));
-            }
-        } catch { /* non-fatal */ }
     }
 
     async function listSavedChats(query) {
@@ -712,26 +582,78 @@
         const text = raw.trim();
         if (!text || busy) return;
         $input.value = "";
+        hideSlashMenu();
 
         const stripQuotes = (s) => s.trim().replace(/^"(.*)"$/s, "$1");
 
         let m;
         if ((m = text.match(/^\/chats(?:\s+(.+))?$/s))) {
             listSavedChats((m[1] || "").trim());
-        } else if ((m = text.match(/^\/research\s+(.+)/s))) {
-            startResearch(stripQuotes(m[1]));
         } else if ((m = text.match(/^\/image\s+(.+)/s))) {
             generateImage(stripQuotes(m[1]));
-        } else if ((m = text.match(/^\/search\s+(.+)/s))) {
-            const query = stripQuotes(m[1]);
-            sendChat(
-                text,
-                `Search the web and research this: "${query}". Then write a passage I can insert ` +
-                `into my note, grounded in what you found, ending with the sources you used.`
-            );
         } else {
             sendChat(text, text);
         }
+    }
+
+    // ── Slash command menu (Claude Code style) ───────────────
+    // Typing "/" at the start of an empty prompt opens a filterable list of
+    // commands. Selecting one drops "/cmd " into the box so args can follow.
+    const SLASH_COMMANDS = [
+        { cmd: "/image", desc: "Generate an image into your note's assets" },
+        { cmd: "/chats", desc: "Browse this note's past chats" },
+    ];
+    let slashItems = [];   // currently shown commands
+    let slashIndex = 0;    // highlighted row
+
+    const slashOpen = () => !$slashMenu.hidden;
+
+    function hideSlashMenu() {
+        $slashMenu.hidden = true;
+        $slashMenu.innerHTML = "";
+        slashItems = [];
+    }
+
+    function updateSlashMenu() {
+        // Only while typing the command token itself: a leading "/" and no space.
+        const match = $input.value.match(/^\/(\w*)$/);
+        if (!match) return hideSlashMenu();
+        const prefix = "/" + match[1].toLowerCase();
+        slashItems = SLASH_COMMANDS.filter((c) => c.cmd.startsWith(prefix));
+        if (!slashItems.length) return hideSlashMenu();
+        slashIndex = 0;
+        renderSlashMenu();
+    }
+
+    function renderSlashMenu() {
+        $slashMenu.innerHTML = "";
+        slashItems.forEach((item, i) => {
+            const $row = document.createElement("div");
+            $row.className = "assist-slash-item" + (i === slashIndex ? " active" : "");
+            $row.setAttribute("role", "option");
+            $row.innerHTML =
+                `<span class="assist-slash-cmd"></span><span class="assist-slash-desc"></span>`;
+            $row.querySelector(".assist-slash-cmd").textContent = item.cmd;
+            $row.querySelector(".assist-slash-desc").textContent = item.desc;
+            // mousedown (not click) so the textarea keeps focus through selection.
+            $row.addEventListener("mousedown", (e) => {
+                e.preventDefault();
+                applySlash(item.cmd);
+            });
+            $slashMenu.appendChild($row);
+        });
+        $slashMenu.hidden = false;
+    }
+
+    function moveSlash(delta) {
+        slashIndex = (slashIndex + delta + slashItems.length) % slashItems.length;
+        renderSlashMenu();
+    }
+
+    function applySlash(cmd) {
+        $input.value = cmd + " ";
+        hideSlashMenu();
+        $input.focus();
     }
 
     // ── Settings ────────────────────────────────────────────
@@ -786,18 +708,15 @@
             $setOpenrouterModel.value = settings.openrouter_model;
             $setGeminiModel.value = settings.gemini_model;
             $setImageModel.value = settings.image_model;
-            $setResearchProvider.value = settings.research_provider || "";
-            $setResearchModel.value = settings.research_model || "";
             $setSerper.value = "";
             $setSerper.placeholder = settings.serper_api_key_set ? "•••••• (saved — leave blank to keep)" : "";
             $setOpenrouter.value = "";
             $setOpenrouter.placeholder = settings.openrouter_api_key_set ? "•••••• (saved — leave blank to keep)" : "";
             $setGemini.value = "";
             $setGemini.placeholder = settings.gemini_api_key_set ? "•••••• (saved — leave blank to keep)" : "";
-            const provider = settings.active_provider || "lmstudio";
-            const $radio = document.querySelector(`input[name="assist-provider"][value="${provider}"]`);
-            if ($radio) $radio.checked = true;
-            selectSettingsTab(provider);
+            // Open the tab for whichever provider currently answers, but the
+            // active provider itself is chosen via the header dropdown.
+            selectSettingsTab(settings.active_provider || "lmstudio");
             loadProviderModels("lmstudio");
             loadProviderModels("openrouter");
             loadProviderModels("gemini");
@@ -807,14 +726,14 @@
 
     async function saveSettings() {
         const body = {
-            active_provider: document.querySelector('input[name="assist-provider"]:checked')?.value || "lmstudio",
+            // The active provider is owned by the header dropdown; keep it in sync
+            // so saving credentials never silently changes which provider answers.
+            active_provider: $providerQuick ? $providerQuick.value : "lmstudio",
             lmstudio_url: $setUrl.value.trim() || "http://localhost:1234/v1",
             lmstudio_model: $setModel.value.trim(),
             openrouter_model: $setOpenrouterModel.value.trim(),
             gemini_model: $setGeminiModel.value.trim(),
-            image_model: $setImageModel.value.trim() || "google/gemini-2.5-flash-image",
-            research_provider: $setResearchProvider.value,
-            research_model: $setResearchModel.value.trim(),
+            image_model: $setImageModel.value.trim() || "google/gemini-3.1-flash-lite-image",
         };
         if ($setSerper.value.trim()) body.serper_api_key = $setSerper.value.trim();
         if ($setOpenrouter.value.trim()) body.openrouter_api_key = $setOpenrouter.value.trim();
@@ -856,21 +775,33 @@
     if ($providerQuick) {
         $providerQuick.addEventListener("change", () => switchProvider($providerQuick.value));
     }
-    if ($researchBtn) {
-        $researchBtn.addEventListener("click", () => {
-            const topic = $input.value.trim().replace(/^\/(research|search)\s*/i, "");
-            if (topic) {
-                $input.value = "";
-                startResearch(topic);
-            } else {
-                togglePanel(true);
-                $input.value = "/research ";
-                $input.focus();
-            }
-        });
-    }
+
+    $input.addEventListener("input", updateSlashMenu);
 
     $input.addEventListener("keydown", (e) => {
+        // While the slash menu is open it captures navigation keys.
+        if (slashOpen()) {
+            if (e.key === "ArrowDown") {
+                e.preventDefault();
+                moveSlash(1);
+                return;
+            }
+            if (e.key === "ArrowUp") {
+                e.preventDefault();
+                moveSlash(-1);
+                return;
+            }
+            if (e.key === "Enter" || e.key === "Tab") {
+                e.preventDefault();
+                applySlash(slashItems[slashIndex].cmd);
+                return;
+            }
+            if (e.key === "Escape") {
+                e.preventDefault();
+                hideSlashMenu();
+                return;
+            }
+        }
         if (e.key === "Enter" && !e.shiftKey) {
             e.preventDefault();
             handleInput($input.value);
