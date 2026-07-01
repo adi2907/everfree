@@ -209,7 +209,27 @@
         list_notebooks: ["🗂", "Listing notebooks"],
         list_notes: ["🗂", "Listing notes"],
         create_note: ["📝", "Creating note"],
+        generate_image: ["🎨", "Generating image"],
     };
+
+    // An assistant bubble holding a generated image, with a small provider caption.
+    function addImageBubble(url, alt, providerLabel, model) {
+        const $wrap = document.createElement("div");
+        $wrap.className = "assist-msg assist-assistant assist-image";
+        const $img = document.createElement("img");
+        $img.src = url;
+        $img.alt = alt || "";
+        $wrap.appendChild($img);
+        if (providerLabel) {
+            const $meta = document.createElement("div");
+            $meta.className = "assist-image-meta";
+            $meta.textContent = model ? `via ${providerLabel} · ${model}` : `via ${providerLabel}`;
+            $wrap.appendChild($meta);
+        }
+        $messages.appendChild($wrap);
+        scrollToBottom();
+        return $wrap;
+    }
 
     function addToolLine(name, detail) {
         const $line = document.createElement("div");
@@ -292,10 +312,8 @@
 
     function clearChat() {
         if (busy) return;
-        const hasChat = currentChat.messages.length > 0 || $messages.querySelector(".assist-msg");
-        if (hasChat && !confirm("Clear this chat and start fresh? Saved chats remain available through /chats.")) {
-            return;
-        }
+        // No confirm needed: the current chat is already saved to disk and stays
+        // reachable through /chats, so clearing only starts a fresh session.
         startNewChat();
     }
 
@@ -434,6 +452,12 @@
                 if (event.name === "create_note" && bridge() && bridge().refreshLibrary) {
                     bridge().refreshLibrary();
                 }
+            } else if (event.type === "image") {
+                dropThinking();
+                const providerLabel = { gemini: "Gemini (free)", openrouter: "OpenRouter" }[event.provider];
+                addImageBubble(event.url, event.alt, providerLabel, event.model);
+                // The image lives in the note's assets folder; refresh so it shows.
+                if (bridge() && bridge().refreshLibrary) bridge().refreshLibrary();
             } else if (event.type === "error") {
                 dropThinking();
                 addErrorLine(event.detail);
@@ -537,22 +561,10 @@
             if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
 
             $line.remove();
-            const $wrap = document.createElement("div");
-            $wrap.className = "assist-msg assist-assistant assist-image";
-            const $img = document.createElement("img");
-            $img.src = data.preview_url;
-            $img.alt = prompt;
-            $wrap.appendChild($img);
-            // Small caption noting which provider served it, so the free-tier →
+            // Caption notes which provider served it, so the free-tier →
             // OpenRouter fallback is observable.
             const providerLabel = { gemini: "Gemini (free)", openrouter: "OpenRouter" }[data.provider];
-            if (providerLabel) {
-                const $meta = document.createElement("div");
-                $meta.className = "assist-image-meta";
-                $meta.textContent = data.model ? `via ${providerLabel} · ${data.model}` : `via ${providerLabel}`;
-                $wrap.appendChild($meta);
-            }
-            $messages.appendChild($wrap);
+            addImageBubble(data.preview_url, prompt, providerLabel, data.model);
         } catch (err) {
             $line.remove();
             addErrorLine(err.message);

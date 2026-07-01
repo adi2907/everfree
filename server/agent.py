@@ -448,6 +448,26 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "generate_image",
+            "description": (
+                "Generate an image from a text prompt and save it into the current note's "
+                "assets folder. Use this whenever the user asks for an image, illustration, "
+                "diagram, or picture. Never write a Markdown image link yourself — always call "
+                "this tool, then embed the exact Markdown it returns."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "prompt": {"type": "string", "description": "Detailed description of the image to generate"},
+                    "notebook": {"type": "string", "description": "Notebook to save the image in; defaults to the current note's notebook"},
+                },
+                "required": ["prompt"],
+            },
+        },
+    },
 ]
 
 
@@ -653,17 +673,18 @@ def _split_think(buf: str, in_think: bool) -> tuple[list[tuple[str, str]], str, 
 
 
 # ── Prompts ──────────────────────────────────────────────────
-CHAT_SYSTEM_PROMPT = """You are the agentic writing assistant built into EverFree, a Markdown note-taking app.
-The user is writing a note; its current content may be provided below. Match its tone, voice, and formatting.
+CHAT_SYSTEM_PROMPT = """You are the writing assistant built into EverFree, a Markdown note-taking app.
+The user's current note may be provided below as context — use it to understand what they are working on, but do EXACTLY what the user asks and nothing more. Never continue, extend, rewrite, or add new sections/paragraphs/list items to the note unless the user explicitly asks you to write or continue it. If they ask a question, answer it; if they ask for an image, give them the image.
 
-Think before you act. Decide whether a question is best answered from the note in front of you, from the user's other notes, or from the web, then use tools to gather what you need before replying.
+Think before you act. Decide whether a request is best served from the note in front of you, from the user's other notes, or from the web, then use tools to gather what you need before replying.
 
 Tools:
 - search_notes / read_note / list_notebooks / list_notes — search and read the user's own notes. Prefer these to ground answers in what they have already written.
 - web_search (Google) then read_page — for external facts. Read the 2-3 most promising results before answering, and end such a passage with a "Sources:" line of Markdown links.
 - create_note — only when the user explicitly asks you to save or create a note. It never overwrites existing notes.
+- generate_image — whenever the user asks for an image, illustration, diagram, or picture. Write a specific, detailed prompt grounded in the actual subject of the note: name the real people, companies, products, places, and setting involved instead of a generic abstraction like "a company's transformation". NEVER write a Markdown image link from your own imagination — that produces a broken link to a file that does not exist. Call generate_image, then reply with ONLY the exact Markdown it returns — no extra paragraphs.
 
-Your final reply is inserted directly into the note, so reply with clean Markdown only — no preamble like "Here is...", no code fences wrapping the whole reply, no commentary about what you did."""
+Reply with clean Markdown and no preamble ("Here is...", "Sure,") or commentary about what you did. Don't wrap the whole reply in a code fence."""
 
 CONTINUE_SYSTEM_PROMPT = """You are the writing assistant built into EverFree, a Markdown note-taking app.
 Continue the user's note from exactly where it stops. If the last sentence is unfinished, finish it. Add at most one short sentence after that, in the same voice, tone, and formatting. Do not keep expanding the note.
@@ -682,28 +703,54 @@ async def _resolve_local_model(client: httpx.AsyncClient, base_url: str, setting
     return models[0]["id"]
 
 
-async def _run_tool(name: str, args: dict, settings: dict) -> tuple[str, str]:
+async def _tool_generate_image(prompt: str, notebook: str, settings: dict) -> tuple[str, str, dict]:
+    """Generate and save an image. Returns (detail, model-facing result, extra),
+    where `extra` carries the preview URL so the UI can render the image inline."""
+    try:
+        info = await _generate_image_file(prompt, notebook, settings)
+    except ImageGenError as exc:
+        return prompt[:60], f"Image generation failed: {exc}", {}
+    result = (
+        f"Image generated and saved (via {info['provider']}). "
+        f"Embed it in your reply with exactly this Markdown, unchanged: {info['markdown']}"
+    )
+    extra = {
+        "image": info["preview_url"],
+        "alt": prompt[:120],
+        "provider": info["provider"],
+        "model": info["model"],
+    }
+    return prompt[:60], result, extra
+
+
+async def _run_tool(name: str, args: dict, settings: dict, note_ctx: str = "") -> tuple[str, str, dict]:
+    """Run a tool. Returns (detail, model-facing result, extra). `extra` is empty
+    for most tools; generate_image uses it to pass a preview URL up to the UI.
+    `note_ctx` is the current note's notebook, used as a default where a tool
+    needs one but the model didn't supply it."""
     if name == "web_search":
         detail = args.get("query", "")
-        return detail, await _tool_web_search(detail, settings)
+        return detail, await _tool_web_search(detail, settings), {}
     if name == "read_page":
         detail = args.get("url", "")
-        return detail, await _tool_read_page(detail)
+        return detail, await _tool_read_page(detail), {}
     if name == "search_notes":
         detail = args.get("query", "")
-        return detail, await _tool_search_notes(detail)
+        return detail, await _tool_search_notes(detail), {}
     if name == "read_note":
         notebook, note = args.get("notebook", ""), args.get("note", "")
-        return f"{notebook}/{note}".strip("/"), await _tool_read_note(notebook, note)
+        return f"{notebook}/{note}".strip("/"), await _tool_read_note(notebook, note), {}
     if name == "list_notebooks":
-        return "", await _tool_list_notebooks()
+        return "", await _tool_list_notebooks(), {}
     if name == "list_notes":
         notebook = args.get("notebook", "")
-        return notebook, await _tool_list_notes(notebook)
+        return notebook, await _tool_list_notes(notebook), {}
     if name == "create_note":
         notebook, title = args.get("notebook", ""), args.get("title", "")
-        return f"{notebook}/{title}".strip("/"), await _tool_create_note(notebook, title, args.get("content", ""))
-    return "", f"Error: unknown tool {name}"
+        return f"{notebook}/{title}".strip("/"), await _tool_create_note(notebook, title, args.get("content", "")), {}
+    if name == "generate_image":
+        return await _tool_generate_image(args.get("prompt", ""), args.get("notebook") or note_ctx, settings)
+    return "", f"Error: unknown tool {name}", {}
 
 
 def _empty_completion_event(finish_reason: str | None) -> dict:
@@ -760,7 +807,7 @@ def _append_visible_text(text: str, answer_text: str, think_buf: str, in_think: 
 
 async def _openai_compatible_events(
     messages: list[dict], tools: list | None, settings: dict, max_tokens: int,
-    no_thinking: bool = False, max_rounds: int = MAX_TOOL_ROUNDS,
+    no_thinking: bool = False, max_rounds: int = MAX_TOOL_ROUNDS, note_ctx: str = "",
 ):
     """Stream an OpenAI-compatible tool loop, surfacing reasoning live.
 
@@ -896,8 +943,13 @@ async def _openai_compatible_events(
                     args = json.loads(tc["arguments"] or "{}")
                 except ValueError:
                     args = {}
-                detail, result = await _run_tool(tc["name"], args, settings)
+                detail, result, extra = await _run_tool(tc["name"], args, settings, note_ctx)
                 yield {"type": "tool", "name": tc["name"], "detail": detail}
+                if extra.get("image"):
+                    yield {
+                        "type": "image", "url": extra["image"], "alt": extra.get("alt", ""),
+                        "provider": extra.get("provider", ""), "model": extra.get("model", ""),
+                    }
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc["id"] or f"call_{i}",
@@ -937,7 +989,7 @@ def _gemini_tools(tools: list) -> list[dict]:
 
 async def _gemini_events(
     messages: list[dict], tools: list | None, settings: dict, max_tokens: int,
-    no_thinking: bool = False, max_rounds: int = MAX_TOOL_ROUNDS,
+    no_thinking: bool = False, max_rounds: int = MAX_TOOL_ROUNDS, note_ctx: str = "",
 ):
     if not settings["gemini_api_key"]:
         raise RuntimeError("Add a Gemini API key in assistant settings.")
@@ -1018,8 +1070,13 @@ async def _gemini_events(
             for call in function_calls:
                 name = call.get("name", "")
                 args = call.get("args") or {}
-                detail, result = await _run_tool(name, args, settings)
+                detail, result, extra = await _run_tool(name, args, settings, note_ctx)
                 yield {"type": "tool", "name": name, "detail": detail}
+                if extra.get("image"):
+                    yield {
+                        "type": "image", "url": extra["image"], "alt": extra.get("alt", ""),
+                        "provider": extra.get("provider", ""), "model": extra.get("model", ""),
+                    }
                 response_parts.append({
                     "functionResponse": {"name": name, "response": {"result": result}}
                 })
@@ -1051,15 +1108,15 @@ def _override_from(body: dict) -> dict | None:
 async def _agent_events(
     messages: list[dict], tools: list | None, max_tokens: int,
     no_thinking: bool = False, override: dict | None = None,
-    max_rounds: int = MAX_TOOL_ROUNDS,
+    max_rounds: int = MAX_TOOL_ROUNDS, note_ctx: str = "",
 ):
     """Run the selected provider and yield UI events."""
     settings = _resolve_settings(override)
     try:
         if settings["active_provider"] == "gemini":
-            gen = _gemini_events(messages, tools, settings, max_tokens, no_thinking, max_rounds)
+            gen = _gemini_events(messages, tools, settings, max_tokens, no_thinking, max_rounds, note_ctx)
         else:
-            gen = _openai_compatible_events(messages, tools, settings, max_tokens, no_thinking, max_rounds)
+            gen = _openai_compatible_events(messages, tools, settings, max_tokens, no_thinking, max_rounds, note_ctx)
         async for event in gen:
             yield event
     except httpx.ConnectError:
@@ -1101,9 +1158,11 @@ async def agent_chat(request: Request):
         no_thinking = True
     else:
         system = CHAT_SYSTEM_PROMPT
+        notebook = (note.get("notebook") or "").strip()
         if note_content:
             title = (note.get("note") or "untitled").removesuffix(".md")
-            system += f"\n\n--- Current note: {title} ---\n{note_content[-NOTE_CONTEXT_LIMIT:]}"
+            where = f"{notebook} / {title}" if notebook else title
+            system += f"\n\n--- Current note: {where} ---\n{note_content[-NOTE_CONTEXT_LIMIT:]}"
         messages = [{"role": "system", "content": system}]
         for msg in history[-12:]:
             if msg.get("role") in ("user", "assistant") and isinstance(msg.get("content"), str):
@@ -1113,8 +1172,10 @@ async def agent_chat(request: Request):
         max_tokens = 2048
         no_thinking = False
 
+    note_ctx = (note.get("notebook") or "").strip()
     return StreamingResponse(
-        (_ndjson(event) async for event in _agent_events(messages, tools, max_tokens, no_thinking, override)),
+        (_ndjson(event) async for event in
+         _agent_events(messages, tools, max_tokens, no_thinking, override, note_ctx=note_ctx)),
         media_type="application/x-ndjson",
     )
 
@@ -1175,27 +1236,27 @@ async def _openrouter_image(prompt: str, model: str, api_key: str) -> tuple[str,
     return _ext_from_mime(f"image/{match.group(1)}"), base64.b64decode(match.group(2))
 
 
-@router.post("/image")
-async def agent_image(request: Request):
-    body = await request.json()
-    prompt = (body.get("prompt") or "").strip()
-    notebook = (body.get("notebook") or "").strip()
-    if not prompt:
-        raise HTTPException(status_code=400, detail="Image prompt is required")
-    if not notebook:
-        raise HTTPException(status_code=400, detail="Open a note first so the image can be saved next to it")
+class ImageGenError(Exception):
+    """Raised for any image-generation failure with a user/model-facing message."""
 
-    settings = _load_settings()
+
+async def _generate_image_file(prompt: str, notebook: str, settings: dict) -> dict:
+    """Generate one image and save it into the notebook's assets folder. Prefers
+    the free-tier Gemini key, falling back to OpenRouter. Shared by the /image
+    endpoint and the generate_image chat tool. Raises ImageGenError on failure."""
+    prompt = (prompt or "").strip()
+    notebook = (notebook or "").strip()
+    if not prompt:
+        raise ImageGenError("An image prompt is required")
+    if not notebook:
+        raise ImageGenError("A notebook is required so the image can be saved next to the note")
     if not settings["gemini_api_key"] and not settings["openrouter_api_key"]:
-        raise HTTPException(
-            status_code=400,
-            detail="Add a Gemini or OpenRouter API key in assistant settings to generate images",
-        )
+        raise ImageGenError("No image provider configured — add a Gemini or OpenRouter API key in assistant settings")
 
     notes_root = NOTES_DIR.resolve()
     notebook_dir = (NOTES_DIR / notebook).resolve()
     if notebook_dir == notes_root or not notebook_dir.is_relative_to(notes_root) or not notebook_dir.is_dir():
-        raise HTTPException(status_code=404, detail="Notebook not found")
+        raise ImageGenError(f"Notebook not found: {notebook}")
 
     # `image_model` is the OpenRouter slug; the Gemini API wants it without the
     # "google/" vendor prefix (e.g. gemini-3.1-flash-lite-image).
@@ -1219,10 +1280,10 @@ async def agent_image(request: Request):
         except Exception as exc:
             errors.append(f"OpenRouter: {exc}")
     if result is None:
-        raise HTTPException(status_code=502, detail="Image generation failed — " + "; ".join(errors))
+        raise ImageGenError("Image generation failed — " + "; ".join(errors))
 
     ext, data = result
-    filename = f"agent-{time.strftime('%Y%m%d-%H%M%S')}.{ext}"
+    filename = f"agent-{time.strftime('%Y%m%d-%H%M%S')}-{os.urandom(2).hex()}.{ext}"
     assets_dir = notebook_dir / "assets"
     assets_dir.mkdir(exist_ok=True)
     (assets_dir / filename).write_bytes(data)
@@ -1235,3 +1296,14 @@ async def agent_image(request: Request):
         "provider": provider,
         "model": gemini_model if provider == "gemini" else or_model,
     }
+
+
+@router.post("/image")
+async def agent_image(request: Request):
+    body = await request.json()
+    try:
+        return await _generate_image_file(
+            body.get("prompt") or "", body.get("notebook") or "", _load_settings()
+        )
+    except ImageGenError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
