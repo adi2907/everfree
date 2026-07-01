@@ -3,21 +3,21 @@
    ════════════════════════════════════════════════════════════ */
 
 :root {
-    /* Warm green light palette — matches the refreshed desktop app. */
+    /* Public landing palette. */
     --bg-body:      #ffffff;
-    --bg-surface:   #f4f4ef;
-    --bg-input:     #e8e8e3;
+    --bg-surface:   #eef2f7;
+    --bg-input:     #e5e9f1;
     --bg-elevated:  #ffffff;
-    --border:       #deded8;
-    --border-light: #cecfca;
+    --border:       #d9deea;
+    --border-light: #cbd3e1;
 
-    --text-primary:   #262722;
-    --text-secondary: #686a64;
-    --text-muted:     #92938d;
+    --text-primary:   #171923;
+    --text-secondary: #4d5565;
+    --text-muted:     #7b8495;
 
-    --accent:       #47735a;
-    --accent-hover: #355f47;
-    --accent-subtle: #dce7df;
+    --accent:       #0d6b5f;
+    --accent-hover: #095a51;
+    --accent-subtle: #dbece8;
     --danger:       #b64f4f;
     --success:      #4c9466;
 
@@ -67,10 +67,7 @@ button { cursor: pointer; font-family: var(--font); background: none; border: no
     padding-bottom: calc(28px + env(safe-area-inset-bottom));
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
-    background:
-        radial-gradient(circle at 12% 4%, rgba(71, 115, 90, 0.12), transparent 34%),
-        radial-gradient(circle at 92% 0%, rgba(182, 123, 49, 0.08), transparent 28%),
-        linear-gradient(160deg, #eef0ea 0%, var(--bg-body) 56%, #f4f1e9 100%);
+    background: #f7f8fb;
 }
 
 .signin-box {
@@ -117,9 +114,9 @@ button { cursor: pointer; font-family: var(--font); background: none; border: no
 .mobile-landing-title {
     margin-top: 8px;
     color: var(--text-primary);
-    font-size: clamp(36px, 12vw, 58px);
-    line-height: 0.96;
-    letter-spacing: -0.06em;
+    font-size: 46px;
+    line-height: 1.03;
+    letter-spacing: 0;
     text-align: center;
 }
 
@@ -136,7 +133,7 @@ button { cursor: pointer; font-family: var(--font); background: none; border: no
     margin-top: 4px;
     padding: 16px;
     border: 1px solid var(--border);
-    border-radius: 18px;
+    border-radius: 8px;
     background: var(--bg-surface);
     box-shadow: 0 14px 40px rgba(38, 39, 34, 0.08);
 }
@@ -154,7 +151,7 @@ button { cursor: pointer; font-family: var(--font); background: none; border: no
 
 .mobile-download {
     background: var(--accent);
-    color: #081212;
+    color: #fff;
 }
 
 .mobile-selfhost {
@@ -169,27 +166,61 @@ button { cursor: pointer; font-family: var(--font); background: none; border: no
     text-align: center;
 }
 
-.mobile-feature-list {
+.mobile-editor-preview {
+    padding: 16px;
+    border-radius: 8px;
+    background: #151a24;
+    color: #f6f8fb;
+}
+
+.mobile-preview-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.mobile-preview-top strong {
+    font-size: 14px;
+}
+
+.mobile-preview-top span,
+.mobile-editor-preview small {
+    color: #9aa6b8;
+    font-family: var(--font-mono);
+    font-size: 10px;
+}
+
+.mobile-editor-preview p {
+    margin: 14px 0 12px;
+    padding: 13px;
+    border-radius: 8px;
+    background: #263244;
+    font-size: 14px;
+    line-height: 1.55;
+}
+
+.mobile-proof-log {
+    border-top: 1px solid var(--border-light);
+}
+
+.mobile-proof-log p {
     display: grid;
-    gap: 10px;
-    padding-bottom: 8px;
+    grid-template-columns: 70px 1fr;
+    gap: 12px;
+    padding: 13px 0;
+    border-bottom: 1px solid var(--border-light);
 }
 
-.mobile-feature-card {
-    padding: 15px;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 16px;
-    background: rgba(26, 28, 42, 0.7);
+.mobile-proof-log strong {
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    text-transform: uppercase;
 }
 
-.mobile-feature-card strong {
-    display: block;
-    margin-bottom: 5px;
-    color: var(--text-primary);
-    font-size: 15px;
-}
-
-.mobile-feature-card span {
+.mobile-proof-log span {
     color: var(--text-secondary);
     font-size: 13px;
     line-height: 1.45;
