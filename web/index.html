@@ -70,22 +70,48 @@
                     </div>
                     <div class="product-window-body ide-workspace">
                         <aside class="product-sidebar ide-sidebar">
-                            <strong>Library</strong>
+                            <strong>EverFree</strong>
+                            <small>Library</small>
+                            <div class="product-note active">All notes <span>128</span></div>
+                            <small>Notebooks</small>
+                            <div class="product-note">Drafts <span>18</span></div>
+                            <div class="product-note">Research <span>42</span></div>
+                            <div class="product-note">Evernote import <span>68</span></div>
+                        </aside>
+
+                        <aside class="preview-notes">
+                            <div class="preview-notes-header">
+                                <span>Notes</span>
+                                <strong>All notes</strong>
+                            </div>
                             <div class="product-search">Search notes...</div>
-                            <small>DRAFTS</small>
-                            <div class="product-note active">Launch essay</div>
-                            <div class="product-note">Book proposal</div>
-                            <div class="product-note">Newsletter intro</div>
-                            <small>IMPORTED</small>
-                            <div class="product-note">Evernote archive</div>
+                            <div class="preview-note-card active">
+                                <strong>Cursor for writing</strong>
+                                <span>Turn the renewal rant into a cleaner intro.</span>
+                            </div>
+                            <div class="preview-note-card">
+                                <strong>Evernote renewal</strong>
+                                <span>I had to pay $100 for my own notes.</span>
+                            </div>
+                            <div class="preview-note-card">
+                                <strong>AI providers</strong>
+                                <span>OpenRouter, Gemini, Serper, image model.</span>
+                            </div>
                         </aside>
 
                         <main class="ide-editor">
+                            <div class="preview-editor-toolbar">
+                                <span>Drafts / Cursor for writing</span>
+                                <div>
+                                    <button type="button">Assistant</button>
+                                    <button type="button">Save</button>
+                                </div>
+                            </div>
                             <div class="landing-copy ide-copy">
                                 <p class="eyebrow">AI writing IDE</p>
                                 <h2>An IDE for your writing.</h2>
                                 <p class="landing-lede">
-                                    EverFree gives writers the Cursor-style workflow: open a draft, ask for a rewrite, continue a section, research a claim, or turn rough notes into usable prose.
+                                    Open a note, select the messy bit, and ask the assistant to keep going. It can use the current note, your selected excerpt, web search, and image generation.
                                 </p>
                                 <div id="signin-idle" class="landing-actions">
                                     <a class="btn btn-primary landing-download" href="https://github.com/adi2907/everfree/releases/download/v1.0.1/EverFree.dmg">
@@ -117,27 +143,38 @@
                             </div>
 
                             <article class="product-document ide-document">
-                                <code>Draft / Launch essay</code>
-                                <h3>Opening argument</h3>
+                                <code>Draft / Cursor for writing</code>
+                                <h3>The renewal note</h3>
                                 <p class="product-lede">A writing tool should understand the draft, not just decorate it.</p>
                                 <p>
-                                    The hard part is not storing notes. The hard part is turning scattered context into a clear paragraph, then making the next paragraph easier to write.
+                                    I had to pay $100 for an Evernote renewal. For my notes. No way. The point of EverFree is simple: the editor should help me write, research, and keep moving without turning my notes into another subscription.
                                 </p>
-                                <div class="product-selection">Ask: tighten this, keep the voice, add the missing transition.</div>
+                                <div class="product-selection">Selected excerpt: "For my notes. No way."</div>
                             </article>
                         </main>
 
                         <aside class="ide-assistant" aria-label="AI assistant preview">
-                            <div class="assistant-header">
+                            <div class="assistant-header preview-assistant-header">
                                 <strong>Assistant</strong>
-                                <span>Cmd+K</span>
+                                <span>OpenRouter</span>
                             </div>
-                            <div class="assistant-prompt">Rewrite the selected paragraph like a product thesis. Use my Evernote import if useful.</div>
-                            <div class="assistant-tool">reading: Launch essay, Research notes, Evernote archive</div>
-                            <div class="assistant-answer">
-                                EverFree is not trying to make notes prettier. It is a writing environment where the assistant can work inside the draft, pull in saved context, and help you move from fragments to finished prose.
+                            <div class="assistant-messages-preview">
+                                <div class="assist-msg assist-user">
+                                    <div class="assist-quote">For my notes. No way.</div>
+                                    Rewrite this opening. Keep it personal.
+                                </div>
+                                <div class="assist-tool agent-step agent-step-one">Thinking...</div>
+                                <div class="assist-tool agent-step agent-step-two">web_search: Evernote pricing</div>
+                                <div class="assist-tool agent-step agent-step-three">read_page: current pricing page</div>
+                                <div class="assist-msg assist-assistant">
+                                    I had to pay $100 to renew Evernote. For my own notes. That was the moment EverFree started.
+                                </div>
+                                <div class="slash-preview">
+                                    <span>/image</span>
+                                    <small>Generate an image from a prompt</small>
+                                </div>
                             </div>
-                            <div class="assistant-input">Ask, revise, continue, research...</div>
+                            <div class="assistant-input">Ask anything, or type / for commands</div>
                         </aside>
                     </div>
                 </div>
@@ -146,19 +183,19 @@
             <section class="landing-system" id="how-it-works" aria-label="Why EverFree exists">
                 <div class="system-manifesto">
                     <span>Product thesis</span>
-                    <h3>Not a Markdown pitch. Not a prettier notes database.</h3>
+                    <h3>A writing workspace for the work after capture.</h3>
                     <p>
-                        EverFree is for the moment after capture: when you have notes, scraps, research, and an unfinished draft, and you need a writing partner inside the editor.
+                        EverFree is for the moment when you have notes, scraps, research, and an unfinished draft. The assistant lives beside the editor so the next paragraph is easier to write.
                     </p>
                 </div>
                 <div class="system-log" aria-label="EverFree capabilities">
                     <div class="system-log-row">
-                        <small>write</small>
-                        <span>Continue a draft, rewrite selected text, summarize a messy note, or ask for the next usable paragraph.</span>
+                        <small>editor</small>
+                        <span>Three-pane notes, search, a real writing surface, voice input, image uploads, and GitHub sync.</span>
                     </div>
                     <div class="system-log-row">
-                        <small>research</small>
-                        <span>Let the assistant search the web and read your notes before it answers.</span>
+                        <small>assistant</small>
+                        <span>Ask about the current note, attach selected text, search the web, read pages, or generate an image with `/image`.</span>
                     </div>
                     <div class="system-log-row">
                         <small>import</small>
