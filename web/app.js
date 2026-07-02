@@ -29,6 +29,7 @@
     let currentNote = null;
     let selectedNotebook = null; // notebook filter for the note browser (null = All notes)
     let editor = null;
+    let assetUrlCache = {}; // note-relative image path -> blob: object URL (open note only)
     let editorDictation = null;
     let isDirty = false;
     let searchSeq = 0;
@@ -735,6 +736,111 @@
         return snippet;
     }
 
+    // ── Note image assets ───────────────────────────────────
+    // Notes reference pasted/dropped images by a note-relative path
+    // (assets/<file>). The bytes live in the (private) repo, so we can't point
+    // an <img> at raw.githubusercontent.com — fetch each one with the auth
+    // token and expose it as a blob: URL that customHTMLRenderer.image swaps in.
+    async function preloadNoteAssets(notebook, markdown) {
+        // Release the previous note's blob URLs before loading the new set.
+        for (const url of Object.values(assetUrlCache)) URL.revokeObjectURL(url);
+        assetUrlCache = {};
+
+        const rels = new Set();
+        const re = /!\[[^\]]*\]\(\s*<?([^)>\s]+)>?(?:\s+"[^"]*")?\s*\)/g;
+        let m;
+        while ((m = re.exec(markdown)) !== null) {
+            const dest = m[1];
+            if (dest && !/^(https?:|data:|blob:|\/|#)/.test(dest)) rels.add(dest);
+        }
+        if (rels.size === 0) return;
+
+        await Promise.all([...rels].map(async (rel) => {
+            try {
+                const path = `${notebook}/${rel}`;
+                const url = `https://api.github.com/repos/${repoFull}/contents/${encodeURI(path)}?ref=${defaultBranch}`;
+                const r = await fetch(url, {
+                    headers: {
+                        "Authorization": `Bearer ${token}`,
+                        "Accept": "application/vnd.github.raw",
+                        "X-GitHub-Api-Version": "2022-11-28",
+                    },
+                });
+                if (!r.ok) return;
+                assetUrlCache[rel] = URL.createObjectURL(await r.blob());
+            } catch (err) {
+                console.warn("Failed to load note image:", rel, err);
+            }
+        }));
+    }
+
+    // Browser paste/drag MIME types → file extensions (mirrors the local server).
+    const IMAGE_EXT = {
+        "image/png": "png",
+        "image/jpeg": "jpg",
+        "image/jpg": "jpg",
+        "image/gif": "gif",
+        "image/webp": "webp",
+        "image/svg+xml": "svg",
+        "image/bmp": "bmp",
+        "image/tiff": "tiff",
+        "image/heic": "heic",
+    };
+
+    function arrayBufferToBase64(buf) {
+        const bytes = new Uint8Array(buf);
+        let binary = "";
+        const chunk = 0x8000; // chunk to stay under argument-count limits
+        for (let i = 0; i < bytes.length; i += chunk) {
+            binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+        }
+        return btoa(binary);
+    }
+
+    function assetFilename(ext) {
+        const d = new Date();
+        const p = (n) => String(n).padStart(2, "0");
+        const stamp = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+        const rand = new Uint8Array(3);
+        crypto.getRandomValues(rand);
+        const hex = [...rand].map((b) => b.toString(16).padStart(2, "0")).join("");
+        return `paste-${stamp}-${hex}.${ext}`;
+    }
+
+    // ── Image paste / drag-drop upload ──────────────────────
+    // Commits the pasted image into the open note's assets/ folder in the repo
+    // and returns the note-relative path (assets/<file>) to embed — the same
+    // form the local app and agent use, so the Markdown stays portable.
+    async function uploadImageBlob(blob) {
+        if (!currentNotebook) {
+            alert("Open a note before adding an image.");
+            return null;
+        }
+        const ext = IMAGE_EXT[(blob && blob.type || "").toLowerCase()];
+        if (!ext) {
+            alert("Only image files can be added.");
+            return null;
+        }
+        try {
+            const rel = `assets/${assetFilename(ext)}`;
+            const path = `${currentNotebook}/${rel}`;
+            const b64 = arrayBufferToBase64(await blob.arrayBuffer());
+            const data = await gh("PUT", `/repos/${repoFull}/contents/${encodeURI(path)}`, {
+                message: `Add image ${path}`,
+                content: b64,
+                branch: defaultBranch,
+            });
+            if (data && data.content) fileShas[path] = data.content.sha;
+            // Make it render immediately without a round-trip to fetch the bytes.
+            assetUrlCache[rel] = URL.createObjectURL(blob);
+            return rel;
+        } catch (err) {
+            console.error("Image upload failed:", err);
+            alert("Couldn't add image: " + (err.message || err));
+            return null;
+        }
+    }
+
     // ── Open Note ───────────────────────────────────────────
     async function openNote(notebook, note) {
         if (isDirty && !confirm("You have unsaved changes. Discard?")) return;
@@ -744,6 +850,7 @@
             setSyncStatus("syncing", "Loading note…");
             const path = `${notebook}/${note}`;
             const { content } = await getFile(path);
+            await preloadNoteAssets(notebook, content);
 
             currentNotebook = notebook;
             currentNote = note;
@@ -774,6 +881,40 @@
             initialEditType: "wysiwyg",
             initialValue: content,
             placeholder: "Start writing…",
+            hooks: {
+                // Paste or drag-drop an image: upload the blob to the note's
+                // assets/ folder in the repo and insert it as a note-relative
+                // path. Returning false prevents Toast UI's default base64
+                // inlining (which would bloat the synced Markdown).
+                addImageBlobHook(blob, callback) {
+                    uploadImageBlob(blob).then((relPath) => {
+                        if (!relPath) return;
+                        callback(relPath, blob.name || "image");
+                        // Re-render from Markdown so customHTMLRenderer maps the
+                        // relative path to its blob: URL — a freshly inserted
+                        // node keeps the raw src and won't load otherwise.
+                        requestAnimationFrame(() => {
+                            if (editor) editor.setMarkdown(editor.getMarkdown());
+                        });
+                    });
+                    return false;
+                },
+            },
+            customHTMLRenderer: {
+                // Resolve note-relative image paths (assets/foo.png) to the
+                // blob: URL preloaded from the repo so they render. Display-only:
+                // the editor keeps the relative path in its model, so saves stay
+                // portable in the synced Markdown.
+                image(node, context) {
+                    const result = context.origin();
+                    const src = node.destination || "";
+                    if (result && !/^(https?:|data:|blob:|\/)/.test(src)) {
+                        const resolved = assetUrlCache[src];
+                        if (resolved) result.attributes.src = resolved;
+                    }
+                    return result;
+                },
+            },
         });
 
         const isDark = (localStorage.getItem(LS_THEME) || "light") === "dark";
