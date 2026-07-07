@@ -141,7 +141,7 @@
                             <line x1="8" y1="23" x2="16" y2="23"/>
                         </svg>
                     </button>
-                    <button class="btn btn-ghost" id="btn-assist" title="Writing assistant (⌘K)">
+                    <button class="btn btn-ghost" id="btn-assist" title="Writing assistant (⌘L)">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
                             <path d="M12 2l2.1 6.4L20.5 10l-6.4 2.1L12 18.5 9.9 12.1 3.5 10l6.4-1.6L12 2z"/>
                         </svg>
@@ -170,7 +170,7 @@
         </div>
     </main>
 
-    <!-- ── Writing Assistant Panel (⌘K) ─────────────────── -->
+    <!-- ── Writing Assistant Panel (⌘L) ─────────────────── -->
     <aside class="assist-panel" id="assist-panel" hidden>
         <div class="assist-header">
             <span class="assist-title">
@@ -198,7 +198,7 @@
                     <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/>
                 </svg>
             </button>
-            <button class="btn-icon" id="assist-close-btn" title="Close (⌘K)" aria-label="Close assistant">
+            <button class="btn-icon" id="assist-close-btn" title="Close (⌘L or Esc)" aria-label="Close assistant">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                     stroke-linecap="round" stroke-linejoin="round">
                     <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
@@ -276,8 +276,8 @@
             <div class="assist-hint">
                 Ask anything — the assistant can reason, read your other notes, and search the web before answering.<br>
                 Type <code>/</code> for commands — <code>/image</code> a prompt, or <code>/chats</code> to browse past chats.<br>
-                Select text in your note + <kbd>⌘L</kbd> to ask about that excerpt<br>
-                <kbd>⌘.</kbd> continue writing · <kbd>⌘K</kbd> toggle panel · the ✎ icon starts a new chat
+                <kbd>⌘K</kbd> writes for you: completes the selected block right in the note, or continues where you stopped<br>
+                <kbd>⌘L</kbd> chats about the selection · the ✎ icon starts a new chat
             </div>
         </div>
 

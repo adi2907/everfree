@@ -22,7 +22,24 @@ Tools:
 - web_search (Google) then read_page — for external facts. Read the 2-3 most promising results before answering, and end such a passage with a "Sources:" line of Markdown links.
 - generate_image — whenever the user asks for an image, illustration, diagram, or picture. Write a specific, detailed prompt grounded in the actual subject of the note: name the real people, companies, products, places, and setting involved instead of a generic abstraction. NEVER write a Markdown image link from your own imagination — that produces a broken link. Call generate_image, then reply with a one-line caption only.
 
+When the user's message includes a selected excerpt from their note, respond in the language of that excerpt unless they ask otherwise — a Hindi excerpt gets a Hindi rewrite.
+
 Reply with clean Markdown and no preamble ("Here is...", "Sure,") or commentary about what you did.`;
+
+const CONTINUE_SYSTEM_PROMPT = `You are the writing assistant built into EverFree, a Markdown note-taking app.
+Continue the user's note from exactly where it stops. If the last sentence is unfinished, finish it, then add at most one or two short sentences in the same voice, tone, and formatting. Do not keep expanding the note.
+Write in the same language as the note. If the note is in Hindi, continue in Hindi; if it mixes languages, keep the same mix. Never switch language.
+Reply with the continuation text only — no preamble, no quotes, and do not repeat any of the existing text.`;
+
+const COMPLETE_SYSTEM_PROMPT = `You are the writing assistant built into EverFree, a Markdown note-taking app.
+The user selected a passage from their note and asked you to complete it. Pick up exactly where the selection stops and bring the thought to a natural close.
+Rules:
+- Write in the SAME LANGUAGE as the selection. If the selection is in Hindi, continue in Hindi; if it mixes languages, keep the same mix. Never switch to English unless the selection is in English.
+- Match the selection's voice, tone, tense, and formatting: continue prose as prose. Continue a list as list items — each new item on its own line, starting with the same marker followed by a space (e.g. "- ").
+- If the last sentence is unfinished, finish it first.
+- Stay inside the selected block: complete the paragraph or list, never start new sections or headings.
+- Keep it short — usually one to three sentences (or two or three list items), just enough to complete the thought.
+Reply with the continuation text only — no preamble, no quotes, no code fences, and do not repeat any of the selected text.`;
 
 // ── Tool schemas (OpenAI function-calling shape) ─────────────
 const TOOLS = [
@@ -255,14 +272,17 @@ async function runTool(name, args, keys) {
 }
 
 // ── OpenRouter (OpenAI-compatible) streaming loop ────────────
-async function* runOpenRouter(messages, keys, model) {
+async function* runOpenRouter(messages, keys, model, useTools = true) {
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+        const payload = { model, messages, stream: true, max_tokens: 2048 };
+        if (useTools) payload.tools = TOOLS;
+        else payload.reasoning = { effort: "minimal", exclude: true };
         let resp;
         try {
             resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
                 method: "POST",
                 headers: { Authorization: `Bearer ${keys.openrouter_api_key}`, "Content-Type": "application/json" },
-                body: JSON.stringify({ model, messages, tools: TOOLS, stream: true, max_tokens: 2048 }),
+                body: JSON.stringify(payload),
             });
         } catch (err) {
             yield { type: "error", detail: `Could not reach OpenRouter: ${err.message || err}` };
@@ -342,15 +362,18 @@ function geminiTools() {
     }];
 }
 
-async function* runGemini(messages, keys, model) {
+async function* runGemini(messages, keys, model, useTools = true) {
     const { systemInstruction, contents } = toGeminiContents(messages);
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${encodeURIComponent(keys.gemini_api_key)}`;
         const body = {
             contents,
-            tools: geminiTools(),
             generationConfig: { maxOutputTokens: 2048 },
         };
+        if (useTools) body.tools = geminiTools();
+        // Writing straight into the note: hidden thinking would eat the whole
+        // token budget on a short continuation, so switch it off.
+        else body.generationConfig.thinkingConfig = { thinkingBudget: 0 };
         if (systemInstruction) body.systemInstruction = systemInstruction;
 
         let resp;
@@ -409,17 +432,44 @@ async function* runGemini(messages, keys, model) {
 
 // ── Public entry point ───────────────────────────────────────
 // Yields UI events: {type:"reason"|"delta"|"tool"|"image"|"error", ...}.
-async function* runAgent({ provider, messages, note, keys }) {
-    const system = buildSystemPrompt(note);
-    const full = [{ role: "system", content: system }, ...messages];
+// mode "chat" (default) runs the tool-using agent; "complete" continues the
+// selected passage and "continue" the whole note — both tool-less, writing
+// straight into the note.
+async function* runAgent({ provider, messages, note, keys, mode, selection }) {
+    let full;
+    let useTools = true;
+    const content = (note && note.content ? note.content : "").trim();
+    if (mode === "complete") {
+        const sel = (selection || "").trim();
+        if (!sel) { yield { type: "error", detail: "Select a passage in your note first." }; return; }
+        const userParts = [];
+        if (content && content !== sel) {
+            userParts.push(`The full note, for context only:\n\n${content.slice(-NOTE_CONTEXT_LIMIT)}`);
+        }
+        userParts.push(`Complete this selected passage:\n\n${sel.slice(-NOTE_CONTEXT_LIMIT)}`);
+        full = [
+            { role: "system", content: COMPLETE_SYSTEM_PROMPT },
+            { role: "user", content: userParts.join("\n\n") },
+        ];
+        useTools = false;
+    } else if (mode === "continue") {
+        if (!content) { yield { type: "error", detail: "The note is empty — write a few words first." }; return; }
+        full = [
+            { role: "system", content: CONTINUE_SYSTEM_PROMPT },
+            { role: "user", content: `Continue this note:\n\n${content.slice(-NOTE_CONTEXT_LIMIT)}` },
+        ];
+        useTools = false;
+    } else {
+        full = [{ role: "system", content: buildSystemPrompt(note) }, ...messages];
+    }
     try {
         if (provider === "gemini") {
             if (!keys.gemini_api_key) { yield { type: "error", detail: "Add a Gemini API key in assistant settings." }; return; }
-            yield* runGemini(full, keys, keys.gemini_model || "gemini-2.5-flash");
+            yield* runGemini(full, keys, keys.gemini_model || "gemini-2.5-flash", useTools);
         } else {
             if (!keys.openrouter_api_key) { yield { type: "error", detail: "Add an OpenRouter API key in assistant settings." }; return; }
             if (!keys.openrouter_model) { yield { type: "error", detail: "Pick an OpenRouter model in assistant settings." }; return; }
-            yield* runOpenRouter(full, keys, keys.openrouter_model);
+            yield* runOpenRouter(full, keys, keys.openrouter_model, useTools);
         }
     } catch (err) {
         yield { type: "error", detail: err.message || String(err) };

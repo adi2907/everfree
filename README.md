@@ -17,11 +17,14 @@ It's free, MIT-licensed, and the Mac app ships as a signed and notarized DMG.
 ## What it is
 
 EverFree is a three-pane note editor with an AI assistant wired into it the
-way Cursor is wired into code. The assistant reads the note you have open,
-and when you select a passage and press ⌘L, that exact excerpt becomes the
-context for your next message. From there you can ask it to continue a
-stalled draft, rewrite a section, summarize the note, search the web before
-answering, or generate an image with `/image`.
+way Cursor is wired into code, on Cursor's own two keys. Select a passage
+and press ⌘K, and the AI completes that block right there in the note — in
+the same language and voice you were writing in (press ⌘K with nothing
+selected and it continues from where you stopped; Esc cancels). Select a
+passage and press ⌘L, and that exact excerpt becomes the context for a chat
+message instead — ask it to rewrite the section, summarize the note, search
+the web before answering, or generate an image with `/image`, then insert
+the reply into the note with one click.
 
 The same workspace is available on Mac, in the browser, and on mobile — all
 three edit the same notes, synced through a private GitHub repository you

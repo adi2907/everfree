@@ -684,11 +684,24 @@ Tools:
 - create_note — only when the user explicitly asks you to save or create a note. It never overwrites existing notes.
 - generate_image — whenever the user asks for an image, illustration, diagram, or picture. Write a specific, detailed prompt grounded in the actual subject of the note: name the real people, companies, products, places, and setting involved instead of a generic abstraction like "a company's transformation". NEVER write a Markdown image link from your own imagination — that produces a broken link to a file that does not exist. Call generate_image, then reply with ONLY the exact Markdown it returns — no extra paragraphs.
 
+When the user's message includes a selected excerpt from their note, respond in the language of that excerpt unless they ask otherwise — a Hindi excerpt gets a Hindi rewrite.
+
 Reply with clean Markdown and no preamble ("Here is...", "Sure,") or commentary about what you did. Don't wrap the whole reply in a code fence."""
 
 CONTINUE_SYSTEM_PROMPT = """You are the writing assistant built into EverFree, a Markdown note-taking app.
-Continue the user's note from exactly where it stops. If the last sentence is unfinished, finish it. Add at most one short sentence after that, in the same voice, tone, and formatting. Do not keep expanding the note.
+Continue the user's note from exactly where it stops. If the last sentence is unfinished, finish it, then add at most one or two short sentences in the same voice, tone, and formatting. Do not keep expanding the note.
+Write in the same language as the note. If the note is in Hindi, continue in Hindi; if it mixes languages, keep the same mix. Never switch language.
 Reply with the continuation text only — no preamble, no quotes, and do not repeat any of the existing text."""
+
+COMPLETE_SYSTEM_PROMPT = """You are the writing assistant built into EverFree, a Markdown note-taking app.
+The user selected a passage from their note and asked you to complete it. Pick up exactly where the selection stops and bring the thought to a natural close.
+Rules:
+- Write in the SAME LANGUAGE as the selection. If the selection is in Hindi, continue in Hindi; if it mixes languages, keep the same mix. Never switch to English unless the selection is in English.
+- Match the selection's voice, tone, tense, and formatting: continue prose as prose. Continue a list as list items — each new item on its own line, starting with the same marker followed by a space (e.g. "- ").
+- If the last sentence is unfinished, finish it first.
+- Stay inside the selected block: complete the paragraph or list, never start new sections or headings.
+- Keep it short — usually one to three sentences (or two or three list items), just enough to complete the thought.
+Reply with the continuation text only — no preamble, no quotes, no code fences, and do not repeat any of the selected text."""
 
 
 # ── Agent loop ───────────────────────────────────────────────
@@ -1154,6 +1167,23 @@ async def agent_chat(request: Request):
         # Brevity is enforced by the prompt; the budget just needs to be large
         # enough that a reasoning model's hidden thinking doesn't crowd out the
         # short continuation. Gemini additionally has thinking disabled below.
+        max_tokens = 1024
+        no_thinking = True
+    elif mode == "complete":
+        selection = (body.get("selection") or "").strip()
+        if not selection:
+            raise HTTPException(status_code=400, detail="Select a passage in your note first.")
+        # The rest of the note gives the model the subject; the selection tail
+        # is repeated last so "pick up where it stops" is unambiguous.
+        user_parts = []
+        if note_content and note_content != selection:
+            user_parts.append(f"The full note, for context only:\n\n{note_content[-NOTE_CONTEXT_LIMIT:]}")
+        user_parts.append(f"Complete this selected passage:\n\n{selection[-NOTE_CONTEXT_LIMIT:]}")
+        messages = [
+            {"role": "system", "content": COMPLETE_SYSTEM_PROMPT},
+            {"role": "user", "content": "\n\n".join(user_parts)},
+        ]
+        tools = None
         max_tokens = 1024
         no_thinking = True
     else:

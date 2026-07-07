@@ -918,6 +918,72 @@ body {
     padding: 4px 6px;
 }
 
+/* Insert / Copy row under an assistant reply */
+.assist-msg-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 8px;
+    padding-top: 6px;
+    border-top: 1px solid var(--border);
+    white-space: normal;
+}
+
+.assist-msg-actions button {
+    font-size: 11px;
+    padding: 2px 8px;
+    border: 1px solid var(--border-light);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+.assist-msg-actions button:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+}
+
+/* ⌘K floating status while the AI writes into the note */
+.assist-write-pill {
+    position: fixed;
+    bottom: 28px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 300;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 14px;
+    border-radius: 999px;
+    background: var(--bg-modal);
+    border: 1px solid var(--border-light);
+    color: var(--text-secondary);
+    font-size: 12px;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25);
+}
+
+.assist-write-pill kbd {
+    font-size: 10px;
+    background: var(--bg-input);
+    border: 1px solid var(--border-light);
+    border-radius: 4px;
+    padding: 1px 5px;
+    color: var(--accent);
+}
+
+.assist-write-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    animation: assist-write-pulse 1s ease-in-out infinite;
+}
+
+@keyframes assist-write-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.4; transform: scale(0.75); }
+}
+
 .assist-actions-row {
     display: flex;
     justify-content: flex-end;
@@ -1215,12 +1281,12 @@ body {
     border-left: 3px solid var(--accent);
     padding: 4px 0 4px 8px;
     margin-bottom: 6px;
-    color: var(--text-secondary);
+    color: var(--text-primary);
     font-size: 12px;
     font-family: var(--font-mono);
     white-space: pre-wrap;
     word-break: break-word;
-    opacity: 0.85;
+    opacity: 0.8;
 }
 
 /* ── Context menu (rename / move / delete) ─────────────────── */

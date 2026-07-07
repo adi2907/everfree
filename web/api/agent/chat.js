@@ -15,6 +15,8 @@ module.exports = async (req, res) => {
     const provider = body.provider === "gemini" ? "gemini" : "openrouter";
     const note = body.note || {};
     const keys = body.keys || {};
+    const mode = typeof body.mode === "string" ? body.mode : "chat";
+    const selection = typeof body.selection === "string" ? body.selection : "";
     const messages = (Array.isArray(body.messages) ? body.messages : [])
         .filter((m) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string")
         .map((m) => ({ role: m.role, content: m.content }))
@@ -29,7 +31,7 @@ module.exports = async (req, res) => {
     };
 
     try {
-        for await (const event of runAgent({ provider, messages, note, keys })) {
+        for await (const event of runAgent({ provider, messages, note, keys, mode, selection })) {
             write(event);
         }
     } catch (err) {

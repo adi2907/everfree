@@ -1,6 +1,11 @@
 /* ════════════════════════════════════════════════════════════
    EverFree — Writing Assistant Panel
-   Shortcuts: ⌘K toggle panel · ⌘. continue writing · ⌘L attach selection
+   Two shortcuts, Cursor-style:
+     ⌘K — write for me: completes the selected block in place (same language
+          and voice), or continues from the cursor when nothing is selected.
+          The text streams straight into the note; Esc cancels.
+     ⌘L — talk about it: toggles the chat panel, attaching the current
+          selection as context when there is one.
    Slash commands: /image <prompt> · /chats [text]
    The assistant searches the web and reads your notes on its own when useful.
    Chats persist on local disk, indexed by the note they belong to.
@@ -45,7 +50,7 @@
     // The active chat session. `id` is null until the first message is sent,
     // at which point it is assigned and the session is persisted to disk.
     // `messages` holds only the conversational turns (user + assistant text);
-    // one-off actions (⌘. continue, /image, /chats) are not persisted.
+    // one-off actions (⌘K writing, /image, /chats) are not persisted.
     let currentChat = newSession();
     let busy = false;
 
@@ -137,7 +142,7 @@
         h.innerHTML =
             "Ask anything about your note — the assistant searches the web and reads your other notes when useful.<br>" +
             "Type <code>/</code> for commands — <code>/image</code> a prompt, or <code>/chats</code> to browse past chats.<br>" +
-            "<kbd>⌘.</kbd> continue writing · <kbd>⌘K</kbd> toggle panel · use Clear chat to start fresh";
+            "<kbd>⌘K</kbd> in the note: completes your selection (or continues where you stopped) · <kbd>⌘L</kbd> chat about the selection";
         $messages.appendChild(h);
     }
 
@@ -145,9 +150,43 @@
         const $b = document.createElement("div");
         $b.className = `assist-msg assist-${role}`;
         $b.textContent = text || "";
+        if (role === "assistant" && text) addBubbleActions($b, () => text);
         $messages.appendChild($b);
         scrollToBottom();
         return $b;
+    }
+
+    // Insert / Copy row under an assistant reply, so an answer or rewrite can
+    // land in the note without manual copying.
+    function addBubbleActions($b, getText) {
+        const $row = document.createElement("div");
+        $row.className = "assist-msg-actions";
+        const flash = ($btn, label) => {
+            const old = $btn.textContent;
+            $btn.textContent = label;
+            setTimeout(() => { $btn.textContent = old; }, 1200);
+        };
+        const btn = (label, title, fn) => {
+            const $x = document.createElement("button");
+            $x.type = "button";
+            $x.textContent = label;
+            $x.title = title;
+            $x.addEventListener("click", fn);
+            $row.appendChild($x);
+            return $x;
+        };
+        btn("↳ Insert", "Append this reply to the open note", (e) => {
+            const ok = bridge() && bridge().insertMarkdown && bridge().insertMarkdown(getText());
+            if (ok) flash(e.target, "Inserted ✓");
+            else addErrorLine("Open a note to insert into.");
+        });
+        btn("⧉ Copy", "Copy this reply", async (e) => {
+            try {
+                await navigator.clipboard.writeText(getText());
+                flash(e.target, "Copied ✓");
+            } catch { /* clipboard unavailable */ }
+        });
+        $b.appendChild($row);
     }
 
     // A user bubble that optionally shows the attached note excerpt above the prompt.
@@ -184,16 +223,18 @@
         renderContextChip();
     }
 
-    function addSelectionToChat() {
+    // ⌘L — open the chat about the current selection; with nothing selected it
+    // just toggles the panel.
+    function toggleChat() {
         const sel = bridge() && bridge().getSelection ? bridge().getSelection() : "";
-        togglePanel(true);
-        if (!sel) {
-            addErrorLine("Select some text in your note first, then press ⌘L.");
-            return;
+        if (sel) {
+            pendingContext = sel;
+            renderContextChip();
+            togglePanel(true);
+            $input.focus();
+        } else {
+            togglePanel();
         }
-        pendingContext = sel;
-        renderContextChip();
-        $input.focus();
     }
 
     function foldContext(ctx, prompt) {
@@ -479,6 +520,7 @@
         // Collapse the reasoning trace once a real answer exists; keep it open if
         // reasoning was all we got back.
         if (reasoning && fullText) reasoning.$d.open = false;
+        if ($bubble && fullText) addBubbleActions($bubble, () => fullText);
         return fullText;
     }
 
@@ -519,22 +561,117 @@
         }
     }
 
-    async function continueWriting() {
-        const note = bridge() && bridge().getNote();
+    // ── ⌘K — write into the note ────────────────────────────
+    // With a selection: the model completes that block in place (same language
+    // and voice) and the text streams in right after the selection. Without
+    // one: it continues the note from the cursor. Esc cancels mid-stream.
+    let writeAbort = null;
+
+    // Lean NDJSON reader for note-writing: delta text is inserted, reasoning
+    // only drives the status pill, and errors throw. Cancellable via `signal`.
+    async function streamPlain(body, onDelta, signal, onReason) {
+        const resp = await fetch("/api/agent/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+            signal,
+        });
+        if (!resp.ok) {
+            let detail = `HTTP ${resp.status}`;
+            try { detail = (await resp.json()).detail || detail; } catch { /* keep */ }
+            throw new Error(detail);
+        }
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop();
+            for (const line of lines) {
+                if (!line.trim()) continue;
+                let event;
+                try { event = JSON.parse(line); } catch { continue; }
+                if (event.type === "delta") onDelta(event.text);
+                else if (event.type === "reason" && onReason) onReason();
+                else if (event.type === "error") throw new Error(event.detail);
+            }
+        }
+    }
+
+    function showWritePill(label) {
+        const $el = document.createElement("div");
+        $el.className = "assist-write-pill";
+        $el.innerHTML = `<span class="assist-write-dot"></span> <span class="assist-write-label"></span> · <kbd>esc</kbd> to stop`;
+        const $label = $el.querySelector(".assist-write-label");
+        $label.textContent = label;
+        document.body.appendChild($el);
+        return {
+            setLabel(text) { $label.textContent = text; },
+            remove() { $el.remove(); },
+        };
+    }
+
+    async function aiWrite() {
+        if (writeAbort) return; // one write at a time
+        const b = bridge();
+        const note = b && b.getNote();
         if (!note) {
             togglePanel(true);
-            addErrorLine("Open a note first — ⌘. continues the note you're writing.");
+            addErrorLine("Open a note first — ⌘K writes into the note you have open.");
             return;
         }
-        togglePanel(true);
-        addBubble("user", "⌘. Continue writing");
-        setBusy(true);
+        if (!(note.content || "").trim()) {
+            togglePanel(true);
+            addErrorLine("Write a few words first — ⌘K picks up where you stop.");
+            return;
+        }
+        const info = (b.getSelectionInfo && b.getSelectionInfo()) || { text: "", range: null };
+        const selection = info.text || "";
+        const mode = selection ? "complete" : "continue";
+
+        // Glue between the existing text and the continuation: a newline when
+        // the model starts a new list item, a space when it butts up against
+        // the last word (models rarely lead with whitespace). Without a
+        // selection the note's trailing text stands in as the anchor.
+        const anchor = selection || (note.content || "").replace(/\s+$/, "");
+        const glueFor = (t) => {
+            if (!anchor || /\s$/.test(anchor)) return "";
+            if (/^([-*+]|\d+\.)\s?/.test(t)) return "\n";
+            return /^[\s.,;:!?)\]]/.test(t) ? "" : " ";
+        };
+        const writeLabel = selection ? "Completing selection" : "Continuing note";
+        const pill = showWritePill(writeLabel);
+        writeAbort = new AbortController();
+        let started = false;
         try {
-            await streamChat({ mode: "continue", note });
+            await streamPlain({ mode, note, selection }, (text) => {
+                if (!started) {
+                    text = text.replace(/^\n+/, "");
+                    if (!text) return;
+                    started = true;
+                    pill.setLabel(writeLabel);
+                    // First chunk lands just after the selection (or at the
+                    // cursor); later chunks flow from the caret it leaves.
+                    if (selection) b.insertAfterRange(info.range, glueFor(text) + text);
+                    else b.insertAtCursor(glueFor(text) + text);
+                    return;
+                }
+                b.insertAtCursor(text);
+            }, writeAbort.signal, () => {
+                // Local reasoning models think first; say so instead of sitting mute.
+                if (!started) pill.setLabel("Thinking");
+            });
         } catch (err) {
-            addErrorLine(err.message);
+            if (err.name !== "AbortError") {
+                togglePanel(true);
+                addErrorLine(err.message);
+            }
         } finally {
-            setBusy(false);
+            pill.remove();
+            writeAbort = null;
         }
     }
 
@@ -823,16 +960,18 @@
     });
 
     document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && writeAbort) {
+            e.preventDefault();
+            writeAbort.abort();
+            return;
+        }
         if (!(e.metaKey || e.ctrlKey)) return;
         if (e.key === "k" || e.key === "K") {
             e.preventDefault();
-            togglePanel();
-        } else if (e.key === ".") {
-            e.preventDefault();
-            if (!busy) continueWriting();
+            aiWrite();
         } else if (e.key === "l" || e.key === "L") {
             e.preventDefault();
-            addSelectionToChat();
+            toggleChat();
         }
     });
 

@@ -126,7 +126,7 @@
                 <div class="demo-frame">
                     <div class="demo-bar">
                         <span></span><span></span><span></span>
-                        <small>Assistant &mdash; &#8984;K</small>
+                        <small>Assistant &mdash; &#8984;K writes &middot; &#8984;L chats</small>
                     </div>
                     <div class="demo-media">
                         <div class="demo-placeholder">Assistant demo</div>
@@ -136,6 +136,11 @@
 
                 <ul class="assistant-list">
                     <li>
+                        <strong>Complete the block you're in</strong>
+                        Select a passage and press <kbd>&#8984;K</kbd> &mdash; the AI finishes it right in the
+                        note, in the same language and voice. No selection? It continues where you stopped.
+                    </li>
+                    <li>
                         <strong>Quote a passage</strong>
                         Select text and press <kbd>&#8984;L</kbd> &mdash; the excerpt is attached to your next
                         message, so "rewrite this" means exactly this.
@@ -143,7 +148,7 @@
                     <li>
                         <strong>Work on the current note</strong>
                         Continue a stalled draft, rewrite a section, summarize the whole note, or have it
-                        create a new one.
+                        create a new one &mdash; replies drop into the note with one click.
                     </li>
                     <li>
                         <strong>Research while you write</strong>
@@ -404,7 +409,7 @@
                     </div>
                     <div class="editor-actions">
                         <span class="save-status" id="save-status"></span>
-                        <button class="btn-icon" id="btn-assist" title="Assistant (Ctrl/⌘K)" aria-label="Assistant">
+                        <button class="btn-icon" id="btn-assist" title="Assistant (Ctrl/⌘L)" aria-label="Assistant">
                             <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor">
                                 <path d="M12 2l2.1 6.4L20.5 10l-6.4 2.1L12 18.5 9.9 12.1 3.5 10l6.4-1.6L12 2z"/>
                             </svg>
@@ -489,7 +494,7 @@
                     <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/>
                 </svg>
             </button>
-            <button class="btn-icon" id="assist-close-btn" title="Close (⌘K)" aria-label="Close assistant">
+            <button class="btn-icon" id="assist-close-btn" title="Close (⌘L or Esc)" aria-label="Close assistant">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                     stroke-linecap="round" stroke-linejoin="round">
                     <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
@@ -560,7 +565,7 @@
             <div class="assist-hint">
                 Ask anything about your note — the assistant can reason and search the web before answering.<br>
                 Type <code>/</code> for commands — <code>/image</code> a prompt to generate a picture.<br>
-                Select text in your note + <kbd>⌘L</kbd> to ask about that excerpt.
+                <kbd>⌘K</kbd> in the note: completes your selection (or continues where you stopped) · <kbd>⌘L</kbd> chat about the selection
             </div>
         </div>
 

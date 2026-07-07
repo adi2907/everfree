@@ -1235,6 +1235,46 @@
             if (!editor || !editor.getSelectedText) return "";
             try { return (editor.getSelectedText() || "").trim(); } catch { return ""; }
         },
+        // Selection text plus its range, captured together so text generated
+        // for it later can be placed after it even if focus moved meanwhile.
+        getSelectionInfo() {
+            if (!editor) return null;
+            let text = "", range = null;
+            try { text = (editor.getSelectedText() || "").trim(); } catch { /* no selection */ }
+            try { range = editor.getSelection(); } catch { /* keep null */ }
+            return { text, range };
+        },
+        // Insert text right after `range` (from getSelectionInfo), leaving the
+        // selected text itself untouched. Falls back to the cursor position.
+        insertAfterRange(range, text) {
+            if (!editor) return false;
+            try {
+                if (range) editor.setSelection(range[1], range[1]);
+            } catch { /* stale range: insert at cursor instead */ }
+            editor.insertText(text);
+            editor.focus();
+            return true;
+        },
+        insertAtCursor(text) {
+            if (!editor) return false;
+            editor.insertText(text);
+            editor.focus();
+            return true;
+        },
+        // WYSIWYG insertText would show raw Markdown syntax literally, so
+        // formatted passages are appended through setMarkdown instead.
+        insertMarkdown(text) {
+            if (!editor) return false;
+            if (editor.isMarkdownMode && editor.isMarkdownMode()) {
+                editor.insertText(text);
+            } else {
+                const md = editor.getMarkdown();
+                editor.setMarkdown(md ? md.replace(/\s+$/, "") + "\n\n" + text + "\n" : text + "\n");
+                editor.moveCursorToEnd();
+            }
+            editor.focus();
+            return true;
+        },
     };
 
     // ── Init ────────────────────────────────────────────────
