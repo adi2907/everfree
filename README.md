@@ -1,25 +1,14 @@
 # EverFree
 
-I had to pay $100 for an Evernote renewal.
+I had to pay $100 for an Evernote renewal. For my notes. No way.
 
-For my notes.
+EverFree started as a script to get my notes out of Evernote, and grew into
+the writing tool I actually wanted: an editor where an AI assistant sits next
+to the draft — rewriting a paragraph, continuing where I stalled, checking a
+claim — while the notes themselves stay plain Markdown files in a repo I own.
+Think Cursor, but for writing.
 
-No way.
-
-So I built EverFree.
-
-It started as a way to get my notes out of Evernote. It grew into an AI
-writing IDE. Think Cursor for writing.
-
-Open a note. Select a paragraph. Ask the assistant to rewrite it. Ask it to
-continue. Ask it to research a claim. Ask it to generate an image. Stay in the
-flow.
-
-Since this is a writing app, AI should sit next to the draft. It should help
-while you still know what you meant.
-
-EverFree is completely free and open source. The Mac app ships as a signed and
-notarized DMG.
+It's free, MIT-licensed, and the Mac app ships as a signed and notarized DMG.
 
 ## Links
 
@@ -29,160 +18,87 @@ notarized DMG.
 - Source code: [github.com/adi2907/everfree](https://github.com/adi2907/everfree)
 - License: [MIT](LICENSE)
 
-## What You Can Do With It
+## What it is
 
-EverFree gives you:
+EverFree is a three-pane note editor — notebooks, notes, and a real writing
+surface — with an AI assistant wired into it the way Cursor is wired into
+code. The assistant reads the note you have open, and when you select a
+passage and press ⌘L, that exact excerpt becomes the context for your next
+message. From there you can ask it to continue a stalled draft, rewrite a
+section, summarize the note, search the web and read pages before answering,
+generate an image with `/image`, or create a new note entirely.
 
-- A writing editor for notes, drafts, and research.
-- An AI assistant inside the editor.
-- Evernote sync through the Mac app.
-- Web, mobile, and Mac access.
-- GitHub-backed sync.
-- Local files you can inspect and move.
+The same workspace is available three ways: a Mac app that works on local
+files, a web editor at [everfree.vercel.app](https://everfree.vercel.app), and
+a lightweight mobile client for capture and reading. All three edit the same
+notes, synced through a GitHub repository you own.
 
-The assistant can:
+## Setting up the AI
 
-- Continue a draft.
-- Rewrite selected text.
-- Summarize a note.
-- Search the web.
-- Read related notes.
-- Generate images.
-- Create new notes.
+The editor works without any AI configuration. When you want the assistant,
+bring your own key: the desktop app supports LM Studio (fully local, no key
+needed), OpenRouter, and Gemini; the web app supports OpenRouter and Gemini.
+Web search needs a free [Serper](https://serper.dev) key — without it the
+assistant can't check the web. Image generation uses your Gemini key first
+and falls back to OpenRouter.
 
-## AI setup
+Keys are entered in the assistant settings. In the web app they are stored
+only in your browser and sent only with the request being made — nothing is
+retained server-side.
 
-Bring your own OpenRouter key or Gemini key.
+## Getting started on the Mac
 
-The desktop app supports:
+Download the [DMG](https://github.com/adi2907/everfree/releases/download/v1.0.1/EverFree.dmg)
+and open it. The app is signed and notarized, so there are no Gatekeeper
+workarounds. On first launch, a setup wizard walks you through the rest:
 
-- LM Studio
-- OpenRouter
-- Gemini
+1. Allow access to your Documents folder.
+2. Connect Evernote (optional) to import your old notebooks as Markdown.
+3. Connect GitHub so your workspace syncs.
 
-The web app supports:
+Notes live locally in `~/Documents/EverFree`, and the default sync repo is
+called `everfree-notes`. The app runs a local server at
+`http://127.0.0.1:52321`; if that port is busy it takes the next open one.
 
-- OpenRouter
-- Gemini
+One caveat on Evernote import: the conversion step needs `evernote2md`, which
+isn't bundled in the DMG. Install it with `brew install evernote2md`, or let
+the setup wizard install it for you if Homebrew is available — it will ask
+first.
 
-Image generation uses Gemini first. It can fall back to OpenRouter.
+## The web and mobile editors
 
-Web search uses a Serper API key.
+The web app runs on Vercel. It signs in with GitHub (a one-time device code,
+no password) and edits the same workspace through the GitHub Contents API, so
+there is no EverFree account and no EverFree database holding your notes.
 
-Keys are configured in the assistant settings. In the web app, keys stay in the
-browser and are sent only for the request being made.
+The mobile client at [/mobile/](https://everfree.vercel.app/mobile/) is a
+browser app built for capture, reading, and light edits — useful when a
+thought arrives and the laptop is elsewhere.
 
-## Evernote Sync
+## How sync works
 
-Evernote sync starts in the Mac app.
+GitHub is the sync layer. The desktop app saves changes locally, commits
+them, and pushes; on startup it pulls whatever changed elsewhere. The web and
+mobile editors commit directly through the GitHub API. Keep the workspace
+repo private — it's your notes.
 
-The setup flow is:
-
-1. Install the Mac DMG.
-2. Launch EverFree.
-3. Allow Documents folder access.
-4. Connect Evernote.
-5. Connect GitHub.
-6. Import and sync.
-
-After that, the same workspace opens on Mac, web, and mobile.
-
-The default local folder is:
-
-```text
-~/Documents/EverFree
-```
-
-The default GitHub repo is:
-
-```text
-everfree-notes
-```
-
-## Mac App
-
-Download:
-
-```text
-https://github.com/adi2907/everfree/releases/download/v1.0.1/EverFree.dmg
-```
-
-The app runs a local server at:
-
-```text
-http://127.0.0.1:52321
-```
-
-If that port is busy, EverFree uses the next open local port.
-
-The app stores notes locally, imports Evernote, and syncs through GitHub.
-
-## Evernote Import Requirements
-
-The DMG bundles the Python app and its Python dependencies.
-
-Evernote conversion also needs `evernote2md`.
-
-Install it with:
-
-```bash
-brew install evernote2md
-```
-
-The setup wizard checks for this tool. If Homebrew is available, EverFree can
-install it after you approve the action.
-
-## Web and mobile
-
-The web app runs on Vercel.
-
-It signs in with GitHub and edits the same workspace through the GitHub
-Contents API.
-
-The mobile app is a browser client. It is useful for capture, reading, and
-light editing.
-
-Mobile is served from:
-
-```text
-/mobile/
-```
-
-## Sync Model
-
-EverFree uses GitHub for sync.
-
-Desktop saves changes locally, commits them, and pushes them.
-
-On startup, the desktop server pulls the latest changes.
-
-Web and mobile edit through GitHub OAuth and the GitHub Contents API.
-
-Keep the workspace repo private.
-
-The files are Markdown under the hood. You rarely need to care.
+Under the hood everything is Markdown files in ordinary folders. You rarely
+need to care, but it means that if this project disappeared tomorrow, your
+notes would still be sitting in your repo as plain files you can open
+anywhere.
 
 ## Development
 
-Create a local environment:
+Create a local environment and run the desktop app:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-```
-
-Run the desktop app:
-
-```bash
 python run.py
 ```
 
-Open:
-
-```text
-http://127.0.0.1:52321
-```
+Then open `http://127.0.0.1:52321`.
 
 Useful environment variables:
 
@@ -192,60 +108,51 @@ Useful environment variables:
 | `EVERFREE_PORT` | `52321` | Desktop server port |
 | `EVERFREE_EVERNOTE_OAUTH_PORT` | `10500` | Evernote OAuth callback port |
 
-## Build the DMG
+Before opening a pull request, these quick checks catch most mistakes:
 
-Install the DMG tool:
+```bash
+python3 -m py_compile run.py server/app.py server/agent.py packaging/setup_py2app.py
+node --check frontend/app.js
+node --check frontend/setup.js
+node --check frontend/assist.js
+node --check web/app.js
+node --check web/mobile/app.js
+git diff --check
+```
+
+## Building the DMG
+
+The build depends on `create-dmg`:
 
 ```bash
 brew install create-dmg
 ```
 
-Build a local DMG:
-
-```bash
-./packaging/build_dmg.sh
-```
-
-Build a release DMG:
-
-```bash
-./packaging/build_dmg.sh --release
-```
-
-Output:
+Build a local DMG with `./packaging/build_dmg.sh`, or a release build with
+`./packaging/build_dmg.sh --release`. Both produce:
 
 ```text
 dist/EverFree.app
 dist/EverFree.dmg
 ```
 
-The release build signs the app, submits the DMG for notarization, staples the
-ticket, and validates the result.
+The release build signs the app, submits the DMG for notarization, staples
+the ticket, and validates the result. The script creates `.build-venv` from
+scratch on every run, so a clean machine works fine.
 
-The build script creates `.build-venv` from scratch each time.
+## Deploying the web app
 
-## Deploy the web app
-
-The Vercel app root is:
-
-```text
-web/
-```
-
-Manual production deploy:
+The Vercel project root is `web/` — deploy from inside that directory, not
+the repo root:
 
 ```bash
 cd web
 vercel --prod
 ```
 
-If Vercel is connected to GitHub, deploy from the connected branch:
+If Vercel is connected to GitHub, pushing to `main` deploys automatically.
 
-```bash
-git push origin main
-```
-
-## Project Layout
+## Project layout
 
 ```text
 EverFree/
@@ -260,30 +167,13 @@ EverFree/
   run.py              Desktop entry point
 ```
 
-## Local Checks
-
-```bash
-python3 -m py_compile run.py server/app.py server/agent.py packaging/setup_py2app.py
-node --check frontend/app.js
-node --check frontend/setup.js
-node --check frontend/assist.js
-node --check web/app.js
-node --check web/mobile/app.js
-git diff --check
-```
-
 ## Contributing
 
-EverFree is open source.
-
-Contributions are welcome for the editor, assistant, importers, sync,
-packaging, tests, and docs.
-
-Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
+Contributions are welcome — the editor, the assistant, importers, sync,
+packaging, tests, and docs all have room to grow. Read
+[CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 
 ## Credits
 
-EverFree uses:
-
-- `evernote-backup` for Evernote auth, sync, and ENEX export.
-- `evernote2md` for ENEX to Markdown conversion.
+EverFree stands on two excellent tools: `evernote-backup` for Evernote auth,
+sync, and ENEX export, and `evernote2md` for converting ENEX to Markdown.
