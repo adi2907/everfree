@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>$100 for my own notes — EverFree Blog</title>
+    <meta name="description" content="All I needed was a notes app that syncs, takes photos and does rich text. How Evernote turned that into a $130-a-year hostage situation, and what I built instead.">
+    <link rel="icon" href="/assets/everfree-logo.svg">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/blog/blog.css">
+</head>
+
+<body>
+    <div class="blog-shell">
+        <header class="blog-nav">
+            <a class="blog-logo" href="/"><img src="/assets/everfree-logo.svg" alt=""><span>EverFree</span></a>
+            <nav class="blog-nav-links">
+                <a href="/blog/">Blog</a>
+                <a href="https://github.com/adi2907/everfree" target="_blank" rel="noopener">GitHub</a>
+                <a href="/">Open editor</a>
+            </nav>
+        </header>
+
+        <article>
+            <span class="post-date">July 5, 2026</span>
+            <h1>$100 for my own notes</h1>
+
+            <p>My needs from a notes app were embarrassingly simple. Notes that sync between phone and laptop. Paste a photo. Some rich text. Search that works. Thats the whole list.</p>
+
+            <p>Evernote of the early 2010s did exactly this and did it well. The green elephant was among the first apps I installed on every new phone. Meeting notes, book notes, travel plans, half-formed startup ideas, photos of whiteboards, photos of visiting cards, photos of my kid's drawings. A decade of my head went in there, one note at a time.</p>
+
+            <p>Somewhere along the way the relationship changed. 2016, free accounts got limited to two devices - and since the entire point of a notes app is sync, that was effectively the end of the free tier. Then the price ladder started climbing. After Bending Spoons bought the company in 2023, the Personal plan jumped from $69.99 to $129.99 a year. An 86% hike in one go. The free tier got cut to 50 notes and one notebook. I had thousands of notes. Fifty.</p>
+
+            <p>So there it was. Pay $100+ a year, every year, forever - to keep reading my own thoughts.</p>
+
+            <p>Their IPO filing came out last month, and it tells my story from the other side of the table. Average customer tenure 7.2 years. Net revenue retention 99%. Revenue per user up 2.5x in three years while the number of subscribers went <em>down</em>. Somewhere in a spreadsheet in Milan, I was a row with excellent retention characteristics. The model was simple - people with a decade of notes don't leave, so charge them whatever.</p>
+
+            <p>And leaving was kept just hard enough. Export gives you ENEX files, a format nothing else opens cleanly. The notes were mine, but the door out was theirs.</p>
+
+            <p>What annoyed me most, once I sat with it, was a simple realisation. Notes are not a product. Notes are property. My property. The product is just an editor sitting on top of them, and I had somehow ended up paying rent on the property to use the editor.</p>
+
+            <p>So I built what I actually needed. EverFree - notes are plain markdown files in a git repo that I own on GitHub. The app is just an editor on top: a Mac app, a web editor, images, voice dictation, an AI assistant beside the draft. The Evernote import ran in one evening, all ten years of it, elephants and all. If EverFree the app disappears tomorrow, nothing happens to my notes. They are text files in my repo, readable by anything, forever.</p>
+
+            <p>Its free and open source, because charging rent on people's memories is exactly the business model I was escaping. If you have your own green elephant story, its at <a href="https://github.com/adi2907/everfree" target="_blank" rel="noopener">github.com/adi2907/everfree</a>.</p>
+
+            <p>Pay for an editor if it earns it. Never pay rent on your own memory.</p>
+        </article>
+
+        <footer class="blog-footer">
+            <p><a href="/blog/">← All posts</a> · EverFree is a free, open-source writing app. Your notes stay markdown files in a git repo you own.</p>
+        </footer>
+    </div>
+</body>
+
+</html>

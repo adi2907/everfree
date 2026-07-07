@@ -1,0 +1,202 @@
+/* ════════════════════════════════════════════════════════════
+   EverFree — Blog Styles
+   ════════════════════════════════════════════════════════════ */
+
+:root {
+    --bg-body: #f5f6fa;
+    --bg-surface: #ffffff;
+    --border: #e2e4ec;
+    --text-primary: #1a1c2a;
+    --text-secondary: #5c5f78;
+    --text-muted: #9b9eb8;
+    --accent: #0d9488;
+    --accent-hover: #0f766e;
+    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
+    --radius: 8px;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --bg-body: #0f1117;
+        --bg-surface: #1a1c2a;
+        --border: #2a2d3e;
+        --text-primary: #e2e4f0;
+        --text-secondary: #8b8faa;
+        --text-muted: #5c5f78;
+        --accent: #4fd1c5;
+        --accent-hover: #38b2ac;
+    }
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+    font-family: var(--font-sans);
+    background: var(--bg-body);
+    color: var(--text-primary);
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+}
+
+.blog-shell {
+    max-width: 680px;
+    margin: 0 auto;
+    padding: 0 20px 80px;
+}
+
+/* ── Header ─────────────────────────────────────────────── */
+.blog-nav {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 28px 0 20px;
+    margin-bottom: 40px;
+    border-bottom: 1px solid var(--border);
+}
+
+.blog-logo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    text-decoration: none;
+}
+
+.blog-logo img { width: 26px; height: 26px; }
+
+.blog-nav-links {
+    display: flex;
+    gap: 22px;
+    align-items: center;
+}
+
+.blog-nav-links a {
+    color: var(--text-secondary);
+    text-decoration: none;
+    font-size: 0.92rem;
+    font-weight: 500;
+}
+
+.blog-nav-links a:hover { color: var(--accent); }
+
+/* ── Index list ─────────────────────────────────────────── */
+.blog-index-title {
+    font-size: 2rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    margin-bottom: 6px;
+}
+
+.blog-index-sub {
+    color: var(--text-secondary);
+    margin-bottom: 44px;
+}
+
+.post-card {
+    display: block;
+    padding: 22px 24px;
+    margin-bottom: 16px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    text-decoration: none;
+    color: var(--text-primary);
+    transition: border-color 0.2s;
+}
+
+.post-card:hover { border-color: var(--accent); }
+
+.post-card .post-date {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--text-muted);
+}
+
+.post-card h2 {
+    font-size: 1.18rem;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+    margin: 4px 0 6px;
+}
+
+.post-card p {
+    font-size: 0.92rem;
+    color: var(--text-secondary);
+    line-height: 1.55;
+}
+
+/* ── Article ────────────────────────────────────────────── */
+article .post-date {
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    color: var(--text-muted);
+}
+
+article h1 {
+    font-size: 2.05rem;
+    font-weight: 700;
+    letter-spacing: -0.025em;
+    line-height: 1.25;
+    margin: 8px 0 30px;
+}
+
+article p { margin-bottom: 20px; }
+
+article h2 {
+    font-size: 1.25rem;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+    margin: 38px 0 14px;
+}
+
+article ul, article ol {
+    margin: 0 0 20px 22px;
+}
+
+article li { margin-bottom: 10px; }
+
+article a {
+    color: var(--accent);
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+    word-break: break-word;
+}
+
+article a:hover { border-bottom-color: var(--accent); }
+
+article blockquote {
+    border-left: 3px solid var(--accent);
+    padding: 4px 0 4px 18px;
+    margin: 0 0 20px;
+    color: var(--text-secondary);
+    font-style: italic;
+}
+
+article strong { font-weight: 650; }
+
+article hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 36px 0;
+}
+
+/* ── Footer ─────────────────────────────────────────────── */
+.blog-footer {
+    margin-top: 60px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+}
+
+.blog-footer a { color: var(--accent); text-decoration: none; }
+.blog-footer a:hover { text-decoration: underline; }
+
+@media (max-width: 520px) {
+    article h1 { font-size: 1.6rem; }
+    .blog-index-title { font-size: 1.6rem; }
+    .blog-nav-links { gap: 14px; }
+}
