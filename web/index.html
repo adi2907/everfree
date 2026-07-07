@@ -47,7 +47,7 @@
     <!-- ══════════════════════════════════════════════════════ -->
     <!--  VIEW 1: SIGN IN                                      -->
     <!-- ══════════════════════════════════════════════════════ -->
-    <div class="view view-centered landing-view" id="view-signin">
+    <div class="view landing-view" id="view-signin">
         <div class="landing-shell">
             <header class="landing-nav">
                 <h1 class="logo landing-logo">
@@ -55,164 +55,226 @@
                     <span>EverFree</span>
                 </h1>
                 <nav class="landing-nav-actions" aria-label="Primary navigation">
-                    <a class="landing-nav-link" href="#how-it-works">Why it exists</a>
+                    <a class="landing-nav-link" href="#assistant">Assistant</a>
+                    <a class="landing-nav-link" href="#get-started">Get started</a>
+                    <a class="landing-nav-link" href="#faq">FAQ</a>
                     <a class="landing-nav-link" href="https://github.com/adi2907/everfree" target="_blank" rel="noopener">GitHub</a>
                     <button class="landing-nav-app" id="btn-github-signin">Open editor</button>
                 </nav>
             </header>
 
-            <section class="landing-hero" aria-label="EverFree writing IDE preview">
-                <div class="landing-product ide-product">
-                    <div class="product-window-bar ide-topbar">
-                        <span></span><span></span><span></span>
-                        <small>EverFree / writing.ide</small>
-                        <strong>Free, open source, notarized Mac DMG</strong>
-                    </div>
-                    <div class="product-window-body ide-workspace">
-                        <aside class="product-sidebar ide-sidebar">
-                            <strong>EverFree</strong>
-                            <small>Library</small>
-                            <div class="product-note active">All notes <span>128</span></div>
-                            <small>Notebooks</small>
-                            <div class="product-note">Drafts <span>18</span></div>
-                            <div class="product-note">Research <span>42</span></div>
-                            <div class="product-note">Evernote import <span>68</span></div>
-                        </aside>
+            <section class="landing-hero">
+                <h2>An IDE for your writing</h2>
+                <p class="landing-lede">
+                    EverFree is a free, open-source note editor with an AI assistant that works beside the
+                    draft &mdash; think Cursor, but for writing. Your notes stay plain Markdown files in a
+                    GitHub repo you own.
+                </p>
 
-                        <aside class="preview-notes">
-                            <div class="preview-notes-header">
-                                <span>Notes</span>
-                                <strong>All notes</strong>
-                            </div>
-                            <div class="product-search">Search notes...</div>
-                            <div class="preview-note-card active">
-                                <strong>Cursor for writing</strong>
-                                <span>Turn the renewal rant into a cleaner intro.</span>
-                            </div>
-                            <div class="preview-note-card">
-                                <strong>Evernote renewal</strong>
-                                <span>I had to pay $100 for my own notes.</span>
-                            </div>
-                            <div class="preview-note-card">
-                                <strong>AI providers</strong>
-                                <span>OpenRouter, Gemini, Serper, image model.</span>
-                            </div>
-                        </aside>
-
-                        <main class="ide-editor">
-                            <div class="preview-editor-toolbar">
-                                <span>Drafts / Cursor for writing</span>
-                                <div>
-                                    <button type="button">Assistant</button>
-                                    <button type="button">Save</button>
-                                </div>
-                            </div>
-                            <div class="landing-copy ide-copy">
-                                <p class="eyebrow">AI writing IDE</p>
-                                <h2>An IDE for your writing.</h2>
-                                <p class="landing-lede">
-                                    Open a note, select the messy bit, and ask the assistant to keep going. It can use the current note, your selected excerpt, web search, and image generation.
-                                </p>
-                                <div id="signin-idle" class="landing-actions">
-                                    <a class="btn btn-primary landing-download" href="https://github.com/adi2907/everfree/releases/download/v1.0.1/EverFree.dmg">
-                                        Download notarized Mac DMG
-                                    </a>
-                                    <button class="btn landing-web-cta" id="btn-github-signin-hero">
-                                        Open web editor
-                                    </button>
-                                </div>
-
-                                <div id="signin-pending" class="landing-auth-state hidden">
-                                    <p class="device-flow-label">
-                                        Enter this code at <a id="signin-verification-uri" href="https://github.com/login/device" target="_blank" rel="noopener">github.com/login/device</a>
-                                    </p>
-                                    <div class="device-flow-code" id="signin-user-code">----</div>
-                                    <p class="device-flow-waiting">
-                                        <span class="spinner spinner-sm"></span>
-                                        Waiting for authorization...
-                                    </p>
-                                </div>
-
-                                <div id="signin-error" class="landing-auth-state hidden">
-                                    <div class="error-box">
-                                        <p class="error-title">Sign-in failed</p>
-                                        <pre class="error-detail" id="signin-error-detail"></pre>
-                                        <button class="btn btn-ghost btn-sm" id="btn-signin-retry">Try again</button>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <article class="product-document ide-document">
-                                <code>Draft / Cursor for writing</code>
-                                <h3>The renewal note</h3>
-                                <p class="product-lede">A writing tool should understand the draft, not just decorate it.</p>
-                                <p>
-                                    I had to pay $100 for an Evernote renewal. For my notes. No way. The point of EverFree is simple: the editor should help me write, research, and keep moving without turning my notes into another subscription.
-                                </p>
-                                <div class="product-selection">Selected excerpt: "For my notes. No way."</div>
-                            </article>
-                        </main>
-
-                        <aside class="ide-assistant" aria-label="AI assistant preview">
-                            <div class="assistant-header preview-assistant-header">
-                                <strong>Assistant</strong>
-                                <span>OpenRouter</span>
-                            </div>
-                            <div class="assistant-messages-preview">
-                                <div class="assist-msg assist-user">
-                                    <div class="assist-quote">For my notes. No way.</div>
-                                    Rewrite this opening. Keep it personal.
-                                </div>
-                                <div class="assist-tool agent-step agent-step-one">Thinking...</div>
-                                <div class="assist-tool agent-step agent-step-two">web_search: Evernote pricing</div>
-                                <div class="assist-tool agent-step agent-step-three">read_page: current pricing page</div>
-                                <div class="assist-msg assist-assistant">
-                                    I had to pay $100 to renew Evernote. For my own notes. That was the moment EverFree started.
-                                </div>
-                                <div class="slash-preview">
-                                    <span>/image</span>
-                                    <small>Generate an image from a prompt</small>
-                                </div>
-                            </div>
-                            <div class="assistant-input">Ask anything, or type / for commands</div>
-                        </aside>
-                    </div>
+                <div id="signin-idle" class="landing-actions">
+                    <a class="btn landing-download" href="https://github.com/adi2907/everfree/releases/download/v1.0.1/EverFree.dmg">
+                        Download for Mac
+                    </a>
+                    <button class="btn landing-web-cta" id="btn-github-signin-hero">
+                        Open web editor
+                    </button>
                 </div>
-            </section>
+                <p class="landing-meta">v1.0.1 &middot; MIT license &middot; signed &amp; notarized DMG &middot; web editor runs in any browser</p>
 
-            <section class="landing-system" id="how-it-works" aria-label="Why EverFree exists">
-                <div class="system-manifesto">
-                    <span>Product thesis</span>
-                    <h3>A writing workspace for the work after capture.</h3>
-                    <p>
-                        EverFree is for the moment when you have notes, scraps, research, and an unfinished draft. The assistant lives beside the editor so the next paragraph is easier to write.
+                <div id="signin-pending" class="landing-auth-state hidden">
+                    <p class="device-flow-label">
+                        Enter this code at <a id="signin-verification-uri" href="https://github.com/login/device" target="_blank" rel="noopener">github.com/login/device</a>
+                    </p>
+                    <div class="device-flow-code" id="signin-user-code">----</div>
+                    <p class="device-flow-waiting">
+                        <span class="spinner spinner-sm"></span>
+                        Waiting for authorization...
                     </p>
                 </div>
-                <div class="system-log" aria-label="EverFree capabilities">
-                    <div class="system-log-row">
-                        <small>editor</small>
-                        <span>Three-pane notes, search, a real writing surface, voice input, image uploads, and GitHub sync.</span>
+
+                <div id="signin-error" class="landing-auth-state hidden">
+                    <div class="error-box">
+                        <p class="error-title">Sign-in failed</p>
+                        <pre class="error-detail" id="signin-error-detail"></pre>
+                        <button class="btn btn-ghost btn-sm" id="btn-signin-retry">Try again</button>
                     </div>
-                    <div class="system-log-row">
-                        <small>assistant</small>
-                        <span>Ask about the current note, attach selected text, search the web, read pages, or generate an image with `/image`.</span>
+                </div>
+
+                <div class="demo-frame">
+                    <div class="demo-bar">
+                        <span></span><span></span><span></span>
+                        <small>everfree.vercel.app</small>
                     </div>
-                    <div class="system-log-row">
-                        <small>import</small>
-                        <span>Evernote sync is included in the Mac app, so the old archive becomes writing context.</span>
-                    </div>
-                    <div class="system-log-row">
-                        <small>own</small>
-                        <span>Free MIT-licensed software, source on GitHub, and a signed/notarized DMG you can download and run.</span>
+                    <div class="demo-media">
+                        <div class="demo-placeholder">Editor demo</div>
+                        <video class="demo-video" src="/assets/demo-editor.mp4" autoplay muted loop playsinline preload="metadata"></video>
                     </div>
                 </div>
             </section>
 
-            <section class="landing-release" aria-label="Download and source">
-                <p>Download the Mac app when you want Evernote import and the full local assistant. Use the web editor when you want the same writing workspace from the browser.</p>
-                <a href="https://github.com/adi2907/everfree/releases/download/v1.0.1/EverFree.dmg">Mac DMG</a>
-                <a href="https://github.com/adi2907/everfree" target="_blank" rel="noopener">Source code</a>
+            <section class="landing-section" id="assistant">
+                <div class="section-head">
+                    <h3>A Cursor for writing</h3>
+                    <p>
+                        Code editors got AI that understands the whole project. Writing tools mostly got a
+                        chatbot bolted onto the side. EverFree wires the assistant into the editor the way
+                        Cursor wires it into code: it reads the note you have open, takes the exact passage
+                        you select as context, and can search the web before it answers.
+                    </p>
+                </div>
+
+                <div class="demo-frame">
+                    <div class="demo-bar">
+                        <span></span><span></span><span></span>
+                        <small>Assistant &mdash; &#8984;K</small>
+                    </div>
+                    <div class="demo-media">
+                        <div class="demo-placeholder">Assistant demo</div>
+                        <video class="demo-video" src="/assets/demo-assistant.mp4" autoplay muted loop playsinline preload="metadata"></video>
+                    </div>
+                </div>
+
+                <ul class="assistant-list">
+                    <li>
+                        <strong>Quote a passage</strong>
+                        Select text and press <kbd>&#8984;L</kbd> &mdash; the excerpt is attached to your next
+                        message, so "rewrite this" means exactly this.
+                    </li>
+                    <li>
+                        <strong>Work on the current note</strong>
+                        Continue a stalled draft, rewrite a section, summarize the whole note, or have it
+                        create a new one.
+                    </li>
+                    <li>
+                        <strong>Research while you write</strong>
+                        The assistant can run web searches and read pages before answering, so claims get
+                        checked without leaving the editor.
+                    </li>
+                    <li>
+                        <strong>Generate images</strong>
+                        Type <kbd>/image</kbd> and a prompt; the result lands in your note and syncs with it.
+                    </li>
+                    <li>
+                        <strong>Bring your own model</strong>
+                        Use an OpenRouter or Gemini key. The Mac app also runs fully local models through
+                        LM&nbsp;Studio.
+                    </li>
+                    <li>
+                        <strong>Keyboard-first</strong>
+                        <kbd>&#8984;K</kbd> toggles the assistant, <kbd>/</kbd> opens commands,
+                        <kbd>Ctrl+S</kbd> saves the note.
+                    </li>
+                </ul>
             </section>
+
+            <section class="landing-section landing-storage" id="how-it-works">
+                <div class="storage-copy">
+                    <h3>Your notes are files you own</h3>
+                    <p>
+                        The web editor signs in with GitHub and commits every save to a private repository
+                        you choose. The Mac app keeps the same notes as local Markdown files in
+                        <code>~/Documents/EverFree</code> and syncs them through git.
+                    </p>
+                    <p>
+                        There is no EverFree account and no EverFree database. If this project disappeared
+                        tomorrow, your notes would still be sitting in your repo as ordinary files. The same
+                        goes for AI keys: they are stored in your browser and only forwarded with the
+                        requests you make &mdash; nothing is retained server-side.
+                    </p>
+                </div>
+                <pre class="repo-tree" aria-label="Example workspace repository layout">everfree-notes/            &larr; your private repo
+&#9500;&#9472;&#9472; Drafts/
+&#9474;   &#9500;&#9472;&#9472; cursor-for-writing.md
+&#9474;   &#9492;&#9472;&#9472; renewal-note.md
+&#9500;&#9472;&#9472; Research/
+&#9474;   &#9492;&#9472;&#9472; evernote-pricing.md
+&#9492;&#9472;&#9472; assets/
+    &#9492;&#9472;&#9472; header-sketch.png</pre>
+            </section>
+
+            <section class="landing-section" id="get-started">
+                <h3>Getting started</h3>
+                <div class="start-columns">
+                    <div class="start-column">
+                        <h4>In the browser</h4>
+                        <ol>
+                            <li>Open the web editor and sign in with GitHub &mdash; a one-time device code, no password.</li>
+                            <li>Choose a private repository for your workspace.</li>
+                            <li>Start writing. Add an OpenRouter or Gemini key in the assistant settings whenever you want the AI.</li>
+                        </ol>
+                    </div>
+                    <div class="start-column">
+                        <h4>On the Mac</h4>
+                        <ol>
+                            <li>Download the DMG and open it. It's signed and notarized, so no Gatekeeper workarounds.</li>
+                            <li>Connect GitHub &mdash; and optionally Evernote, to import your old notebooks as Markdown.</li>
+                            <li>Write locally; every save syncs through git, so the web and mobile editors see the same workspace.</li>
+                        </ol>
+                    </div>
+                </div>
+            </section>
+
+            <section class="landing-section landing-why" id="why">
+                <h3>Why I built this</h3>
+                <p>
+                    I had to pay $100 for an Evernote renewal. For my notes. No way.
+                </p>
+                <p>
+                    EverFree started as a script to get my notes out of Evernote, and grew into the writing
+                    tool I actually wanted: an editor where the assistant sits next to the draft &mdash;
+                    rewriting a paragraph, continuing where I stalled, checking a claim &mdash; while the
+                    notes themselves stay plain files in a repo I own. No subscription, no lock-in, nothing
+                    between me and my own writing.
+                </p>
+                <p>
+                    It's MIT-licensed and free. If a Cursor for writing is the tool you've been missing too,
+                    I hope it's useful.
+                </p>
+                <p class="why-signature">
+                    &mdash; Aditya Ganguli &middot; <a href="https://github.com/adi2907" target="_blank" rel="noopener">@adi2907</a>
+                </p>
+            </section>
+
+            <section class="landing-section landing-faq" id="faq">
+                <h3>FAQ</h3>
+                <div class="faq-grid">
+                    <div class="faq-item">
+                        <h4>Is it really free?</h4>
+                        <p>Yes. EverFree is MIT-licensed open source. There's no account, no plan, and no trial &mdash; the only cost is the AI API usage on keys you bring yourself.</p>
+                    </div>
+                    <div class="faq-item">
+                        <h4>Do I need an API key?</h4>
+                        <p>The editor works without any. The assistant needs an OpenRouter or Gemini key, and web search needs a free Serper key. The Mac app can also use LM Studio to run local models with no key at all.</p>
+                    </div>
+                    <div class="faq-item">
+                        <h4>Where are my notes stored?</h4>
+                        <p>In the browser: as Markdown files in a private GitHub repo you choose. On the Mac: as local files in <code>~/Documents/EverFree</code>, synced through git.</p>
+                    </div>
+                    <div class="faq-item">
+                        <h4>Can I import from Evernote?</h4>
+                        <p>Yes, in the Mac app. The setup wizard connects your Evernote account and converts notebooks to Markdown (using <code>evernote2md</code>).</p>
+                    </div>
+                    <div class="faq-item">
+                        <h4>Does EverFree see my notes or keys?</h4>
+                        <p>Notes sync between your browser and GitHub. AI keys stay in your browser and are only forwarded with the requests you make; nothing is stored on EverFree's servers.</p>
+                    </div>
+                    <div class="faq-item">
+                        <h4>Is there a mobile version?</h4>
+                        <p>Yes &mdash; <a href="/mobile/">everfree.vercel.app/mobile</a> is a lightweight client for the same workspace, good for capture, reading, and light edits.</p>
+                    </div>
+                </div>
+            </section>
+
+            <footer class="landing-footer">
+                <p>EverFree v1.0.1 &middot; MIT license &middot; &copy; 2026 Aditya Ganguli</p>
+                <nav aria-label="Footer">
+                    <a href="https://github.com/adi2907/everfree" target="_blank" rel="noopener">GitHub</a>
+                    <a href="https://github.com/adi2907/everfree/releases" target="_blank" rel="noopener">Releases</a>
+                    <a href="https://github.com/adi2907/everfree/issues" target="_blank" rel="noopener">Report an issue</a>
+                    <a href="https://github.com/adi2907/everfree/releases/download/v1.0.1/EverFree.dmg">Mac DMG</a>
+                    <a href="/mobile/">Mobile</a>
+                </nav>
+            </footer>
         </div>
     </div>
 
@@ -524,6 +586,12 @@
     <script src="/voice.js"></script>
     <script src="/app.js"></script>
     <script src="/assist.js"></script>
+    <script>
+        // Demo slots show their placeholder until the video files exist in /assets/.
+        document.querySelectorAll("video.demo-video").forEach(function (v) {
+            v.addEventListener("error", function () { v.remove(); }, true);
+        });
+    </script>
 </body>
 
 </html>
