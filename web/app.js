@@ -839,6 +839,7 @@
         "image/bmp": "bmp",
         "image/tiff": "tiff",
         "image/heic": "heic",
+        "image/avif": "avif",
     };
 
     function arrayBufferToBase64(buf) {
@@ -893,6 +894,71 @@
             alert("Couldn't add image: " + (err.message || err));
             return null;
         }
+    }
+
+    function imageAltText(filename) {
+        return String(filename || "image")
+            .replace(/\.[^.]+$/, "")
+            .replace(/[\[\]\\]/g, "")
+            .trim() || "image";
+    }
+
+    function insertImageMarkdown(relPath, filename) {
+        if (!editor) return;
+        const markdown = editor.getMarkdown().replace(/\s*$/, "");
+        const prefix = markdown ? `${markdown}\n\n` : "";
+        editor.setMarkdown(`${prefix}![${imageAltText(filename)}](${relPath})\n`);
+        editor.moveCursorToEnd();
+        editor.focus();
+    }
+
+    async function uploadAndInsertImage(blob) {
+        const relPath = await uploadImageBlob(blob);
+        if (relPath) insertImageMarkdown(relPath, blob.name || "image");
+    }
+
+    function imageFileFromDataTransfer(dataTransfer) {
+        if (!dataTransfer) return null;
+        for (const item of dataTransfer.items || []) {
+            if (item.kind === "file" && /^image\//i.test(item.type || "")) {
+                return item.getAsFile();
+            }
+        }
+        return [...(dataTransfer.files || [])].find((file) => /^image\//i.test(file.type || "")) || null;
+    }
+
+    function setupImageHandling() {
+        const $button = $("btn-editor-image");
+        const $input = $("editor-image-input");
+        const $editorRoot = $("editor");
+        if (!$button || !$input || !$editorRoot) return;
+
+        $button.addEventListener("click", () => {
+            $input.value = "";
+            $input.click();
+        });
+        $input.addEventListener("change", () => {
+            const file = $input.files && $input.files[0];
+            if (file) uploadAndInsertImage(file);
+        });
+
+        // Toast UI's hook handles its normal image commands. These capture
+        // handlers also cover clipboard and drag/drop images when its hidden
+        // toolbar is bypassed, while preserving ordinary text paste/drop.
+        $editorRoot.addEventListener("paste", (event) => {
+            const file = imageFileFromDataTransfer(event.clipboardData);
+            if (!file) return;
+            event.preventDefault();
+            event.stopPropagation();
+            uploadAndInsertImage(file);
+        }, true);
+        $editorRoot.addEventListener("drop", (event) => {
+            const file = imageFileFromDataTransfer(event.dataTransfer);
+            if (!file) return;
+            event.preventDefault();
+            event.stopPropagation();
+            uploadAndInsertImage(file);
+        }, true);
     }
 
     // ── Open Note ───────────────────────────────────────────
@@ -1335,6 +1401,7 @@
 
     // ── Init ────────────────────────────────────────────────
     setupEditorDictation();
+    setupImageHandling();
     applyTheme(getInitialTheme());
 
     if (token && user) {
