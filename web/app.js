@@ -24,6 +24,7 @@
     let notesByNotebook = {}; // notebook -> [{name, sha}]
     let fileShas = {}; // "notebook/note.md" -> sha
     let noteContentCache = {}; // "notebook/note.md" -> markdown
+    let noteTitleCache = {}; // "notebook/note.md" -> display title
     let noteModifiedCache = {}; // "notebook/note.md" -> timestamp (ms)
     let currentNotebook = null;
     let currentNote = null;
@@ -246,6 +247,7 @@
         notesByNotebook = {};
         fileShas = {};
         noteContentCache = {};
+        noteTitleCache = {};
         noteModifiedCache = {};
         currentNotebook = null;
         currentNote = null;
@@ -629,10 +631,12 @@
         const $note = document.createElement("button");
         $note.type = "button";
         $note.className = "note-card";
+        $note.dataset.notePath = `${item.notebook}/${item.note}`;
         if (currentNotebook === item.notebook && currentNote === item.note) $note.classList.add("active");
         $note.innerHTML = `
-            <span class="note-card-title">${escapeHtml(item.note.replace(/\.md$/, ""))}</span>`;
+            <span class="note-card-title">${escapeHtml(noteTitleCache[`${item.notebook}/${item.note}`] || noteFilenameTitle(item.note))}</span>`;
         $note.addEventListener("click", () => openNote(item.notebook, item.note));
+        loadNoteCardTitle($note, item);
         return $note;
     }
 
@@ -696,9 +700,10 @@
         for (const nb of notebooks) {
             for (const note of notesByNotebook[nb] || []) {
                 const path = `${nb}/${note}`;
-                const title = note.replace(/\.md$/, "");
                 const content = await getCachedFileContent(path);
-                const titleMatch = title.toLowerCase().includes(lowerQuery);
+                const title = getNoteTitle(content, note);
+                const filenameTitle = noteFilenameTitle(note);
+                const titleMatch = title.toLowerCase().includes(lowerQuery) || filenameTitle.toLowerCase().includes(lowerQuery);
                 const notebookMatch = nb.toLowerCase().includes(lowerQuery);
                 const contentMatch = content.toLowerCase().includes(lowerQuery);
 
@@ -707,7 +712,7 @@
                 results.push({
                     notebook: nb,
                     note,
-                    title,
+                    title: cacheNoteTitle(nb, note, content),
                     snippet: makeSnippet(content, query),
                 });
                 if (results.length >= 100) return results;
@@ -723,6 +728,55 @@
         }
         const { content } = await getFile(path);
         return content;
+    }
+
+    function noteFilenameTitle(note) {
+        return note.replace(/\.md$/, "");
+    }
+
+    function getNoteTitle(content, note) {
+        const fallback = noteFilenameTitle(note);
+        const lines = String(content || "").replace(/^\uFEFF/, "").split(/\r?\n/);
+        for (const line of lines) {
+            const match = line.trim().match(/^#\s+(.+?)\s*#*\s*$/);
+            if (match && match[1].trim()) return match[1].trim();
+        }
+        return fallback;
+    }
+
+    function cacheNoteTitle(notebook, note, content) {
+        const path = `${notebook}/${note}`;
+        const title = getNoteTitle(content, note);
+        noteTitleCache[path] = title;
+        return title;
+    }
+
+    function updateOpenNoteTitle(content) {
+        if (!currentNotebook || !currentNote) return;
+        const path = `${currentNotebook}/${currentNote}`;
+        const title = cacheNoteTitle(currentNotebook, currentNote, content);
+
+        $("note-breadcrumb").textContent = `${currentNotebook} / ${title}`;
+        document.querySelectorAll(".note-card[data-note-path]").forEach(($card) => {
+            if ($card.dataset.notePath !== path) return;
+            const $title = $card.querySelector(".note-card-title");
+            if ($title) $title.textContent = title;
+        });
+    }
+
+    function loadNoteCardTitle($card, item) {
+        const path = `${item.notebook}/${item.note}`;
+        if (Object.prototype.hasOwnProperty.call(noteTitleCache, path)) {
+            $card.querySelector(".note-card-title").textContent = noteTitleCache[path];
+            return;
+        }
+
+        getCachedFileContent(path).then((content) => {
+            const title = cacheNoteTitle(item.notebook, item.note, content);
+            if ($card.isConnected) $card.querySelector(".note-card-title").textContent = title;
+        }).catch((err) => {
+            console.error(`Failed to load title for ${path}:`, err);
+        });
     }
 
     function makeSnippet(content, query, size = 140) {
@@ -855,11 +909,12 @@
             currentNotebook = notebook;
             currentNote = note;
             isDirty = false;
+            const noteTitle = cacheNoteTitle(notebook, note, content);
 
             $("empty-state").style.display = "none";
             $("editor-container").style.display = "flex";
             document.body.classList.add("mobile-edit"); // phone single-pane → editor full screen
-            $("note-breadcrumb").textContent = `${notebook} / ${note.replace(/\.md$/, "")}`;
+            $("note-breadcrumb").textContent = `${notebook} / ${noteTitle}`;
             $("save-status").textContent = "";
 
             if (editor) { editor.destroy(); editor = null; }
@@ -922,6 +977,7 @@
         if (tuiWrapper) tuiWrapper.classList.toggle("toastui-editor-dark", isDark);
 
         editor.on("change", () => {
+            updateOpenNoteTitle(editor.getMarkdown());
             if (!isDirty) {
                 isDirty = true;
                 const $s = $("save-status");
