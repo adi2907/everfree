@@ -9,8 +9,12 @@ files, and private GitHub-backed sync.
   user-controlled GitHub storage.
 - Do not introduce a hosted database for notes unless it is optional and clearly
   separated from the default Git-backed model.
-- Keep the default repository private and scoped to the user's own GitHub
-  account.
+- Keep the only supported repository private and exactly named
+  `everfree-notes` in the signed-in user's GitHub account. Do not add a repo
+  picker or alternate-name fallback.
+- Preserve GitHub OAuth Device Flow and OS-vault credential storage. Read
+  `docs/adr/0001-github-auth-and-credential-storage.md` before auth or sync
+  changes.
 - Do not commit secrets, tokens, personal backups, generated DMGs, or local
   virtual environments.
 - Prefer small, reviewable changes with clear behavior and tests/checks.

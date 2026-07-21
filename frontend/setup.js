@@ -256,7 +256,7 @@
                 throw new Error(data.detail || "Failed to start auth");
             }
 
-            if (!data.user_code) throw new Error("No user code returned from GitHub. Is Device Flow enabled for your OAuth App?");
+            if (!data.user_code) throw new Error("No user code returned from GitHub. Is Device Flow enabled for the EverFree OAuth App?");
 
             showGhState("pending");
 
@@ -315,16 +315,6 @@
     ];
 
     $btnNext2.addEventListener("click", async () => {
-        const repo = $ghRepo.value.trim();
-        if (!repo) {
-            $ghRepo.focus();
-            return alert("Please enter a repository name.");
-        }
-        if (!/^[a-zA-Z0-9._-]+$/.test(repo)) {
-            $ghRepo.focus();
-            return alert("Invalid repo name. Use letters, numbers, hyphens, underscores, dots.");
-        }
-
         goToStep(3);
 
         // Render progress step items
@@ -346,7 +336,7 @@
             const resp = await fetch("/api/setup/run", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ repo_name: repo }),
+                body: JSON.stringify({}),
             });
             if (!resp.ok) {
                 const err = await resp.json();
@@ -431,10 +421,14 @@
             const data = await resp.json();
             if (data.configured) {
                 window.location.href = "/";
-            } else if (data.evernote_synced) {
+            } else if (data.configured || data.evernote_synced) {
                 // Notes already imported — skip straight to GitHub step
                 skipEvernote = true;
                 goToStep(2);
+                if (data.github_authenticated) {
+                    $ghUsername.textContent = data.github_username || "GitHub user";
+                    showGhState("authorized");
+                }
             }
         } catch { /* proceed with setup */ }
         checkImportTools();

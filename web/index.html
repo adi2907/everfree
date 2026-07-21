@@ -58,6 +58,7 @@
                     <a class="landing-nav-link" href="#assistant">Assistant</a>
                     <a class="landing-nav-link" href="#get-started">Get started</a>
                     <a class="landing-nav-link" href="#faq">FAQ</a>
+                    <a class="landing-nav-link" href="/blog/">Blog</a>
                     <a class="landing-nav-link" href="https://github.com/adi2907/everfree" target="_blank" rel="noopener">GitHub</a>
                     <button class="landing-nav-app" id="btn-github-signin">Open editor</button>
                 </nav>
@@ -176,8 +177,8 @@
                 <div class="storage-copy">
                     <h3>Your notes are files you own</h3>
                     <p>
-                        The web editor signs in with GitHub and commits every save to a private repository
-                        you choose. The Mac app keeps the same notes as local Markdown files in
+                        The web editor signs in with GitHub and commits every save to your private
+                        <code>everfree-notes</code> repository. The Mac app keeps the same notes as local Markdown files in
                         <code>~/Documents/EverFree</code> and syncs them through git.
                     </p>
                     <p>
@@ -204,7 +205,7 @@
                         <h4>In the browser</h4>
                         <ol>
                             <li>Open the web editor and sign in with GitHub &mdash; a one-time device code, no password.</li>
-                            <li>Choose a private repository for your workspace.</li>
+                            <li>Connect your private <code>everfree-notes</code> repository. EverFree creates it if needed and never uses another repository.</li>
                             <li>Start writing. Add an OpenRouter or Gemini key in the assistant settings whenever you want the AI.</li>
                         </ol>
                     </div>
@@ -253,7 +254,7 @@
                     </div>
                     <div class="faq-item">
                         <h4>Where are my notes stored?</h4>
-                        <p>In the browser: as Markdown files in a private GitHub repo you choose. On the Mac: as local files in <code>~/Documents/EverFree</code>, synced through git.</p>
+                        <p>In the browser: as Markdown files in your private <code>everfree-notes</code> GitHub repo. On the Mac: as local files in <code>~/Documents/EverFree</code>, synced through git.</p>
                     </div>
                     <div class="faq-item">
                         <h4>Can I import from Evernote?</h4>
@@ -284,30 +285,7 @@
     </div>
 
     <!-- ══════════════════════════════════════════════════════ -->
-    <!--  VIEW 2: REPO PICKER                                  -->
-    <!-- ══════════════════════════════════════════════════════ -->
-    <div class="view view-centered hidden" id="view-repo-picker">
-        <div class="auth-card auth-card-wide">
-            <h1 class="logo">
-                <img class="logo-mark" src="/assets/everfree-logo.svg" alt="">
-                <span>Choose your workspace</span>
-            </h1>
-            <p class="auth-tagline">Pick the GitHub repository that syncs your EverFree workspace.</p>
-
-            <input type="text" class="repo-search" id="repo-search" placeholder="Filter repositories…">
-
-            <div class="repo-list" id="repo-list">
-                <div class="repo-loading">Loading your repositories…</div>
-            </div>
-
-            <div class="auth-card-footer">
-                <button class="btn btn-ghost btn-sm" id="btn-signout-from-picker">Sign out</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- ══════════════════════════════════════════════════════ -->
-    <!--  VIEW 3: EDITOR                                       -->
+    <!--  VIEW 2: EDITOR                                       -->
     <!-- ══════════════════════════════════════════════════════ -->
     <div class="view view-app hidden" id="view-app">
         <aside class="sidebar" id="sidebar">
@@ -476,7 +454,6 @@
             <span id="popover-username">…</span>
         </div>
         <div class="popover-meta" id="popover-repo">…</div>
-        <button class="popover-item" id="btn-switch-repo">Switch repository</button>
         <button class="popover-item popover-item-danger" id="btn-signout">Sign out</button>
     </div>
 

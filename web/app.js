@@ -6,20 +6,25 @@
     "use strict";
 
     // ── Storage Keys ────────────────────────────────────────
-    const LS_TOKEN = "everfree-token";
-    const LS_USER = "everfree-user";
-    const LS_REPO = "everfree-repo";
+    const AUTH_TOKEN_KEY = "everfree-token";
+    const AUTH_USER_KEY = "everfree-user";
+    const AUTH_REPO_KEY = "everfree-repo";
+    const AUTH_EXPIRES_KEY = "everfree-token-expires-at";
     const LS_THEME = "everfree-theme";
     const LS_LIGHT_THEME_MIGRATED = "everfree-light-theme-migrated";
     const LS_SIDEBAR_WIDTH = "everfree-sidebar-width";
     const LS_NOTE_BROWSER_WIDTH = "everfree-note-browser-width";
     const DEFAULT_REPO = "everfree-notes";
-    const EVERFREE_REPO_DESCRIPTION_MARKER = "git-backed markdown notes";
+
+    // Migrate away from the legacy broad OAuth token. Authentication data is
+    // tab-scoped; preferences such as theme remain in localStorage.
+    [AUTH_TOKEN_KEY, AUTH_USER_KEY, AUTH_REPO_KEY].forEach(key => localStorage.removeItem(key));
 
     // ── State ───────────────────────────────────────────────
-    let token = localStorage.getItem(LS_TOKEN) || null;
-    let user = localStorage.getItem(LS_USER) || null;
-    let repoFull = localStorage.getItem(LS_REPO) || null; // "owner/repo"
+    let token = sessionStorage.getItem(AUTH_TOKEN_KEY) || null;
+    let user = sessionStorage.getItem(AUTH_USER_KEY) || null;
+    let repoFull = sessionStorage.getItem(AUTH_REPO_KEY) || null; // "owner/everfree-notes"
+    let tokenExpiresAt = Number(sessionStorage.getItem(AUTH_EXPIRES_KEY) || 0);
     let defaultBranch = "main";
 
     let notebooks = [];
@@ -44,7 +49,6 @@
     // ── DOM ─────────────────────────────────────────────────
     const $ = (id) => document.getElementById(id);
     const viewSignin = $("view-signin");
-    const viewRepoPicker = $("view-repo-picker");
     const viewApp = $("view-app");
 
     const signinIdle = $("signin-idle");
@@ -54,10 +58,8 @@
     // ── View Routing ────────────────────────────────────────
     function showView(name) {
         viewSignin.classList.add("hidden");
-        viewRepoPicker.classList.add("hidden");
         viewApp.classList.add("hidden");
         if (name === "signin") viewSignin.classList.remove("hidden");
-        else if (name === "repo-picker") viewRepoPicker.classList.remove("hidden");
         else if (name === "app") viewApp.classList.remove("hidden");
     }
 
@@ -108,7 +110,9 @@
 
                 if (data.access_token) {
                     token = data.access_token;
-                    localStorage.setItem(LS_TOKEN, token);
+                    tokenExpiresAt = Date.now() + (Number(data.expires_in) * 1000);
+                    sessionStorage.setItem(AUTH_TOKEN_KEY, token);
+                    sessionStorage.setItem(AUTH_EXPIRES_KEY, String(tokenExpiresAt));
                     await fetchUserAndProceed();
                 }
             } catch (err) {
@@ -130,36 +134,29 @@
         try {
             const me = await gh("GET", "/user");
             user = me.login;
-            localStorage.setItem(LS_USER, user);
-            if (repoFull) {
-                await enterApp();
-            } else {
-                await autoConnectRepo();
-            }
+            sessionStorage.setItem(AUTH_USER_KEY, user);
+            await autoConnectRepo();
         } catch (err) {
-            showSigninError("Failed to fetch user: " + err.message);
+            showSigninError("Failed to fetch GitHub profile: " + err.message);
         }
     }
 
     async function autoConnectRepo() {
         try {
-            const repo = await findEverFreeRepo();
-            if (repo) {
-                rememberRepo(repo);
-                await enterApp();
-                return;
-            }
-            await createAndEnterDefaultRepo(DEFAULT_REPO);
+            const repo = await gh("GET", `/repos/${user}/${DEFAULT_REPO}`);
+            rememberRepo(repo);
+            await enterApp();
+            return;
         } catch (err) {
-            console.warn("Repo auto-connect failed:", err);
-            await showRepoPicker();
+            if (!isNotFoundError(err)) throw err;
         }
+        await createAndEnterDefaultRepo();
     }
 
-    async function createAndEnterDefaultRepo(repoName) {
+    async function createAndEnterDefaultRepo() {
         try {
             const repo = await gh("POST", "/user/repos", {
-                name: repoName,
+                name: DEFAULT_REPO,
                 private: true,
                 description: "EverFree — Git-backed Markdown notes",
                 auto_init: true,
@@ -167,80 +164,36 @@
             rememberRepo(repo);
             await enterApp();
         } catch (err) {
-            if (/422/.test(err.message)) {
-                const repo = await gh("GET", `/repos/${user}/${repoName}`);
+            if (err.status === 422) {
+                const repo = await gh("GET", `/repos/${user}/${DEFAULT_REPO}`);
                 rememberRepo(repo);
                 await enterApp();
-            } else {
-                await showRepoPicker();
+                return;
             }
+            throw err;
         }
-    }
-
-    async function findEverFreeRepo() {
-        try {
-            return await gh("GET", `/repos/${user}/${DEFAULT_REPO}`);
-        } catch (err) {
-            if (!isNotFoundError(err)) throw err;
-        }
-
-        const repos = await fetchUserRepos();
-        const candidates = repos
-            .filter(isEverFreeRepo)
-            .sort(compareEverFreeRepos);
-
-        return candidates[0] || null;
-    }
-
-    async function fetchUserRepos() {
-        const repos = [];
-        for (let page = 1; page <= 10; page += 1) {
-            const batch = await gh("GET", `/user/repos?per_page=100&page=${page}&sort=updated&affiliation=owner,collaborator`);
-            if (!Array.isArray(batch) || batch.length === 0) break;
-            repos.push(...batch);
-            if (batch.length < 100) break;
-        }
-        return repos;
-    }
-
-    function isEverFreeRepo(repo) {
-        const name = String(repo.name || "").toLowerCase();
-        const description = String(repo.description || "").toLowerCase();
-        return name === DEFAULT_REPO ||
-            (description.includes("everfree") && description.includes(EVERFREE_REPO_DESCRIPTION_MARKER));
-    }
-
-    function compareEverFreeRepos(a, b) {
-        const scoreDiff = repoScore(b) - repoScore(a);
-        if (scoreDiff) return scoreDiff;
-        return new Date(b.pushed_at || b.updated_at || 0) - new Date(a.pushed_at || a.updated_at || 0);
-    }
-
-    function repoScore(repo) {
-        const name = String(repo.name || "").toLowerCase();
-        const description = String(repo.description || "").toLowerCase();
-        let score = 0;
-        if (name === DEFAULT_REPO) score += 100;
-        if (description.includes(EVERFREE_REPO_DESCRIPTION_MARKER)) score += 40;
-        if (description.includes("everfree")) score += 20;
-        if (repo.private) score += 10;
-        if (!repo.fork) score += 5;
-        return score;
     }
 
     function rememberRepo(repo) {
+        const expected = `${user}/${DEFAULT_REPO}`.toLowerCase();
+        if (String(repo.full_name || "").toLowerCase() !== expected) {
+            throw new Error(`EverFree only supports ${user}/${DEFAULT_REPO}.`);
+        }
+        if (!repo.private) {
+            throw new Error(`${user}/${DEFAULT_REPO} must be private before EverFree can use it.`);
+        }
         if (repoFull && repoFull !== repo.full_name) {
             resetRepoData();
         }
         repoFull = repo.full_name;
         defaultBranch = repo.default_branch || "main";
-        localStorage.setItem(LS_REPO, repoFull);
+        sessionStorage.setItem(AUTH_REPO_KEY, repoFull);
     }
 
     function clearRememberedRepo() {
         repoFull = null;
         defaultBranch = "main";
-        localStorage.removeItem(LS_REPO);
+        sessionStorage.removeItem(AUTH_REPO_KEY);
         resetRepoData();
     }
 
@@ -282,60 +235,11 @@
         if (r.status === 204) return null;
         const data = await r.json().catch(() => ({}));
         if (!r.ok) {
-            throw new Error(data.message || `${method} ${path}: ${r.status}`);
+            const error = new Error(data.message || `${method} ${path}: ${r.status}`);
+            error.status = r.status;
+            throw error;
         }
         return data;
-    }
-
-    // ── Repo Picker ─────────────────────────────────────────
-    async function showRepoPicker() {
-        showView("repo-picker");
-        const $list = $("repo-list");
-        $list.innerHTML = '<div class="repo-loading">Loading your repositories…</div>';
-
-        try {
-            const repos = await fetchUserRepos();
-            renderRepoList(repos);
-
-            $("repo-search").addEventListener("input", (e) => {
-                const q = e.target.value.toLowerCase();
-                const filtered = q
-                    ? repos.filter(r => r.full_name.toLowerCase().includes(q))
-                    : repos;
-                renderRepoList(filtered);
-            });
-        } catch (err) {
-            $list.innerHTML = `<div class="repo-empty">Failed to load repos: ${escapeHtml(err.message)}</div>`;
-        }
-    }
-
-    function renderRepoList(repos) {
-        const $list = $("repo-list");
-        if (repos.length === 0) {
-            $list.innerHTML = '<div class="repo-empty">No repositories found.</div>';
-            return;
-        }
-        $list.innerHTML = "";
-        for (const r of repos) {
-            const $row = document.createElement("div");
-            $row.className = "repo-row";
-            $row.innerHTML = `
-                <div class="repo-info">
-                    <span class="repo-name">${escapeHtml(r.full_name)}</span>
-                    <span class="repo-meta">
-                        ${r.private ? '<span class="repo-private">private</span>' : ""}
-                        <span>${escapeHtml(r.default_branch || "main")}</span>
-                    </span>
-                </div>
-            `;
-            $row.addEventListener("click", () => selectRepo(r));
-            $list.appendChild($row);
-        }
-    }
-
-    async function selectRepo(repo) {
-        rememberRepo(repo);
-        await enterApp();
     }
 
     // ── Sign Out ────────────────────────────────────────────
@@ -343,9 +247,11 @@
         token = null;
         user = null;
         repoFull = null;
-        localStorage.removeItem(LS_TOKEN);
-        localStorage.removeItem(LS_USER);
-        localStorage.removeItem(LS_REPO);
+        tokenExpiresAt = 0;
+        sessionStorage.removeItem(AUTH_TOKEN_KEY);
+        sessionStorage.removeItem(AUTH_USER_KEY);
+        sessionStorage.removeItem(AUTH_REPO_KEY);
+        sessionStorage.removeItem(AUTH_EXPIRES_KEY);
         if (devicePollTimer) { clearTimeout(devicePollTimer); devicePollTimer = null; }
         resetRepoData();
         signinIdle.classList.remove("hidden");
@@ -356,6 +262,10 @@
 
     // ── Enter App ───────────────────────────────────────────
     async function enterApp() {
+        if (String(repoFull).toLowerCase() !== `${user}/${DEFAULT_REPO}`.toLowerCase()) {
+            clearRememberedRepo();
+            throw new Error(`EverFree only supports ${user}/${DEFAULT_REPO}.`);
+        }
         showView("app");
         try {
             const repoMeta = await gh("GET", `/repos/${repoFull}`);
@@ -1365,13 +1275,7 @@
         signinError.classList.add("hidden");
         signinIdle.classList.remove("hidden");
     });
-    $("btn-signout-from-picker").addEventListener("click", signOut);
     $("btn-signout").addEventListener("click", signOut);
-    $("btn-switch-repo").addEventListener("click", () => {
-        $("account-popover").classList.add("hidden");
-        clearRememberedRepo();
-        showRepoPicker();
-    });
 
     $("btn-account").addEventListener("click", (e) => {
         e.stopPropagation();
@@ -1505,11 +1409,19 @@
     setupPaneResizers();
     applyTheme(getInitialTheme());
 
-    if (token && user) {
+    if (token && (!tokenExpiresAt || tokenExpiresAt <= Date.now())) {
+        signOut();
+    } else if (token && user) {
         if (repoFull) {
-            enterApp();
+            enterApp().catch(err => {
+                showView("signin");
+                showSigninError(err.message);
+            });
         } else {
-            autoConnectRepo().catch(() => showView("signin"));
+            autoConnectRepo().catch(err => {
+                showView("signin");
+                showSigninError(err.message);
+            });
         }
     } else {
         showView("signin");

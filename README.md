@@ -53,10 +53,17 @@ needs `evernote2md` (`brew install evernote2md`); the wizard can install it
 for you if Homebrew is available.
 
 **In the browser:** open [everfree.vercel.app](https://everfree.vercel.app),
-sign in with GitHub (a one-time device code, no password), and pick a private
-repository for your workspace. There is no EverFree account and no EverFree
-database — the web editor commits directly to your repo through the GitHub
-API.
+sign in with GitHub (a one-time device code, no password), and connect your
+private `everfree-notes` repository. EverFree creates that exact repository
+when it is absent and never selects or
+creates a differently named repository. There is no EverFree account and no
+EverFree database — the web editor commits directly to your repo through the
+GitHub API.
+
+Maintainers configuring authentication should read
+[`docs/github-oauth-setup.md`](docs/github-oauth-setup.md). The security and
+cross-platform credential-storage decision is recorded in
+[`docs/adr/0001-github-auth-and-credential-storage.md`](docs/adr/0001-github-auth-and-credential-storage.md).
 
 ## Contributing
 

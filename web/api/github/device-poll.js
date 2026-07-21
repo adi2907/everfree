@@ -1,20 +1,23 @@
-// Vercel serverless function — proxies GitHub Device Flow token-poll endpoint.
-// The browser polls this every few seconds until the user finishes authorizing.
+// Vercel serverless function — proxies GitHub OAuth Device Flow token-poll endpoint.
 
 const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID || "Ov23liunA4WFlhQQO9KG";
 
 module.exports = async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Pragma", "no-cache");
     if (req.method !== "POST") {
         res.status(405).json({ error: "Method not allowed" });
         return;
     }
-
+    if (!GITHUB_CLIENT_ID) {
+        res.status(503).json({ error: "EverFree's GitHub OAuth App is not configured." });
+        return;
+    }
     const deviceCode = req.body && req.body.device_code;
     if (!deviceCode) {
         res.status(400).json({ error: "device_code is required" });
         return;
     }
-
     try {
         const r = await fetch("https://github.com/login/oauth/access_token", {
             method: "POST",
@@ -28,7 +31,6 @@ module.exports = async (req, res) => {
                 grant_type: "urn:ietf:params:oauth:grant-type:device_code",
             }),
         });
-
         const data = await r.json();
         res.status(r.status).json(data);
     } catch (err) {

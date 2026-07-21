@@ -8,6 +8,7 @@ Usage:
 
 from setuptools import setup
 from pathlib import Path
+import os
 
 APP = ["run.py"]
 DATA_FILES = [
@@ -37,6 +38,7 @@ OPTIONS = {
         "pydantic_core",
         "anyio",
         "httpx",
+        "keyring",
         # Evernote import pipeline. evernote-backup is a Python package in
         # requirements.txt, so bundle it instead of relying on a shell command.
         "evernote_backup",
@@ -52,6 +54,7 @@ OPTIONS = {
         "server",
     ],
     "includes": [
+        "jaraco.classes",
         "jaraco.text",
         "jaraco.functools",
         "jaraco.context",
@@ -77,6 +80,15 @@ OPTIONS = {
         "NSHighResolutionCapable": True,
     },
 }
+
+github_oauth_client_id = os.environ.get(
+    "EVERFREE_GITHUB_CLIENT_ID",
+    "Ov23liunA4WFlhQQO9KG",
+).strip()
+if github_oauth_client_id:
+    OPTIONS["plist"]["LSEnvironment"] = {
+        "EVERFREE_GITHUB_CLIENT_ID": github_oauth_client_id,
+    }
 
 ICON_FILE = Path("packaging/EverFree.icns")
 if ICON_FILE.exists():

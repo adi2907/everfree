@@ -42,6 +42,7 @@ Options:
   --release    Sign the app and DMG, submit to Apple notarization, and staple.
 
 Environment:
+  EVERFREE_GITHUB_CLIENT_ID      Public client ID for the EverFree OAuth App.
   EVERFREE_SIGN_IDENTITY    Developer ID Application identity.
                             Default: $SIGN_IDENTITY
   EVERFREE_NOTARY_PROFILE   notarytool keychain profile.

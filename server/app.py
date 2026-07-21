@@ -1,11 +1,11 @@
 """
-EverFree — FastAPI Backend (Git-Backed + OAuth Onboarding)
+EverFree — FastAPI Backend (Git-Backed + GitHub OAuth Onboarding)
 
 On startup:
   - If ~/Documents/EverFree exists and is a git repo → boot normally
   - Otherwise → serve setup.html onboarding wizard
 
-Setup wizard orchestrates Evernote OAuth → GitHub OAuth → repo creation,
+Setup wizard orchestrates Evernote OAuth → GitHub OAuth Device Flow → repo creation,
 all without the user ever touching a terminal or pasting tokens.
 """
 
@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+import json
 import sqlite3
 import secrets
 import shutil
@@ -34,11 +35,26 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from server import agent
+from server.github_auth import (
+    CredentialStoreError,
+    REPOSITORY_NAME,
+    RepositoryAccessError,
+    SecureCredentialStore,
+    add_git_http_auth,
+    auth_metadata_is_current,
+    clean_clone_url,
+    clean_everfree_remote,
+    credential_free_github_remote,
+    expected_repository_full_name,
+    github_remote_repository,
+    metadata_without_secrets,
+    require_github_oauth_client_id,
+    validate_repository,
+)
 
 # ── Configuration ────────────────────────────────────────────
 NOTES_DIR = Path(os.environ.get("EVERFREE_DIR", Path.home() / "Documents" / "EverFree"))
 PORT = int(os.environ.get("EVERFREE_PORT", 52321))
-GITHUB_CLIENT_ID = os.environ.get("EVERFREE_GITHUB_CLIENT_ID", "Ov23liunA4WFlhQQO9KG")
 GITHUB_REQUEST_TIMEOUT = float(os.environ.get("EVERFREE_GITHUB_REQUEST_TIMEOUT", 20))
 EVERNOTE_SYNC_TIMEOUT = int(os.environ.get("EVERFREE_EVERNOTE_SYNC_TIMEOUT", 3600))
 EVERNOTE_NETWORK_RETRY_COUNT = int(os.environ.get("EVERFREE_EVERNOTE_NETWORK_RETRY_COUNT", 5))
@@ -54,6 +70,8 @@ else:
 logger = logging.getLogger("everfree")
 
 AUTH_FILE = Path.home() / ".everfree_auth.json"
+GITHUB_CREDENTIALS = SecureCredentialStore()
+_github_token_lock = threading.Lock()
 
 # ── Shared state ─────────────────────────────────────────────
 setup_progress = {
@@ -66,6 +84,7 @@ setup_progress = {
 
 github_auth_state = {
     "access_token": None,
+    "repository_id": None,
     "username": None,
     "status": "idle",  # idle | pending | authorized | error
     "error": None,
@@ -73,31 +92,69 @@ github_auth_state = {
     "verification_uri": None,
 }
 
-# Restore a previously saved GitHub token so restarts don't lose auth
+# Restore non-secret auth metadata and the OAuth token from the OS vault. Older
+# EverFree releases wrote the token to this file; migrate it into the vault and
+# atomically remove the plaintext copy before using it.
 def _load_saved_auth() -> None:
     try:
-        if AUTH_FILE.exists():
-            import json
-            data = json.loads(AUTH_FILE.read_text())
-            if data.get("access_token") and data.get("username"):
-                github_auth_state.update({
-                    "access_token": data["access_token"],
+        if not AUTH_FILE.exists():
+            return
+        data = json.loads(AUTH_FILE.read_text(encoding="utf-8"))
+        plaintext_token = str(data.get("access_token") or "")
+        if plaintext_token:
+            if plaintext_token.startswith("gho_") and data.get("username"):
+                GITHUB_CREDENTIALS.save(plaintext_token)
+                data = {
+                    "auth_type": "github_oauth_device",
                     "username": data["username"],
-                    "status": "authorized",
-                })
-    except Exception:
-        pass
+                    "repository": REPOSITORY_NAME,
+                    **(
+                        {"repository_id": data["repository_id"]}
+                        if data.get("repository_id") else {}
+                    ),
+                }
+            else:
+                data = metadata_without_secrets(data)
+            _write_auth_metadata(data)
+        if not auth_metadata_is_current(data):
+            return
+        access_token = GITHUB_CREDENTIALS.get_access_token()
+        github_auth_state.update({
+            "access_token": access_token,
+            "repository_id": data.get("repository_id"),
+            "username": data["username"],
+            "status": "authorized" if access_token else "idle",
+        })
+    except (OSError, ValueError, CredentialStoreError) as exc:
+        logger.warning("Could not restore GitHub authentication: %s", exc)
+
+def _write_auth_metadata(data: dict) -> None:
+    """Atomically persist non-secret GitHub auth metadata with mode 0600."""
+    AUTH_FILE.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_path = tempfile.mkstemp(prefix=".everfree-auth-", dir=str(AUTH_FILE.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(metadata_without_secrets(data), handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temp_path, 0o600)
+        os.replace(temp_path, AUTH_FILE)
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+
 
 def _save_auth() -> None:
-    try:
-        import json
-        AUTH_FILE.write_text(json.dumps({
-            "access_token": github_auth_state["access_token"],
-            "username": github_auth_state["username"],
-        }))
-        AUTH_FILE.chmod(0o600)
-    except Exception:
-        pass
+    access_token = github_auth_state.get("access_token")
+    if not access_token:
+        raise CredentialStoreError("GitHub did not return an OAuth access token.")
+    GITHUB_CREDENTIALS.save(access_token)
+    _write_auth_metadata({
+        "auth_type": "github_oauth_device",
+        "username": github_auth_state["username"],
+        "repository": REPOSITORY_NAME,
+        "repository_id": github_auth_state.get("repository_id"),
+    })
 
 _load_saved_auth()
 
@@ -179,8 +236,9 @@ def _clone_existing_repo(auth_url: str, *, backup_existing: bool = False) -> Pat
 
 def _github_headers(token: str) -> dict[str, str]:
     return {
-        "Authorization": f"token {token}",
-        "Accept": "application/vnd.github.v3+json",
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
     }
 
 
@@ -204,6 +262,18 @@ def _github_repo_has_commits(
     if resp.status_code in (404, 409):
         return False
     raise _github_api_error(resp)
+
+
+def _get_valid_github_token() -> str:
+    """Return the OAuth token from memory or the operating-system vault."""
+    with _github_token_lock:
+        token = github_auth_state.get("access_token")
+        if not token:
+            token = GITHUB_CREDENTIALS.get_access_token()
+            github_auth_state["access_token"] = token
+        if token:
+            return str(token)
+        raise CredentialStoreError("GitHub authorization is missing. Please sign in again.")
 
 
 def _get_subprocess_env() -> dict[str, str]:
@@ -233,13 +303,63 @@ def _get_subprocess_env() -> dict[str, str]:
 
 
 # ── Git Helpers ──────────────────────────────────────────────
+_GIT_NETWORK_COMMANDS = {"clone", "fetch", "pull", "push", "ls-remote"}
+
+
+def _prepare_origin_remote(git_bin: str, env: dict[str, str], cwd: str) -> str:
+    """Validate the origin and remove any credential embedded by old versions."""
+    current = subprocess.run(
+        [git_bin, "remote", "get-url", "origin"],
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=20,
+    )
+    if current.returncode != 0:
+        raise RepositoryAccessError("The EverFree Git repository has no origin remote.")
+    original_url = current.stdout.strip()
+    credential_free_url = credential_free_github_remote(original_url)
+    if original_url != credential_free_url:
+        subprocess.run(
+            [git_bin, "remote", "set-url", "origin", credential_free_url],
+            cwd=cwd,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=20,
+        )
+    clean_url = clean_everfree_remote(credential_free_url)
+    remote_owner, _ = github_remote_repository(clean_url)
+    authenticated_owner = github_auth_state.get("username")
+    if authenticated_owner and remote_owner.lower() != authenticated_owner.lower():
+        raise RepositoryAccessError(
+            "The EverFree Git remote belongs to a different GitHub account."
+        )
+    return clean_url
+
+
 def _git(*args: str, check: bool = True, cwd: str | None = None) -> subprocess.CompletedProcess:
     env = _get_subprocess_env()
     git_bin = shutil.which("git", path=env["PATH"]) or "git"
+    workdir = cwd or str(NOTES_DIR)
+    command = args[0] if args else ""
+    if command in _GIT_NETWORK_COMMANDS:
+        if command == "clone":
+            if len(args) < 2:
+                raise RepositoryAccessError("Git clone is missing its repository URL.")
+            clean_url = clean_everfree_remote(args[1])
+            if clean_url != args[1]:
+                raise RepositoryAccessError("Git clone URL must not contain credentials.")
+        else:
+            _prepare_origin_remote(git_bin, env, workdir)
+        env = add_git_http_auth(env, _get_valid_github_token())
     cmd = [git_bin, *args]
-    logger.info("git %s", " ".join(args))
+    logger.info("git %s", command)
     return subprocess.run(
-        cmd, cwd=cwd or str(NOTES_DIR), env=env,
+        cmd, cwd=workdir, env=env,
         capture_output=True, text=True, check=check, timeout=60,
     )
 
@@ -254,8 +374,9 @@ def git_pull():
     try:
         result = _git("pull", "origin", "main", check=True)
         return True, result.stdout.strip() or "Up to date"
-    except subprocess.CalledProcessError as e:
-        return False, e.stderr.strip()
+    except Exception as exc:
+        detail = exc.stderr.strip() if isinstance(exc, subprocess.CalledProcessError) else str(exc)
+        return False, detail
 
 
 def git_push(message: str):
@@ -269,8 +390,9 @@ def git_push(message: str):
         _git("commit", "-m", message, check=True)
         _git("push", "origin", "main", check=True)
         return True, "Pushed to GitHub"
-    except subprocess.CalledProcessError as e:
-        return False, e.stderr.strip()
+    except Exception as exc:
+        detail = exc.stderr.strip() if isinstance(exc, subprocess.CalledProcessError) else str(exc)
+        return False, detail
 
 
 def git_sync():
@@ -569,7 +691,7 @@ app.include_router(agent.router)
 
 @app.post("/api/auth/github/start")
 async def github_auth_start(background_tasks: BackgroundTasks):
-    """Start the GitHub Device Flow. Returns user_code to display to the user."""
+    """Start the original GitHub OAuth Device Flow."""
     github_auth_state.update({
         "access_token": None,
         "username": None,
@@ -580,12 +702,18 @@ async def github_auth_start(background_tasks: BackgroundTasks):
     })
 
     try:
+        client_id = require_github_oauth_client_id()
+        GITHUB_CREDENTIALS.ensure_available()
         async with httpx.AsyncClient(timeout=GITHUB_REQUEST_TIMEOUT) as client:
             resp = await client.post(
                 "https://github.com/login/device/code",
-                data={"client_id": GITHUB_CLIENT_ID, "scope": "repo"},
+                data={"client_id": client_id, "scope": "repo"},
                 headers={"Accept": "application/json"},
             )
+    except (RuntimeError, CredentialStoreError) as exc:
+        detail = str(exc)
+        github_auth_state.update({"status": "error", "error": detail})
+        raise HTTPException(status_code=503, detail=detail) from exc
     except httpx.HTTPError as exc:
         detail = f"Could not reach GitHub to start sign-in. Check internet access and try again. ({exc})"
         logger.exception("GitHub device-flow start failed")
@@ -647,7 +775,7 @@ async def _poll_device_flow(device_code: str, interval: int, expires_in: int):
                 resp = await client.post(
                     "https://github.com/login/oauth/access_token",
                     data={
-                        "client_id": GITHUB_CLIENT_ID,
+                        "client_id": require_github_oauth_client_id(),
                         "device_code": device_code,
                         "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
                     },
@@ -689,21 +817,39 @@ async def _poll_device_flow(device_code: str, interval: int, expires_in: int):
         token = data.get("access_token")
         if token:
             try:
+                access_token = str(data.get("access_token") or "")
+                if not access_token.startswith("gho_"):
+                    raise CredentialStoreError("GitHub returned an unexpected OAuth token type.")
+                github_auth_state["access_token"] = access_token
                 async with httpx.AsyncClient(timeout=GITHUB_REQUEST_TIMEOUT) as client:
                     user_resp = await client.get(
                         "https://api.github.com/user",
-                        headers={"Authorization": f"token {token}"},
+                        headers=_github_headers(token),
                     )
-                username = user_resp.json().get("login", "unknown") if user_resp.status_code == 200 else "unknown"
-            except Exception as exc:
+                    if user_resp.status_code != 200:
+                        raise _github_api_error(user_resp)
+                    username = user_resp.json().get("login")
+                    if not username:
+                        raise RuntimeError("GitHub did not return an account name.")
+                    repo_resp = await client.get(
+                        f"https://api.github.com/repos/{username}/{REPOSITORY_NAME}",
+                        headers=_github_headers(token),
+                    )
+                    if repo_resp.status_code == 200:
+                        repo_data = repo_resp.json()
+                        validate_repository(repo_data, username)
+                        if not repo_data.get("private"):
+                            raise RuntimeError(f"{expected_repository_full_name(username)} must be private.")
+                        github_auth_state["repository_id"] = repo_data.get("id")
+                github_auth_state.update({"username": username, "status": "authorized"})
+                _save_auth()
+            except (CredentialStoreError, RepositoryAccessError, RuntimeError, httpx.HTTPError) as exc:
                 logger.exception("Failed to fetch GitHub user after authorization")
                 github_auth_state.update({
                     "status": "error",
-                    "error": f"GitHub authorized, but EverFree could not fetch your GitHub profile. ({exc})",
+                    "error": f"GitHub authorized, but EverFree could not accept the authorization. ({exc})",
                 })
                 return
-            github_auth_state.update({"access_token": token, "username": username, "status": "authorized"})
-            _save_auth()
             return
 
     github_auth_state.update({"status": "error", "error": "Device code expired. Please try again."})
@@ -1171,6 +1317,9 @@ async def evernote_auth_status():
 async def get_setup_status():
     return {
         "configured": _is_configured(),
+        "github_authenticated": github_auth_state.get("status") == "authorized",
+        "github_repository_authorized": bool(github_auth_state.get("repository_id")),
+        "github_username": github_auth_state.get("username"),
         "evernote_synced": _is_evernote_synced(),
         "notes_dir": str(NOTES_DIR),
         "port": PORT,
@@ -1185,28 +1334,29 @@ async def get_setup_progress():
 @app.post("/api/setup/run")
 async def run_setup(request: Request):
     """
-    Final setup step: create GitHub repo + git init + push.
-    Uses the access_token from the Device Flow (already stored in github_auth_state).
+    Final setup step: create/connect the fixed GitHub repo + git init + push.
     """
     if setup_progress["running"]:
         raise HTTPException(status_code=409, detail="Setup is already running")
-    if _is_configured():
-        raise HTTPException(status_code=409, detail="Already configured")
 
-    body = await request.json()
-    repo_name = body.get("repo_name", "").strip()
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    requested_repo = str(body.get("repo_name") or REPOSITORY_NAME).strip()
+    if requested_repo != REPOSITORY_NAME:
+        raise HTTPException(
+            status_code=400,
+            detail=f"EverFree only supports the repository '{REPOSITORY_NAME}'.",
+        )
 
-    if not repo_name:
-        raise HTTPException(status_code=400, detail="Repository name is required")
-    if not re.match(r'^[a-zA-Z0-9._-]+$', repo_name):
-        raise HTTPException(status_code=400, detail="Invalid repository name")
-
-    token = github_auth_state.get("access_token")
-    if not token:
-        raise HTTPException(status_code=401, detail="GitHub not authenticated. Please sign in first.")
+    try:
+        token = _get_valid_github_token()
+    except (CredentialStoreError, RuntimeError) as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
 
     loop = asyncio.get_event_loop()
-    loop.run_in_executor(None, _setup_repo_pipeline, token, repo_name)
+    loop.run_in_executor(None, _setup_repo_pipeline, token)
 
     return {"status": "started"}
 
@@ -1218,12 +1368,24 @@ def _update_progress(step: str, detail: str = ""):
     logger.info("Setup [%s]: %s", step, detail)
 
 
-def _setup_repo_pipeline(token: str, repo_name: str):
+def _setup_repo_pipeline(token: str):
     """Create GitHub repo + git init + push. Runs in background thread."""
     global setup_progress
-    setup_progress = {"running": True, "step": "", "detail": "", "error": None, "complete": False}
+    setup_progress = {
+        "running": True,
+        "step": "",
+        "detail": "",
+        "error": None,
+        "complete": False,
+    }
+    repo_name = REPOSITORY_NAME
 
     try:
+        configured_remote = None
+        if _is_configured():
+            env = _get_subprocess_env()
+            git_bin = shutil.which("git", path=env["PATH"]) or "git"
+            configured_remote = _prepare_origin_remote(git_bin, env, str(NOTES_DIR))
         NOTES_DIR.mkdir(parents=True, exist_ok=True)
         local_has_content = _has_local_note_content()
 
@@ -1242,6 +1404,11 @@ def _setup_repo_pipeline(token: str, repo_name: str):
                 owner = user_resp.json().get("login", owner)
             elif owner == "unknown":
                 raise _github_api_error(user_resp)
+            if configured_remote and configured_remote.lower() != clean_clone_url(owner).lower():
+                raise RepositoryAccessError(
+                    "The local EverFree folder belongs to a different GitHub account. "
+                    f"Sign in as the owner of {configured_remote}."
+                )
 
             existing_resp = client.get(
                 f"https://api.github.com/repos/{owner}/{repo_name}",
@@ -1249,6 +1416,7 @@ def _setup_repo_pipeline(token: str, repo_name: str):
             )
             if existing_resp.status_code == 200:
                 repo_data = existing_resp.json()
+                validate_repository(repo_data, owner)
                 owner = repo_data["owner"]["login"]
                 repo_exists = True
                 repo_has_commits = _github_repo_has_commits(client, token, owner, repo_name)
@@ -1269,6 +1437,7 @@ def _setup_repo_pipeline(token: str, repo_name: str):
                 )
                 if resp.status_code == 201:
                     repo_data = resp.json()
+                    validate_repository(repo_data, owner)
                     owner = repo_data["owner"]["login"]
                 elif resp.status_code == 422:
                     existing_resp = client.get(
@@ -1278,6 +1447,7 @@ def _setup_repo_pipeline(token: str, repo_name: str):
                     if existing_resp.status_code != 200:
                         raise _github_api_error(resp)
                     repo_data = existing_resp.json()
+                    validate_repository(repo_data, owner)
                     owner = repo_data["owner"]["login"]
                     repo_exists = True
                     repo_has_commits = _github_repo_has_commits(client, token, owner, repo_name)
@@ -1290,12 +1460,20 @@ def _setup_repo_pipeline(token: str, repo_name: str):
             else:
                 raise _github_api_error(existing_resp)
 
-        clone_url = f"https://github.com/{owner}/{repo_name}.git"
-        auth_url = clone_url.replace("https://", f"https://{token}@")
+            if not repo_data.get("private"):
+                raise RuntimeError(
+                    f"{expected_repository_full_name(owner)} exists but is public. "
+                    "Make it private before using it for EverFree notes."
+                )
+
+        github_auth_state["repository_id"] = repo_data.get("id")
+        _save_auth()
+
+        clone_url = clean_clone_url(owner)
 
         if repo_exists and repo_has_commits:
             _update_progress("git_init", "Cloning existing notes repository...")
-            backup_path = _clone_existing_repo(auth_url, backup_existing=local_has_content)
+            backup_path = _clone_existing_repo(clone_url, backup_existing=local_has_content)
             if backup_path:
                 _update_progress(
                     "complete",
@@ -1308,7 +1486,7 @@ def _setup_repo_pipeline(token: str, repo_name: str):
 
         if repo_exists and not local_has_content:
             _update_progress("git_init", "Cloning existing notes repository...")
-            _clone_existing_repo(auth_url)
+            _clone_existing_repo(clone_url)
             _update_progress("complete", "All set! Redirecting...")
             setup_progress["complete"] = True
             return
@@ -1332,8 +1510,8 @@ def _setup_repo_pipeline(token: str, repo_name: str):
 
         _git("init", cwd=str(NOTES_DIR))
         _git("branch", "-M", "main", cwd=str(NOTES_DIR))
-        _git("remote", "add", "origin", auth_url, cwd=str(NOTES_DIR), check=False)
-        _git("remote", "set-url", "origin", auth_url, cwd=str(NOTES_DIR), check=False)
+        _git("remote", "add", "origin", clone_url, cwd=str(NOTES_DIR), check=False)
+        _git("remote", "set-url", "origin", clone_url, cwd=str(NOTES_DIR), check=False)
 
         _update_progress("git_push", "Pushing notes to GitHub...")
         _git("add", ".", cwd=str(NOTES_DIR))
@@ -1357,7 +1535,7 @@ def _setup_repo_pipeline(token: str, repo_name: str):
 
 @app.get("/")
 async def root():
-    if _is_configured():
+    if _is_configured() and github_auth_state.get("status") == "authorized":
         return HTMLResponse((FRONTEND_DIR / "index.html").read_text(encoding="utf-8"))
     else:
         return HTMLResponse((FRONTEND_DIR / "setup.html").read_text(encoding="utf-8"))
@@ -1413,8 +1591,12 @@ async def sync_status():
     with _sync_lock:
         state = dict(sync_state)
     if state.get("remote") is None:
-        result = _git("remote", "get-url", "origin", check=False)
-        state["remote"] = result.stdout.strip() if result.returncode == 0 else None
+        env = _get_subprocess_env()
+        git_bin = shutil.which("git", path=env["PATH"]) or "git"
+        try:
+            state["remote"] = _prepare_origin_remote(git_bin, env, str(NOTES_DIR))
+        except (RepositoryAccessError, subprocess.SubprocessError):
+            state["remote"] = None
     state["git"] = True
     return state
 
