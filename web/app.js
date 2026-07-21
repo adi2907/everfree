@@ -11,6 +11,8 @@
     const LS_REPO = "everfree-repo";
     const LS_THEME = "everfree-theme";
     const LS_LIGHT_THEME_MIGRATED = "everfree-light-theme-migrated";
+    const LS_SIDEBAR_WIDTH = "everfree-sidebar-width";
+    const LS_NOTE_BROWSER_WIDTH = "everfree-note-browser-width";
     const DEFAULT_REPO = "everfree-notes";
     const EVERFREE_REPO_DESCRIPTION_MARKER = "git-backed markdown notes";
 
@@ -1174,6 +1176,104 @@
         $("sync-text").textContent = text;
     }
 
+    function setupPaneResizers() {
+        const panes = {
+            sidebar: {
+                element: $("sidebar"),
+                handle: $("sidebar-resizer"),
+                cssVariable: "--sidebar-width",
+                storageKey: LS_SIDEBAR_WIDTH,
+                min: 180,
+                max: 420,
+            },
+            noteBrowser: {
+                element: $("note-browser"),
+                handle: $("note-browser-resizer"),
+                cssVariable: "--note-browser-width",
+                storageKey: LS_NOTE_BROWSER_WIDTH,
+                min: 240,
+                max: 520,
+            },
+        };
+        const active = { pane: null, startX: 0, startWidth: 0 };
+
+        function viewportAllowsResize() {
+            return window.matchMedia("(min-width: 769px)").matches;
+        }
+
+        function limits(pane) {
+            const other = pane === panes.sidebar ? panes.noteBrowser : panes.sidebar;
+            const otherWidth = other.element.getBoundingClientRect().width;
+            const editorMin = 360;
+            const maxAvailable = window.innerWidth - otherWidth - editorMin - 16;
+            return {
+                min: pane.min,
+                max: Math.max(pane.min, Math.min(pane.max, maxAvailable)),
+            };
+        }
+
+        function setPaneWidth(pane, width, persist = false) {
+            const bounds = limits(pane);
+            const next = Math.round(Math.max(bounds.min, Math.min(bounds.max, width)));
+            viewApp.style.setProperty(pane.cssVariable, `${next}px`);
+            pane.handle.setAttribute("aria-valuemin", String(bounds.min));
+            pane.handle.setAttribute("aria-valuemax", String(bounds.max));
+            pane.handle.setAttribute("aria-valuenow", String(next));
+            if (persist) localStorage.setItem(pane.storageKey, String(next));
+        }
+
+        for (const pane of Object.values(panes)) {
+            const saved = Number(localStorage.getItem(pane.storageKey));
+            if (Number.isFinite(saved) && saved > 0) setPaneWidth(pane, saved);
+
+            pane.handle.addEventListener("pointerdown", (event) => {
+                if (!viewportAllowsResize()) return;
+                event.preventDefault();
+                active.pane = pane;
+                active.startX = event.clientX;
+                active.startWidth = pane.element.getBoundingClientRect().width;
+                pane.handle.classList.add("is-active");
+                document.body.classList.add("resizing-panes");
+                pane.handle.setPointerCapture?.(event.pointerId);
+            });
+
+            pane.handle.addEventListener("keydown", (event) => {
+                if (!viewportAllowsResize()) return;
+                const current = pane.element.getBoundingClientRect().width;
+                let next = current;
+                if (event.key === "ArrowLeft") next -= 16;
+                if (event.key === "ArrowRight") next += 16;
+                if (event.key === "Home") next = pane.min;
+                if (event.key === "End") next = pane.max;
+                if (next === current) return;
+                event.preventDefault();
+                setPaneWidth(pane, next, true);
+            });
+        }
+
+        window.addEventListener("pointermove", (event) => {
+            if (!active.pane) return;
+            setPaneWidth(active.pane, active.startWidth + event.clientX - active.startX);
+        });
+
+        function stopResize() {
+            if (!active.pane) return;
+            const pane = active.pane;
+            setPaneWidth(pane, pane.element.getBoundingClientRect().width, true);
+            pane.handle.classList.remove("is-active");
+            document.body.classList.remove("resizing-panes");
+            active.pane = null;
+        }
+
+        window.addEventListener("pointerup", stopResize);
+        window.addEventListener("pointercancel", stopResize);
+        window.addEventListener("resize", () => {
+            for (const pane of Object.values(panes)) {
+                setPaneWidth(pane, pane.element.getBoundingClientRect().width);
+            }
+        });
+    }
+
     // ── Modal ───────────────────────────────────────────────
     let modalCallback = null;
     function showModal(title, placeholder, callback) {
@@ -1402,6 +1502,7 @@
     // ── Init ────────────────────────────────────────────────
     setupEditorDictation();
     setupImageHandling();
+    setupPaneResizers();
     applyTheme(getInitialTheme());
 
     if (token && user) {

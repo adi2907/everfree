@@ -99,6 +99,34 @@ html, body {
     display: flex;
 }
 
+.pane-resizer {
+    flex: 0 0 8px;
+    position: relative;
+    z-index: 2;
+    cursor: col-resize;
+    background: transparent;
+    touch-action: none;
+}
+.pane-resizer::after {
+    content: "";
+    position: absolute;
+    inset: 0 3px;
+    background: var(--border);
+    opacity: 0;
+    transition: opacity 120ms ease, background 120ms ease;
+}
+.pane-resizer:hover::after,
+.pane-resizer:focus-visible::after,
+body.resizing-panes .pane-resizer.is-active::after {
+    background: var(--accent);
+    opacity: 1;
+}
+body.resizing-panes,
+body.resizing-panes * {
+    cursor: col-resize !important;
+    user-select: none !important;
+}
+
 
 /* ── Auth Card ───────────────────────────────────────────── */
 .auth-card {
@@ -1603,6 +1631,7 @@ html, body {
 }
 
 @media (max-width: 820px) {
+    .pane-resizer { display: none; }
     .sidebar { width: 68px; min-width: 68px; }
     .sidebar-brand-text,
     .sidebar-header > .btn-icon,
@@ -1624,6 +1653,7 @@ html, body {
 
 @media (max-width: 768px) {
     /* Single-pane: the note list OR the editor fills the screen, never both. */
+    .pane-resizer { display: none; }
     .note-browser { flex: 1; width: auto; min-width: 0; }
     .main { display: none; }
     body.mobile-edit .sidebar { display: none; }
