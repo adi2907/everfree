@@ -28,7 +28,7 @@
         <p class="brand-tagline">Free, open-source writing software.</p>
         <h1 class="mobile-landing-title">An IDE for your writing.</h1>
         <p class="mobile-landing-lede">
-            EverFree brings Cursor-style AI help into a notes editor: ask it to rewrite, continue, summarize, research, or turn rough context into a usable draft.
+            EverFree brings Cursor-style AI help into a notes editor: ask it to rewrite, continue, summarize, or turn rough context into a usable draft.
         </p>
 
         <div id="si-idle" class="mobile-actions">
@@ -240,10 +240,6 @@
             Assistant
         </span>
         <span class="assist-status" id="assist-status" title=""></span>
-        <select class="assist-provider-quick" id="assist-provider-quick" title="Model provider" aria-label="Model provider">
-            <option value="openrouter">OpenRouter</option>
-            <option value="gemini">Gemini</option>
-        </select>
         <button class="btn-icon" id="assist-new-btn" title="Clear chat" aria-label="Clear chat">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                 stroke-linecap="round" stroke-linejoin="round">
@@ -266,30 +262,12 @@
     </div>
 
     <div class="assist-settings" id="assist-settings" hidden>
-        <div class="assist-settings-tabs" role="tablist" aria-label="AI providers">
-            <button type="button" class="assist-settings-tab active" data-provider-tab="openrouter" role="tab">OpenRouter</button>
-            <button type="button" class="assist-settings-tab" data-provider-tab="gemini" role="tab">Gemini</button>
-        </div>
-        <div class="assist-settings-hint">Enter credentials for a provider. Pick which one answers with the dropdown above. Keys are stored only in this browser.</div>
+        <div class="assist-settings-hint">The assistant runs on Google Gemini. Your key is stored only in this browser and sent per request.</div>
 
-        <div class="assist-provider-pane active" data-provider-pane="openrouter">
-            <label>API key
-                <input type="password" id="assist-set-openrouter" placeholder="">
-            </label>
-            <label>Chat model
-                <input type="text" id="assist-set-openrouter-model" list="assist-openrouter-model-list"
-                    placeholder="e.g. anthropic/claude-sonnet-4">
-                <datalist id="assist-openrouter-model-list">
-                    <option value="anthropic/claude-sonnet-4"></option>
-                    <option value="google/gemini-2.5-flash"></option>
-                    <option value="openai/gpt-5"></option>
-                </datalist>
-            </label>
-        </div>
-
-        <div class="assist-provider-pane" data-provider-pane="gemini" hidden>
-            <label>API key
+        <div class="assist-provider-pane active">
+            <label>Google Gemini API key
                 <input type="password" id="assist-set-gemini" placeholder="">
+                <span class="assist-label-hint">Get a free key at aistudio.google.com/apikey.</span>
             </label>
             <label>Model
                 <input type="text" id="assist-set-gemini-model" list="assist-gemini-model-list"
@@ -302,21 +280,6 @@
             </label>
         </div>
 
-        <div class="assist-settings-common">
-            <div class="assist-settings-section">Web search</div>
-            <label>Serper API key <span class="assist-label-hint">(enables web search for any provider)</span>
-                <input type="password" id="assist-set-serper" placeholder="">
-                <span class="assist-label-hint">Get a free key at serper.dev. Without it the assistant can't search the web.</span>
-            </label>
-        </div>
-
-        <div class="assist-settings-common">
-            <div class="assist-settings-section">Images</div>
-            <label>Image model
-                <input type="text" id="assist-set-image-model" placeholder="google/gemini-3.1-flash-lite-image">
-                <span class="assist-label-hint">Uses your Gemini key first, then falls back to OpenRouter.</span>
-            </label>
-        </div>
 
         <div class="assist-settings-actions">
             <button class="btn btn-ghost" id="assist-settings-cancel">Cancel</button>
@@ -326,8 +289,7 @@
 
     <div class="assist-messages" id="assist-messages">
         <div class="assist-hint">
-            Ask anything about your note — the assistant can reason and search the web before answering.<br>
-            Type <code>/</code> for commands — <code>/image</code> a prompt to generate a picture.
+            Ask anything about your note — the assistant reads what you're working on before answering.<br>
         </div>
     </div>
 
@@ -338,7 +300,6 @@
     </div>
 
     <div class="assist-inputbar">
-        <div class="assist-slash-menu" id="assist-slash-menu" role="listbox" hidden></div>
         <textarea id="assist-input" rows="2" placeholder="Ask anything, or type / for commands"></textarea>
         <button class="btn-icon assist-send" id="assist-send" title="Send" aria-label="Send">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"

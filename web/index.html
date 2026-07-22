@@ -13,7 +13,7 @@
             if (isMobile) window.location.replace('/mobile/');
         })();
     </script>
-    <meta name="description" content="EverFree is a free, open-source AI writing IDE. Draft, revise, research, and keep writing with a built-in assistant, Evernote sync, and a notarized Mac DMG.">
+    <meta name="description" content="EverFree is a free, open-source AI writing IDE. Draft, revise, and keep writing with a built-in assistant, Evernote sync, and a notarized Mac DMG.">
     <script type="application/ld+json">
         {
             "@context": "https://schema.org",
@@ -152,22 +152,18 @@
                         create a new one &mdash; replies drop into the note with one click.
                     </li>
                     <li>
-                        <strong>Research while you write</strong>
-                        The assistant can run web searches and read pages before answering, so claims get
-                        checked without leaving the editor.
+                        <strong>Draw on your other notes</strong>
+                        In the Mac app the assistant can search and read everything you've written, so
+                        answers are grounded in your own material rather than invented.
                     </li>
                     <li>
-                        <strong>Generate images</strong>
-                        Type <kbd>/image</kbd> and a prompt; the result lands in your note and syncs with it.
-                    </li>
-                    <li>
-                        <strong>Bring your own model</strong>
-                        Use an OpenRouter or Gemini key. The Mac app also runs fully local models through
-                        LM&nbsp;Studio.
+                        <strong>Bring your own key</strong>
+                        One free Google Gemini key powers the assistant in both the browser and the
+                        Mac app. Nothing else to configure.
                     </li>
                     <li>
                         <strong>Keyboard-first</strong>
-                        <kbd>&#8984;K</kbd> toggles the assistant, <kbd>/</kbd> opens commands,
+                        <kbd>&#8984;K</kbd> writes in the note, <kbd>&#8984;L</kbd> opens the chat,
                         <kbd>Ctrl+S</kbd> saves the note.
                     </li>
                 </ul>
@@ -206,7 +202,7 @@
                         <ol>
                             <li>Open the web editor and sign in with GitHub &mdash; a one-time device code, no password.</li>
                             <li>Connect your private <code>everfree-notes</code> repository. EverFree creates it if needed and never uses another repository.</li>
-                            <li>Start writing. Add an OpenRouter or Gemini key in the assistant settings whenever you want the AI.</li>
+                            <li>Start writing. Add a Google Gemini key in the assistant settings whenever you want the AI.</li>
                         </ol>
                     </div>
                     <div class="start-column">
@@ -250,7 +246,7 @@
                     </div>
                     <div class="faq-item">
                         <h4>Do I need an API key?</h4>
-                        <p>The editor works without any. The assistant needs an OpenRouter or Gemini key, and web search needs a free Serper key. The Mac app can also use LM Studio to run local models with no key at all.</p>
+                        <p>The editor works without any. The assistant needs one Google Gemini API key, free from <a href="https://aistudio.google.com/apikey">Google AI Studio</a> &mdash; the same key works in the browser and in the Mac app.</p>
                     </div>
                     <div class="faq-item">
                         <h4>Where are my notes stored?</h4>
@@ -467,10 +463,6 @@
                 Assistant
             </span>
             <span class="assist-status" id="assist-status" title=""></span>
-            <select class="assist-provider-quick" id="assist-provider-quick" title="Model provider" aria-label="Model provider">
-                <option value="openrouter">OpenRouter</option>
-                <option value="gemini">Gemini</option>
-            </select>
             <button class="btn-icon" id="assist-new-btn" title="Clear chat" aria-label="Clear chat">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                     stroke-linecap="round" stroke-linejoin="round">
@@ -493,30 +485,12 @@
         </div>
 
         <div class="assist-settings" id="assist-settings" hidden>
-            <div class="assist-settings-tabs" role="tablist" aria-label="AI providers">
-                <button type="button" class="assist-settings-tab active" data-provider-tab="openrouter" role="tab">OpenRouter</button>
-                <button type="button" class="assist-settings-tab" data-provider-tab="gemini" role="tab">Gemini</button>
-            </div>
-            <div class="assist-settings-hint">Enter credentials for a provider. Pick which one answers with the dropdown above. Keys are stored only in this browser.</div>
+            <div class="assist-settings-hint">The assistant runs on Google Gemini. Your key is stored only in this browser and sent per request.</div>
 
-            <div class="assist-provider-pane active" data-provider-pane="openrouter">
-                <label>API key
-                    <input type="password" id="assist-set-openrouter" placeholder="">
-                </label>
-                <label>Chat model
-                    <input type="text" id="assist-set-openrouter-model" list="assist-openrouter-model-list"
-                        placeholder="e.g. anthropic/claude-sonnet-4">
-                    <datalist id="assist-openrouter-model-list">
-                        <option value="anthropic/claude-sonnet-4"></option>
-                        <option value="google/gemini-2.5-flash"></option>
-                        <option value="openai/gpt-5"></option>
-                    </datalist>
-                </label>
-            </div>
-
-            <div class="assist-provider-pane" data-provider-pane="gemini" hidden>
-                <label>API key
+            <div class="assist-provider-pane active">
+                <label>Google Gemini API key
                     <input type="password" id="assist-set-gemini" placeholder="">
+                    <span class="assist-label-hint">Get a free key at aistudio.google.com/apikey.</span>
                 </label>
                 <label>Model
                     <input type="text" id="assist-set-gemini-model" list="assist-gemini-model-list"
@@ -529,21 +503,6 @@
                 </label>
             </div>
 
-            <div class="assist-settings-common">
-                <div class="assist-settings-section">Web search</div>
-                <label>Serper API key <span class="assist-label-hint">(enables web search for any provider)</span>
-                    <input type="password" id="assist-set-serper" placeholder="">
-                    <span class="assist-label-hint">Get a free key at serper.dev. Without it the assistant can't search the web.</span>
-                </label>
-            </div>
-
-            <div class="assist-settings-common">
-                <div class="assist-settings-section">Images</div>
-                <label>Image model
-                    <input type="text" id="assist-set-image-model" placeholder="google/gemini-3.1-flash-lite-image">
-                    <span class="assist-label-hint">Uses your Gemini key first, then falls back to OpenRouter.</span>
-                </label>
-            </div>
 
             <div class="assist-settings-actions">
                 <button class="btn btn-ghost" id="assist-settings-cancel">Cancel</button>
@@ -553,8 +512,7 @@
 
         <div class="assist-messages" id="assist-messages">
             <div class="assist-hint">
-                Ask anything about your note — the assistant can reason and search the web before answering.<br>
-                Type <code>/</code> for commands — <code>/image</code> a prompt to generate a picture.<br>
+                Ask anything about your note — the assistant reads what you're working on before answering.<br>
                 <kbd>⌘K</kbd> in the note: completes your selection (or continues where you stopped) · <kbd>⌘L</kbd> chat about the selection
             </div>
         </div>
@@ -566,7 +524,6 @@
         </div>
 
         <div class="assist-inputbar">
-            <div class="assist-slash-menu" id="assist-slash-menu" role="listbox" hidden></div>
             <textarea id="assist-input" rows="2" placeholder="Ask anything, or type / for commands"></textarea>
             <button class="btn-icon assist-send" id="assist-send" title="Send (Enter)" aria-label="Send">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"

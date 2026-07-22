@@ -188,11 +188,6 @@
                 Assistant
             </span>
             <span class="assist-status" id="assist-status" title=""></span>
-            <select class="assist-provider-quick" id="assist-provider-quick" title="Model provider" aria-label="Model provider">
-                <option value="lmstudio">Local</option>
-                <option value="openrouter">OpenRouter</option>
-                <option value="gemini">Gemini</option>
-            </select>
             <button class="btn-icon" id="assist-new-btn" title="Clear chat" aria-label="Clear chat">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                     stroke-linecap="round" stroke-linejoin="round">
@@ -216,40 +211,12 @@
 
         <!-- Settings (hidden behind the gear) -->
         <div class="assist-settings" id="assist-settings" hidden>
-            <div class="assist-settings-tabs" role="tablist" aria-label="AI providers">
-                <button type="button" class="assist-settings-tab active" data-provider-tab="lmstudio"
-                    role="tab" aria-selected="true">Local LLM</button>
-                <button type="button" class="assist-settings-tab" data-provider-tab="openrouter"
-                    role="tab" aria-selected="false">OpenRouter</button>
-                <button type="button" class="assist-settings-tab" data-provider-tab="gemini"
-                    role="tab" aria-selected="false">Gemini</button>
-            </div>
-            <div class="assist-settings-hint">Enter credentials for any provider here. Pick which one answers with the dropdown at the top of the panel.</div>
+            <div class="assist-settings-hint">The assistant runs on Google Gemini. Your key is stored in this app's settings file on your Mac.</div>
 
-            <div class="assist-provider-pane active" data-provider-pane="lmstudio">
-                <label>LM Studio URL
-                    <input type="text" id="assist-set-url" placeholder="http://localhost:1234/v1">
-                </label>
-                <label>Model <span class="assist-label-hint">(blank = first loaded model)</span>
-                    <input type="text" id="assist-set-model" list="assist-model-list" placeholder="auto">
-                    <datalist id="assist-model-list"></datalist>
-                </label>
-            </div>
-
-            <div class="assist-provider-pane" data-provider-pane="openrouter" hidden>
-                <label>API key
-                    <input type="password" id="assist-set-openrouter" placeholder="">
-                </label>
-                <label>Chat model
-                    <input type="text" id="assist-set-openrouter-model"
-                        list="assist-openrouter-model-list" placeholder="Select or enter a model">
-                    <datalist id="assist-openrouter-model-list"></datalist>
-                </label>
-            </div>
-
-            <div class="assist-provider-pane" data-provider-pane="gemini" hidden>
-                <label>Gemini API key
+            <div class="assist-provider-pane active">
+                <label>Google Gemini API key
                     <input type="password" id="assist-set-gemini" placeholder="">
+                    <span class="assist-label-hint">Get a free key at aistudio.google.com/apikey.</span>
                 </label>
                 <label>Model
                     <input type="text" id="assist-set-gemini-model"
@@ -258,22 +225,6 @@
                 </label>
             </div>
 
-            <div class="assist-settings-common">
-                <div class="assist-settings-section">Web search</div>
-                <label>Serper API key <span class="assist-label-hint">(lets the assistant search the web — works with any provider)</span>
-                    <input type="password" id="assist-set-serper" placeholder="">
-                    <span class="assist-label-hint">Get a free key at serper.dev. Without it the assistant can't search the web.</span>
-                </label>
-            </div>
-
-            <div class="assist-settings-common">
-                <div class="assist-settings-section">Images</div>
-                <label>Image model
-                    <input type="text" id="assist-set-image-model"
-                        list="assist-openrouter-model-list" placeholder="google/gemini-3.1-flash-lite-image">
-                    <span class="assist-label-hint">Uses your Gemini key first (free tier), then falls back to OpenRouter when it's rate-limited.</span>
-                </label>
-            </div>
             <div class="assist-settings-actions">
                 <button class="btn btn-ghost" id="assist-settings-cancel">Cancel</button>
                 <button class="btn btn-primary" id="assist-settings-save">Save</button>
@@ -282,8 +233,8 @@
 
         <div class="assist-messages" id="assist-messages">
             <div class="assist-hint">
-                Ask anything — the assistant can reason, read your other notes, and search the web before answering.<br>
-                Type <code>/</code> for commands — <code>/image</code> a prompt, or <code>/chats</code> to browse past chats.<br>
+                Ask anything — the assistant can reason and read your other notes before answering.<br>
+                Type <code>/chats</code> to browse this note's past chats.<br>
                 <kbd>⌘K</kbd> writes for you: completes the selected block right in the note, or continues where you stopped<br>
                 <kbd>⌘L</kbd> chats about the selection · the ✎ icon starts a new chat
             </div>
