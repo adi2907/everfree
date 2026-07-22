@@ -23,7 +23,13 @@ DATA_FILES = [
     ]),
     ('frontend/assets', [
         'frontend/assets/everfree-logo.svg',
-    ])
+    ]),
+    # Assistant system prompts, shared verbatim with the web/mobile assistant.
+    # The file lives under web/ because Vercel deploys from that directory only;
+    # server/agent.py reads it from RESOURCEPATH/prompts once bundled.
+    ('prompts', [
+        'web/lib/prompts.json',
+    ]),
 ]
 
 OPTIONS = {

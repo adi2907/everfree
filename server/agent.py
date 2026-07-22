@@ -673,35 +673,44 @@ def _split_think(buf: str, in_think: bool) -> tuple[list[tuple[str, str]], str, 
 
 
 # ── Prompts ──────────────────────────────────────────────────
-CHAT_SYSTEM_PROMPT = """You are the writing assistant built into EverFree, a Markdown note-taking app.
-The user's current note may be provided below as context — use it to understand what they are working on, but do EXACTLY what the user asks and nothing more. Never continue, extend, rewrite, or add new sections/paragraphs/list items to the note unless the user explicitly asks you to write or continue it. If they ask a question, answer it; if they ask for an image, give them the image.
+# The prompt text is shared with the web/mobile assistant and lives in exactly
+# one place: web/lib/prompts.json. It sits under web/ because Vercel deploys
+# from that directory only, so nothing above it reaches production; the desktop
+# build copies it into the .app bundle (see packaging/setup_py2app.py), which is
+# why the frozen path differs. Mirrors the FRONTEND_DIR pattern in server/app.py.
+if os.environ.get("RESOURCEPATH"):
+    PROMPTS_FILE = Path(os.environ["RESOURCEPATH"]) / "prompts" / "prompts.json"
+else:
+    PROMPTS_FILE = Path(__file__).resolve().parent.parent / "web" / "lib" / "prompts.json"
 
-Think before you act. Decide whether a request is best served from the note in front of you, from the user's other notes, or from the web, then use tools to gather what you need before replying.
+_PROMPTS = json.loads(PROMPTS_FILE.read_text(encoding="utf-8"))
 
-Tools:
-- search_notes / read_note / list_notebooks / list_notes — search and read the user's own notes. Prefer these to ground answers in what they have already written.
-- web_search (Google) then read_page — for external facts. Read the 2-3 most promising results before answering, and end such a passage with a "Sources:" line of Markdown links.
-- create_note — only when the user explicitly asks you to save or create a note. It never overwrites existing notes.
-- generate_image — whenever the user asks for an image, illustration, diagram, or picture. Write a specific, detailed prompt grounded in the actual subject of the note: name the real people, companies, products, places, and setting involved instead of a generic abstraction like "a company's transformation". NEVER write a Markdown image link from your own imagination — that produces a broken link to a file that does not exist. Call generate_image, then reply with ONLY the exact Markdown it returns — no extra paragraphs.
 
-When the user's message includes a selected excerpt from their note, respond in the language of that excerpt unless they ask otherwise — a Hindi excerpt gets a Hindi rewrite.
+def _build_chat_prompt(prompts: dict) -> str:
+    """Assemble the desktop chat prompt from the shared parts. Desktop reaches
+    the user's notes on disk and saves generated images next to them, so it
+    takes the note bullets and the Markdown-embedding tail. Web/mobile builds
+    the same pieces without them — see buildChatPrompt in web/lib/agent-core.js."""
+    chat = prompts["chat"]
+    tools = chat["tools"]
+    bullets = [
+        tools["notes"],
+        tools["web"],
+        tools["create_note"],
+        tools["image"] + tools["image_tail"]["desktop"],
+    ]
+    return "\n\n".join([
+        chat["intro"],
+        chat["think"]["desktop"],
+        chat["tools_header"] + "\n" + "\n".join(bullets),
+        chat["language_rule"],
+        chat["style"],
+    ])
 
-Reply with clean Markdown and no preamble ("Here is...", "Sure,") or commentary about what you did. Don't wrap the whole reply in a code fence."""
 
-CONTINUE_SYSTEM_PROMPT = """You are the writing assistant built into EverFree, a Markdown note-taking app.
-Continue the user's note from exactly where it stops. If the last sentence is unfinished, finish it, then add at most one or two short sentences in the same voice, tone, and formatting. Do not keep expanding the note.
-Write in the same language as the note. If the note is in Hindi, continue in Hindi; if it mixes languages, keep the same mix. Never switch language.
-Reply with the continuation text only — no preamble, no quotes, and do not repeat any of the existing text."""
-
-COMPLETE_SYSTEM_PROMPT = """You are the writing assistant built into EverFree, a Markdown note-taking app.
-The user selected a passage from their note and asked you to complete it. Pick up exactly where the selection stops and bring the thought to a natural close.
-Rules:
-- Write in the SAME LANGUAGE as the selection. If the selection is in Hindi, continue in Hindi; if it mixes languages, keep the same mix. Never switch to English unless the selection is in English.
-- Match the selection's voice, tone, tense, and formatting: continue prose as prose. Continue a list as list items — each new item on its own line, starting with the same marker followed by a space (e.g. "- ").
-- If the last sentence is unfinished, finish it first.
-- Stay inside the selected block: complete the paragraph or list, never start new sections or headings.
-- Keep it short — usually one to three sentences (or two or three list items), just enough to complete the thought.
-Reply with the continuation text only — no preamble, no quotes, no code fences, and do not repeat any of the selected text."""
+CHAT_SYSTEM_PROMPT = _build_chat_prompt(_PROMPTS)
+CONTINUE_SYSTEM_PROMPT = _PROMPTS["continue"]
+COMPLETE_SYSTEM_PROMPT = _PROMPTS["complete"]
 
 
 # ── Agent loop ───────────────────────────────────────────────
