@@ -14,6 +14,10 @@
     const LS_LIGHT_THEME_MIGRATED = "everfree-light-theme-migrated";
     const LS_SIDEBAR_WIDTH = "everfree-sidebar-width";
     const LS_NOTE_BROWSER_WIDTH = "everfree-note-browser-width";
+    // Note metadata (modified time + display title) keyed by Git blob SHA. This
+    // holds no credentials — see ADR 0001: caching metadata durably is fine,
+    // caching the OAuth token is not. It stays in sessionStorage.
+    const LS_NOTE_META = "everfree-note-meta-v1";
     const DEFAULT_REPO = "everfree-notes";
 
     // Migrate away from the legacy broad OAuth token. Authentication data is
@@ -31,8 +35,7 @@
     let notesByNotebook = {}; // notebook -> [{name, sha}]
     let fileShas = {}; // "notebook/note.md" -> sha
     let noteContentCache = {}; // "notebook/note.md" -> markdown
-    let noteTitleCache = {}; // "notebook/note.md" -> display title
-    let noteModifiedCache = {}; // "notebook/note.md" -> timestamp (ms)
+    let noteTitleCache = {}; // "notebook/note.md" -> display title (this session)
     let currentNotebook = null;
     let currentNote = null;
     let selectedNotebook = null; // notebook filter for the note browser (null = All notes)
@@ -45,6 +48,89 @@
     const NOTE_CARD_BATCH_SIZE = 100;
 
     let devicePollTimer = null;
+
+    // Cold-start tuning. The sidebar used to block on one
+    // `GET /commits?path=…` per note, so first paint scaled linearly with the
+    // note count. Recency now comes from a fixed number of requests instead:
+    // one page of commits, then the newest RECENCY_COMMIT_DETAIL of them
+    // expanded to their touched paths. Notes older than that window keep the
+    // filename-date/alphabetical fallback, or a cached time from a past visit.
+    // 60 is measured rather than guessed: against a fixture whose filename order
+    // and edit order deliberately disagree, a 30-commit window placed only 7 of
+    // the true 10 most-recent notes in the top 10, while 60 placed all 10.
+    // Raising it to 100 only reordered notes further down the list.
+    // See tests/perf/dump-order.js --shuffle.
+    const RECENCY_COMMIT_PAGE = 100;   // commits listed in one request
+    const RECENCY_COMMIT_DETAIL = 60;  // commits expanded for their file lists
+    // GitHub's secondary rate limit kicks in near 100 concurrent requests per
+    // token, so stay well under it while still keeping the pipe busy.
+    const API_POOL_LIMIT = 24;         // concurrent background GitHub requests
+    const META_CACHE_MAX = 5000;       // blob-SHA entries kept in localStorage
+
+    // ── Note metadata cache (blob-SHA keyed) ────────────────
+    // A Git blob SHA is a hash of content, so an entry can never go stale: if a
+    // note changes, its SHA changes and the old entry is simply never looked up
+    // again. That makes this cache safe to persist with no invalidation logic.
+    let noteMeta = {}; // blobSha -> { t: modifiedMs, ti: title }
+    let noteMetaDirty = false;
+
+    function loadNoteMeta() {
+        try {
+            const raw = localStorage.getItem(LS_NOTE_META);
+            noteMeta = raw ? JSON.parse(raw) : {};
+            if (!noteMeta || typeof noteMeta !== "object") noteMeta = {};
+        } catch {
+            noteMeta = {};
+        }
+    }
+
+    function persistNoteMeta() {
+        if (!noteMetaDirty) return;
+        noteMetaDirty = false;
+        try {
+            const keys = Object.keys(noteMeta);
+            if (keys.length > META_CACHE_MAX) {
+                // Drop the oldest-modified entries first; they are the ones
+                // least likely to be near the top of a recency-sorted list.
+                keys.sort((a, b) => (noteMeta[b].t || 0) - (noteMeta[a].t || 0));
+                const trimmed = {};
+                for (const k of keys.slice(0, META_CACHE_MAX)) trimmed[k] = noteMeta[k];
+                noteMeta = trimmed;
+            }
+            localStorage.setItem(LS_NOTE_META, JSON.stringify(noteMeta));
+        } catch {
+            // Quota or private-mode failure: the cache is an optimisation only.
+        }
+    }
+
+    function metaFor(path) {
+        const sha = fileShas[path];
+        return sha ? noteMeta[sha] : undefined;
+    }
+
+    function setMeta(path, patch) {
+        const sha = fileShas[path];
+        if (!sha) return;
+        const prev = noteMeta[sha] || {};
+        const next = { ...prev, ...patch };
+        if (prev.t === next.t && prev.ti === next.ti) return;
+        noteMeta[sha] = next;
+        noteMetaDirty = true;
+    }
+
+    // Runs `fn` over `items` with at most `limit` in flight. Unbounded
+    // Promise.all over every note is what tripped GitHub's secondary rate
+    // limit (~100 concurrent) and starved the connection pool.
+    async function pooled(items, limit, fn) {
+        const queue = [...items];
+        const workers = Array.from({ length: Math.min(limit, queue.length) }, async () => {
+            while (queue.length) {
+                const item = queue.shift();
+                try { await fn(item); } catch { /* per-item failure is non-fatal */ }
+            }
+        });
+        await Promise.all(workers);
+    }
 
     // ── DOM ─────────────────────────────────────────────────
     const $ = (id) => document.getElementById(id);
@@ -145,7 +231,7 @@
         try {
             const repo = await gh("GET", `/repos/${user}/${DEFAULT_REPO}`);
             rememberRepo(repo);
-            await enterApp();
+            await enterApp(repo);
             return;
         } catch (err) {
             if (!isNotFoundError(err)) throw err;
@@ -162,12 +248,12 @@
                 auto_init: true,
             });
             rememberRepo(repo);
-            await enterApp();
+            await enterApp(repo);
         } catch (err) {
             if (err.status === 422) {
                 const repo = await gh("GET", `/repos/${user}/${DEFAULT_REPO}`);
                 rememberRepo(repo);
-                await enterApp();
+                await enterApp(repo);
                 return;
             }
             throw err;
@@ -203,7 +289,6 @@
         fileShas = {};
         noteContentCache = {};
         noteTitleCache = {};
-        noteModifiedCache = {};
         currentNotebook = null;
         currentNote = null;
     }
@@ -253,6 +338,12 @@
         sessionStorage.removeItem(AUTH_REPO_KEY);
         sessionStorage.removeItem(AUTH_EXPIRES_KEY);
         if (devicePollTimer) { clearTimeout(devicePollTimer); devicePollTimer = null; }
+        // Cached note titles are not credentials, but they are the user's
+        // content and should not outlive an explicit sign-out on a shared
+        // machine. Signing back in re-derives them.
+        noteMeta = {};
+        noteMetaDirty = false;
+        try { localStorage.removeItem(LS_NOTE_META); } catch { /* nothing to clear */ }
         resetRepoData();
         signinIdle.classList.remove("hidden");
         signinPending.classList.add("hidden");
@@ -261,15 +352,22 @@
     }
 
     // ── Enter App ───────────────────────────────────────────
-    async function enterApp() {
+    // `knownRepo` is the repository object the caller already fetched and put
+    // through rememberRepo (which enforces the fixed owner/name and the private
+    // requirement). Re-fetching it here was a wasted serial round trip on the
+    // critical path. When it is absent — a restored session, where nothing has
+    // been validated yet — the fetch still happens.
+    async function enterApp(knownRepo) {
         if (String(repoFull).toLowerCase() !== `${user}/${DEFAULT_REPO}`.toLowerCase()) {
             clearRememberedRepo();
             throw new Error(`EverFree only supports ${user}/${DEFAULT_REPO}.`);
         }
         showView("app");
         try {
-            const repoMeta = await gh("GET", `/repos/${repoFull}`);
-            defaultBranch = repoMeta.default_branch || "main";
+            if (!knownRepo) {
+                const repoMeta = await gh("GET", `/repos/${repoFull}`);
+                rememberRepo(repoMeta);
+            }
             setSyncStatus("ok", `${repoFull}`);
             await loadNotebooks();
         } catch (err) {
@@ -312,7 +410,10 @@
         const data = await gh("PUT", `/repos/${repoFull}/contents/${encodeURI(path)}`, body);
         if (data && data.content) fileShas[path] = data.content.sha;
         noteContentCache[path] = content;
-        noteModifiedCache[path] = Date.now();
+        // fileShas now holds the new blob SHA, so this records the save against
+        // the version that was just written.
+        setMeta(path, { t: Date.now(), ti: getNoteTitle(content, path.split("/").pop()) });
+        persistNoteMeta();
         return data;
     }
 
@@ -328,9 +429,11 @@
             sha: fileShas[path],
             branch: defaultBranch,
         });
+        if (fileShas[path]) delete noteMeta[fileShas[path]];
+        noteMetaDirty = true;
+        persistNoteMeta();
         delete fileShas[path];
         delete noteContentCache[path];
-        delete noteModifiedCache[path];
     }
 
     // ── Base64 (UTF-8 safe) ─────────────────────────────────
@@ -371,25 +474,51 @@
         return new Date(year, month, day).getTime();
     }
 
-    async function getNoteLastModified(nb, noteName) {
-        const path = `${nb}/${noteName}`;
-        if (noteModifiedCache[path] !== undefined) {
-            return noteModifiedCache[path];
+    // Sort key for a note: cached/hydrated modified time, else a date parsed
+    // out of the filename, else alphabetical. Extracted so the initial paint
+    // and the post-hydration re-sort cannot drift apart.
+    function noteSortComparator(nb) {
+        return (a, b) => {
+            const timeA = (metaFor(`${nb}/${a}`) || {}).t || 0;
+            const timeB = (metaFor(`${nb}/${b}`) || {}).t || 0;
+            if (timeA !== timeB) return timeB - timeA;
+
+            const dateA = parseNoteNameDate(a);
+            const dateB = parseNoteNameDate(b);
+            if (dateA !== null && dateB !== null) return dateB - dateA;
+            if (dateA !== null) return -1;
+            if (dateB !== null) return 1;
+
+            return a.localeCompare(b);
+        };
+    }
+
+    function sortLoadedNotes() {
+        for (const nb of notebooks) {
+            (notesByNotebook[nb] || []).sort(noteSortComparator(nb));
         }
-        try {
-            const commits = await gh("GET", `/repos/${repoFull}/commits?path=${encodeURIComponent(path)}&per_page=1`);
-            if (commits && commits.length > 0) {
-                const time = new Date(commits[0].commit.committer.date).getTime();
-                noteModifiedCache[path] = time;
-                return time;
-            }
-        } catch (err) {
-            console.error(`Failed to get modified date for ${path}:`, err);
-        }
-        return 0; // fallback
+        notebooks.sort((a, b) => {
+            const newestA = (notesByNotebook[a] || [])[0];
+            const newestB = (notesByNotebook[b] || [])[0];
+            const timeA = newestA ? (metaFor(`${a}/${newestA}`) || {}).t || 0 : 0;
+            const timeB = newestB ? (metaFor(`${b}/${newestB}`) || {}).t || 0 : 0;
+            if (timeA !== timeB) return timeB - timeA;
+
+            const dateA = newestA ? parseNoteNameDate(newestA) : null;
+            const dateB = newestB ? parseNoteNameDate(newestB) : null;
+            if (dateA !== null && dateB !== null) return dateB - dateA;
+            if (dateA !== null) return -1;
+            if (dateB !== null) return 1;
+
+            return a.localeCompare(b);
+        });
     }
 
     // ── Load Notebooks ──────────────────────────────────────
+    // Two phases. Phase one lists the repo (1 + N requests for N notebooks),
+    // paints immediately using cached/fallback ordering, and returns. Phase two
+    // hydrates real modified times in the background and re-sorts. First paint
+    // no longer waits on anything that scales with the note count.
     async function loadNotebooks() {
         try {
             setSyncStatus("syncing", "Loading…");
@@ -398,72 +527,82 @@
                 .filter(item => item.type === "dir" && !item.name.startsWith("."))
                 .map(item => item.name);
 
-            // Fetch notes and their modified dates for each notebook in parallel
             notesByNotebook = {};
-            const noteDates = {}; // "nb/note.md" -> timestamp
-            const notebookLastModified = {}; // nb -> max timestamp
-
             await Promise.all(notebooks.map(async (nb) => {
                 const items = await listContents(nb);
-                const notes = items
+                notesByNotebook[nb] = items
                     .filter(item => item.type === "file" && item.name.endsWith(".md"))
                     .map(item => {
                         fileShas[`${nb}/${item.name}`] = item.sha;
                         return item.name;
                     });
-
-                // Fetch commit date for each note in parallel
-                await Promise.all(notes.map(async (noteName) => {
-                    const mtime = await getNoteLastModified(nb, noteName);
-                    noteDates[`${nb}/${noteName}`] = mtime;
-                }));
-
-                // Sort notes in this notebook by last modified descending, then parsed date, then alphabetically
-                notes.sort((a, b) => {
-                    const timeA = noteDates[`${nb}/${a}`] || 0;
-                    const timeB = noteDates[`${nb}/${b}`] || 0;
-                    if (timeA !== timeB) return timeB - timeA;
-                    
-                    const dateA = parseNoteNameDate(a);
-                    const dateB = parseNoteNameDate(b);
-                    if (dateA !== null && dateB !== null) return dateB - dateA;
-                    if (dateA !== null) return -1;
-                    if (dateB !== null) return 1;
-                    
-                    return a.localeCompare(b);
-                });
-
-                notesByNotebook[nb] = notes;
-
-                // Track the latest modified note time for this notebook
-                const maxTime = notes.length > 0 ? (noteDates[`${nb}/${notes[0]}`] || 0) : 0;
-                notebookLastModified[nb] = maxTime;
             }));
 
-            // Sort notebooks by their latest note's modified time, then parsed date, then alphabetically
-            notebooks.sort((a, b) => {
-                const timeA = notebookLastModified[a] || 0;
-                const timeB = notebookLastModified[b] || 0;
-                if (timeA !== timeB) return timeB - timeA;
-                
-                const newestA = notesByNotebook[a] && notesByNotebook[a][0];
-                const newestB = notesByNotebook[b] && notesByNotebook[b][0];
-                
-                const dateA = newestA ? parseNoteNameDate(newestA) : null;
-                const dateB = newestB ? parseNoteNameDate(newestB) : null;
-                if (dateA !== null && dateB !== null) return dateB - dateA;
-                if (dateA !== null) return -1;
-                if (dateB !== null) return 1;
-                
-                return a.localeCompare(b);
-            });
-
+            sortLoadedNotes();
             renderSidebar($("search-input").value);
             setSyncStatus("ok", repoFull);
+
+            // Deliberately not awaited: the sidebar is already usable.
+            hydrateRecency().catch(err => console.error("Recency hydration failed:", err));
         } catch (err) {
             console.error("Failed to load notebooks:", err);
             setSyncStatus("error", "Load failed");
         }
+    }
+
+    // Fill in modified times using a fixed request budget: one page of commits
+    // plus the newest RECENCY_COMMIT_DETAIL expanded for their file lists.
+    // `GET /commits?per_page=…` does not include a `files` array — only the
+    // single-commit endpoint does — so the expansion is required.
+    async function hydrateRecency() {
+        const known = new Set();
+        for (const nb of notebooks) {
+            for (const note of notesByNotebook[nb] || []) known.add(`${nb}/${note}`);
+        }
+        if (!known.size) return;
+
+        let commits;
+        try {
+            commits = await gh("GET", `/repos/${repoFull}/commits?sha=${encodeURIComponent(defaultBranch)}&per_page=${RECENCY_COMMIT_PAGE}`);
+        } catch (err) {
+            console.error("Failed to list commits for recency:", err);
+            return;
+        }
+        if (!Array.isArray(commits) || !commits.length) return;
+
+        const recent = commits.slice(0, RECENCY_COMMIT_DETAIL);
+        const resolved = new Map(); // path -> newest commit time touching it
+
+        // Newest commit wins, so process in order and never overwrite.
+        await pooled(recent, API_POOL_LIMIT, async (commit) => {
+            const detail = await gh("GET", `/repos/${repoFull}/commits/${commit.sha}`);
+            const time = new Date(detail.commit.committer.date).getTime();
+            for (const file of detail.files || []) {
+                if (!known.has(file.filename)) continue;
+                const prev = resolved.get(file.filename);
+                if (prev === undefined || time > prev) resolved.set(file.filename, time);
+            }
+        });
+
+        if (!resolved.size) return;
+        for (const [path, time] of resolved) setMeta(path, { t: time });
+        persistNoteMeta();
+
+        // Hydration lands a second or two after first paint, by which point the
+        // user may already be scrolling. Re-render only if the order actually
+        // moved, and keep their scroll position when it does.
+        const before = orderSignature();
+        sortLoadedNotes();
+        if (orderSignature() === before) return;
+
+        const $list = $("note-browser-list");
+        const scrollTop = $list ? $list.scrollTop : 0;
+        renderSidebar($("search-input").value);
+        if ($list) $list.scrollTop = scrollTop;
+    }
+
+    function orderSignature() {
+        return notebooks.map(nb => `${nb}:${(notesByNotebook[nb] || []).join("|")}`).join("//");
     }
 
     // ── Render: notebook rail + note browser (three-pane) ───
@@ -521,6 +660,9 @@
 
         $("note-browser-title").textContent = selectedNotebook || "All notes";
         const $list = $("note-browser-list");
+        // Cards from the previous render are about to be discarded; an
+        // IntersectionObserver keeps its targets alive, so drop them first.
+        if (noteCardObserver) { noteCardObserver.disconnect(); noteCardObserver = null; }
         $list.innerHTML = "";
 
         if (visible.length === 0) {
@@ -546,9 +688,9 @@
         $note.dataset.notePath = `${item.notebook}/${item.note}`;
         if (currentNotebook === item.notebook && currentNote === item.note) $note.classList.add("active");
         $note.innerHTML = `
-            <span class="note-card-title">${escapeHtml(noteTitleCache[`${item.notebook}/${item.note}`] || noteFilenameTitle(item.note))}</span>`;
+            <span class="note-card-title">${escapeHtml(noteTitleCache[`${item.notebook}/${item.note}`] || (metaFor(`${item.notebook}/${item.note}`) || {}).ti || noteFilenameTitle(item.note))}</span>`;
         $note.addEventListener("click", () => openNote(item.notebook, item.note));
-        loadNoteCardTitle($note, item);
+        observeNoteCardTitle($note, item);
         return $note;
     }
 
@@ -642,6 +784,39 @@
         return content;
     }
 
+    // Card titles come from each note's first H1, which needs its content. On a
+    // cold load that is one request per uncached note, so they go through a
+    // bounded queue rather than all at once; cards fill in progressively and
+    // the connection pool stays available for whatever the user actually opens.
+    let titleQueue = [];
+    let titleWorkers = 0;
+    let titlePersistTimer = null;
+
+    function queueTitleFetch(path) {
+        return new Promise((resolve, reject) => {
+            titleQueue.push({ path, resolve, reject });
+            if (titleWorkers < API_POOL_LIMIT) {
+                titleWorkers++;
+                drainTitleQueue();
+            }
+        });
+    }
+
+    async function drainTitleQueue() {
+        while (titleQueue.length) {
+            const job = titleQueue.shift();
+            try {
+                job.resolve(await getCachedFileContent(job.path));
+            } catch (err) {
+                job.reject(err);
+            }
+        }
+        titleWorkers--;
+        // Batch the writes: one serialise per quiet period, not per note.
+        clearTimeout(titlePersistTimer);
+        titlePersistTimer = setTimeout(persistNoteMeta, 250);
+    }
+
     function noteFilenameTitle(note) {
         return note.replace(/\.md$/, "");
     }
@@ -660,6 +835,7 @@
         const path = `${notebook}/${note}`;
         const title = getNoteTitle(content, note);
         noteTitleCache[path] = title;
+        setMeta(path, { ti: title });
         return title;
     }
 
@@ -676,14 +852,60 @@
         });
     }
 
+    // A note's display title is its first H1, which means reading its content.
+    // Selecting "All notes" on a large repo builds a card per note, but only a
+    // screenful is ever visible, so uncached titles are fetched on approach
+    // rather than for the whole list up front.
+    let noteCardObserver = null;
+    const pendingCardItems = new WeakMap();
+
+    function observeNoteCardTitle($card, item) {
+        const path = `${item.notebook}/${item.note}`;
+        // Anything already known renders synchronously; no observer needed.
+        if (Object.prototype.hasOwnProperty.call(noteTitleCache, path)) return;
+        const cached = metaFor(path);
+        if (cached && cached.ti) {
+            noteTitleCache[path] = cached.ti;
+            return;
+        }
+        if (!("IntersectionObserver" in window)) {
+            loadNoteCardTitle($card, item);
+            return;
+        }
+        if (!noteCardObserver) {
+            noteCardObserver = new IntersectionObserver((entries) => {
+                for (const entry of entries) {
+                    if (!entry.isIntersecting) continue;
+                    const target = entry.target;
+                    noteCardObserver.unobserve(target);
+                    const pending = pendingCardItems.get(target);
+                    if (pending) {
+                        pendingCardItems.delete(target);
+                        loadNoteCardTitle(target, pending);
+                    }
+                }
+            }, { rootMargin: "200px" });
+        }
+        pendingCardItems.set($card, item);
+        noteCardObserver.observe($card);
+    }
+
     function loadNoteCardTitle($card, item) {
         const path = `${item.notebook}/${item.note}`;
         if (Object.prototype.hasOwnProperty.call(noteTitleCache, path)) {
             $card.querySelector(".note-card-title").textContent = noteTitleCache[path];
             return;
         }
+        // A title cached against this note's current blob SHA is still correct,
+        // so a repeat visit renders every card without fetching any content.
+        const cached = metaFor(path);
+        if (cached && cached.ti) {
+            noteTitleCache[path] = cached.ti;
+            $card.querySelector(".note-card-title").textContent = cached.ti;
+            return;
+        }
 
-        getCachedFileContent(path).then((content) => {
+        queueTitleFetch(path).then((content) => {
             const title = cacheNoteTitle(item.notebook, item.note, content);
             if ($card.isConnected) $card.querySelector(".note-card-title").textContent = title;
         }).catch((err) => {
@@ -1408,6 +1630,7 @@
     setupImageHandling();
     setupPaneResizers();
     applyTheme(getInitialTheme());
+    loadNoteMeta();
 
     if (token && (!tokenExpiresAt || tokenExpiresAt <= Date.now())) {
         signOut();
