@@ -1,8 +1,8 @@
 /* ════════════════════════════════════════════════════════════
    EverFree — Web Writing Assistant
-   Gemini + OpenRouter only. Keys live in this browser's localStorage and are
-   sent per-request to /api/agent/*, which proxies the providers. The chat is
-   held in memory for the session.
+   Google Gemini only. The API key lives in this browser's localStorage and is
+   sent per-request to /api/agent/*, which proxies Gemini. The chat is held in
+   memory for the session.
    Two shortcuts, Cursor-style:
      ⌘K — write for me: completes the selected block in place (same language
           and voice), or continues from the cursor. Esc cancels.
@@ -16,7 +16,6 @@
     const $panel = $("assist-panel");
     const $messages = $("assist-messages");
     const $input = $("assist-input");
-    const $slashMenu = $("assist-slash-menu");
     const $send = $("assist-send");
     const $status = $("assist-status");
     const $btnAssist = $("btn-assist");
@@ -24,18 +23,15 @@
     const $btnNew = $("assist-new-btn");
     const $btnSettings = $("assist-settings-btn");
     const $settings = $("assist-settings");
-    const $providerQuick = $("assist-provider-quick");
     const $context = $("assist-context");
     const $contextText = $("assist-context-text");
     const $contextDel = $("assist-context-del");
 
     const SETTINGS_KEY = "everfree-assist-settings";
-    const DEFAULT_IMAGE_MODEL = "google/gemini-3.1-flash-lite-image";
+    const DEFAULT_CHAT_MODEL = "gemini-2.5-flash";
     const DEFAULTS = {
-        provider: "openrouter",
-        openrouter_api_key: "", openrouter_model: "",
-        gemini_api_key: "", gemini_model: "gemini-2.5-flash",
-        serper_api_key: "", image_model: DEFAULT_IMAGE_MODEL,
+        gemini_api_key: "",
+        gemini_model: DEFAULT_CHAT_MODEL,
     };
 
     let settings = loadSettings();
@@ -55,35 +51,21 @@
     function keysPayload() {
         return {
             gemini_api_key: settings.gemini_api_key,
-            openrouter_api_key: settings.openrouter_api_key,
-            serper_api_key: settings.serper_api_key,
-            gemini_model: settings.gemini_model,
-            openrouter_model: settings.openrouter_model,
-            image_model: settings.image_model || DEFAULT_IMAGE_MODEL,
+            gemini_model: settings.gemini_model || DEFAULT_CHAT_MODEL,
         };
     }
 
     // ── Status ──────────────────────────────────────────────
     function refreshStatus() {
-        $providerQuick.value = settings.provider;
-        let ready, model, detail;
-        if (settings.provider === "gemini") {
-            ready = !!settings.gemini_api_key;
-            model = settings.gemini_model;
-            detail = "Add a Gemini API key in settings.";
-        } else {
-            ready = !!(settings.openrouter_api_key && settings.openrouter_model);
-            model = settings.openrouter_model;
-            detail = "Add an OpenRouter API key and model in settings.";
-        }
-        if (ready) {
-            $status.textContent = model ? `● ${model}` : "● ready";
+        if (settings.gemini_api_key) {
+            const model = settings.gemini_model || DEFAULT_CHAT_MODEL;
+            $status.textContent = `● ${model}`;
             $status.className = "assist-status ok";
             $status.title = "";
         } else {
             $status.textContent = "● not configured";
             $status.className = "assist-status err";
-            $status.title = detail;
+            $status.title = "Add a Google Gemini API key in settings.";
         }
     }
 
@@ -103,8 +85,7 @@
         const h = document.createElement("div");
         h.className = "assist-hint";
         h.innerHTML =
-            "Ask anything about your note — the assistant can reason and search the web before answering.<br>" +
-            "Type <code>/</code> for commands — <code>/image</code> a prompt to generate a picture.<br>" +
+            "Ask anything about your note — the assistant reads what you're working on before answering.<br>" +
             "<kbd>⌘K</kbd> in the note: completes your selection (or continues where you stopped) · <kbd>⌘L</kbd> chat about the selection";
         $messages.appendChild(h);
     }
@@ -169,38 +150,6 @@
         return $b;
     }
 
-    const TOOL_LABELS = {
-        web_search: ["🔍", "Searching the web"],
-        read_page: ["📖", "Reading page"],
-        generate_image: ["🎨", "Generating image"],
-    };
-
-    function addToolLine(name, detail) {
-        const $line = document.createElement("div");
-        $line.className = "assist-tool";
-        const [icon, label] = TOOL_LABELS[name] || ["🔧", name || "Working"];
-        $line.textContent = detail ? `${icon} ${label}: ${detail}` : `${icon} ${label}`;
-        $messages.appendChild($line);
-        scrollToBottom();
-    }
-
-    function addImageBubble(url, alt, providerLabel, model) {
-        const $wrap = document.createElement("div");
-        $wrap.className = "assist-msg assist-assistant assist-image";
-        const $img = document.createElement("img");
-        $img.src = url;
-        $img.alt = alt || "";
-        $wrap.appendChild($img);
-        if (providerLabel) {
-            const $meta = document.createElement("div");
-            $meta.className = "assist-image-meta";
-            $meta.textContent = model ? `via ${providerLabel} · ${model}` : `via ${providerLabel}`;
-            $wrap.appendChild($meta);
-        }
-        $messages.appendChild($wrap);
-        scrollToBottom();
-    }
-
     function addReasoningBlock() {
         const $d = document.createElement("details");
         $d.className = "assist-reasoning";
@@ -238,8 +187,6 @@
         if (!v) $input.focus();
     }
 
-    const providerLabelFor = (p) => ({ gemini: "Gemini (free)", openrouter: "OpenRouter" }[p]);
-
     // ── Selection context (⌘L) ──────────────────────────────
     function renderContextChip() {
         if (!pendingContext) { $context.hidden = true; return; }
@@ -270,7 +217,7 @@
         const resp = await fetch("/api/agent/chat", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ provider: settings.provider, messages: chatMessages, note, keys: keysPayload() }),
+            body: JSON.stringify({ messages: chatMessages, note, keys: keysPayload() }),
         });
         if (!resp.ok) {
             let detail = `HTTP ${resp.status}`;
@@ -303,13 +250,6 @@
                 $bubble.append(e.text);
                 produced = true;
                 scrollToBottom();
-            } else if (e.type === "tool") {
-                dropThinking();
-                addToolLine(e.name, e.detail);
-            } else if (e.type === "image") {
-                dropThinking();
-                addImageBubble(e.url, e.alt, providerLabelFor(e.provider), e.model);
-                produced = true;
             } else if (e.type === "error") {
                 dropThinking();
                 addErrorLine(e.detail);
@@ -424,7 +364,7 @@
         let started = false;
         try {
             await streamPlain(
-                { provider: settings.provider, mode, note, selection, keys: keysPayload() },
+                { mode, note, selection, keys: keysPayload() },
                 (text) => {
                     if (!started) {
                         text = text.replace(/^\n+/, "");
@@ -473,32 +413,6 @@
         }
     }
 
-    async function generateImage(prompt) {
-        addBubble("user", `/image ${prompt}`);
-        setBusy(true);
-        const $line = document.createElement("div");
-        $line.className = "assist-tool";
-        $line.textContent = "🎨 Generating image…";
-        $messages.appendChild($line);
-        scrollToBottom();
-        try {
-            const resp = await fetch("/api/agent/image", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ prompt, keys: keysPayload() }),
-            });
-            const data = await resp.json();
-            if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
-            $line.remove();
-            addImageBubble(data.dataUrl, prompt, providerLabelFor(data.provider), data.model);
-        } catch (err) {
-            $line.remove();
-            addErrorLine(err.message);
-        } finally {
-            setBusy(false);
-        }
-    }
-
     // ── Chat lifecycle ──────────────────────────────────────
     function startNewChat() {
         chatMessages = [];
@@ -513,87 +427,25 @@
         startNewChat();
     }
 
-    // ── Slash command menu ──────────────────────────────────
-    const SLASH_COMMANDS = [{ cmd: "/image", desc: "Generate an image from a prompt" }];
-    let slashItems = [], slashIndex = 0;
-    const slashOpen = () => !$slashMenu.hidden;
-
-    function hideSlashMenu() { $slashMenu.hidden = true; $slashMenu.innerHTML = ""; slashItems = []; }
-    function updateSlashMenu() {
-        const m = $input.value.match(/^\/(\w*)$/);
-        if (!m) return hideSlashMenu();
-        const prefix = "/" + m[1].toLowerCase();
-        slashItems = SLASH_COMMANDS.filter((c) => c.cmd.startsWith(prefix));
-        if (!slashItems.length) return hideSlashMenu();
-        slashIndex = 0;
-        renderSlashMenu();
-    }
-    function renderSlashMenu() {
-        $slashMenu.innerHTML = "";
-        slashItems.forEach((item, i) => {
-            const $row = document.createElement("div");
-            $row.className = "assist-slash-item" + (i === slashIndex ? " active" : "");
-            $row.innerHTML = `<span class="assist-slash-cmd"></span><span class="assist-slash-desc"></span>`;
-            $row.querySelector(".assist-slash-cmd").textContent = item.cmd;
-            $row.querySelector(".assist-slash-desc").textContent = item.desc;
-            $row.addEventListener("mousedown", (e) => { e.preventDefault(); applySlash(item.cmd); });
-            $slashMenu.appendChild($row);
-        });
-        $slashMenu.hidden = false;
-    }
-    function moveSlash(d) { slashIndex = (slashIndex + d + slashItems.length) % slashItems.length; renderSlashMenu(); }
-    function applySlash(cmd) { $input.value = cmd + " "; hideSlashMenu(); $input.focus(); }
-
     // ── Input handling ──────────────────────────────────────
     function handleInput(raw) {
         const text = raw.trim();
         if (!text || busy) return;
         $input.value = "";
-        hideSlashMenu();
-        const stripQuotes = (s) => s.trim().replace(/^"(.*)"$/s, "$1");
-        let m;
-        if ((m = text.match(/^\/image\s+(.+)/s))) {
-            generateImage(stripQuotes(m[1]));
-        } else {
-            sendChat(text, text);
-        }
+        sendChat(text, text);
     }
 
     // ── Settings ────────────────────────────────────────────
-    function selectSettingsTab(provider) {
-        document.querySelectorAll("[data-provider-tab]").forEach(($t) => {
-            $t.classList.toggle("active", $t.dataset.providerTab === provider);
-        });
-        document.querySelectorAll("[data-provider-pane]").forEach(($p) => {
-            const active = $p.dataset.providerPane === provider;
-            $p.classList.toggle("active", active);
-            $p.hidden = !active;
-        });
-    }
     function openSettings() {
-        $("assist-set-openrouter").value = "";
-        $("assist-set-openrouter").placeholder = settings.openrouter_api_key ? "•••••• (saved — leave blank to keep)" : "";
-        $("assist-set-openrouter-model").value = settings.openrouter_model;
         $("assist-set-gemini").value = "";
         $("assist-set-gemini").placeholder = settings.gemini_api_key ? "•••••• (saved — leave blank to keep)" : "";
         $("assist-set-gemini-model").value = settings.gemini_model;
-        $("assist-set-serper").value = "";
-        $("assist-set-serper").placeholder = settings.serper_api_key ? "•••••• (saved — leave blank to keep)" : "";
-        $("assist-set-image-model").value = settings.image_model;
-        selectSettingsTab(settings.provider);
         $settings.hidden = false;
     }
     function saveSettings() {
-        settings.provider = $providerQuick.value;
-        settings.openrouter_model = $("assist-set-openrouter-model").value.trim();
-        settings.gemini_model = $("assist-set-gemini-model").value.trim() || "gemini-2.5-flash";
-        settings.image_model = $("assist-set-image-model").value.trim() || DEFAULT_IMAGE_MODEL;
-        const or = $("assist-set-openrouter").value.trim();
-        const gm = $("assist-set-gemini").value.trim();
-        const sp = $("assist-set-serper").value.trim();
-        if (or) settings.openrouter_api_key = or;
-        if (gm) settings.gemini_api_key = gm;
-        if (sp) settings.serper_api_key = sp;
+        settings.gemini_model = $("assist-set-gemini-model").value.trim() || DEFAULT_CHAT_MODEL;
+        const key = $("assist-set-gemini").value.trim();
+        if (key) settings.gemini_api_key = key;
         persistSettings();
         $settings.hidden = true;
         refreshStatus();
@@ -606,21 +458,10 @@
     $btnSettings.addEventListener("click", () => { if ($settings.hidden) openSettings(); else $settings.hidden = true; });
     $("assist-settings-cancel").addEventListener("click", () => { $settings.hidden = true; });
     $("assist-settings-save").addEventListener("click", saveSettings);
-    document.querySelectorAll("[data-provider-tab]").forEach(($t) => {
-        $t.addEventListener("click", () => selectSettingsTab($t.dataset.providerTab));
-    });
     $send.addEventListener("click", () => handleInput($input.value));
-    $providerQuick.addEventListener("change", () => { settings.provider = $providerQuick.value; persistSettings(); refreshStatus(); });
     $contextDel.addEventListener("click", clearContext);
 
-    $input.addEventListener("input", updateSlashMenu);
     $input.addEventListener("keydown", (e) => {
-        if (slashOpen()) {
-            if (e.key === "ArrowDown") { e.preventDefault(); moveSlash(1); return; }
-            if (e.key === "ArrowUp") { e.preventDefault(); moveSlash(-1); return; }
-            if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); applySlash(slashItems[slashIndex].cmd); return; }
-            if (e.key === "Escape") { e.preventDefault(); hideSlashMenu(); return; }
-        }
         if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleInput($input.value); }
         else if (e.key === "Escape") { togglePanel(false); }
     });

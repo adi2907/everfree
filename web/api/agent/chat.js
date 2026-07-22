@@ -1,7 +1,7 @@
 // Vercel serverless function — streams the EverFree assistant's agent loop as
-// ndjson. Keys arrive per-request from the browser (localStorage); nothing is
-// stored server-side. The browser can't call the LLM/Serper providers directly
-// (CORS, key exposure), so this thin proxy runs the loop.
+// ndjson. The Gemini key arrives per-request from the browser (localStorage);
+// nothing is stored server-side. The browser can't call Gemini directly (CORS,
+// key exposure), so this thin proxy runs the loop.
 
 const { runAgent } = require("../../lib/agent-core.js");
 
@@ -12,7 +12,6 @@ module.exports = async (req, res) => {
     }
 
     const body = req.body || {};
-    const provider = body.provider === "gemini" ? "gemini" : "openrouter";
     const note = body.note || {};
     const keys = body.keys || {};
     const mode = typeof body.mode === "string" ? body.mode : "chat";
@@ -31,7 +30,7 @@ module.exports = async (req, res) => {
     };
 
     try {
-        for await (const event of runAgent({ provider, messages, note, keys, mode, selection })) {
+        for await (const event of runAgent({ messages, note, keys, mode, selection })) {
             write(event);
         }
     } catch (err) {

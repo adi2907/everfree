@@ -1707,18 +1707,6 @@ body.resizing-panes * {
 .assist-status.ok { color: var(--success); }
 .assist-status.err { color: var(--danger); }
 
-.assist-provider-quick {
-    font-size: 11px;
-    color: var(--text-secondary);
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 2px 4px;
-    max-width: 110px;
-    cursor: pointer;
-}
-.assist-provider-quick:hover { border-color: var(--border-light); }
-
 .assist-reasoning {
     font-size: 12px;
     background: var(--bg-surface);
@@ -1793,17 +1781,6 @@ body.resizing-panes * {
     background: var(--bg-surface);
     border: 1px solid var(--border);
     color: var(--text-primary);
-}
-.assist-image img {
-    max-width: 100%;
-    border-radius: var(--radius-sm);
-    display: block;
-}
-.assist-image-meta {
-    margin-top: 4px;
-    font-size: 10px;
-    color: var(--text-muted);
-    font-family: var(--font-mono);
 }
 .assist-tool {
     font-size: 11px;

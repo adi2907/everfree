@@ -1,28 +1,24 @@
 """
 EverFree — Writing Assist Agent
 
-Provider-selectable agent: text generation can run through LM Studio,
-OpenRouter, or the Gemini API. Image generation prefers the (free-tier)
-Gemini API and falls back to OpenRouter when Gemini is unset or rate-limited.
-Web search uses Serper, and result pages are fetched and reduced to readable
-text with a stdlib HTML parser so no extra dependencies enter the bundle.
+One provider: Google's Gemini API, reached with the user's own API key. The
+agent's tools are the user's own notes — searching, reading, and creating them.
+There is no web access and no image generation (Gemini's image models require a
+billing-enabled key, so the free key this app assumes cannot use them).
 
-Settings (provider URLs, models, and API keys) live in
-~/.everfree_agent.json, managed through /api/agent/settings.
+Settings (the model name and the API key) live in ~/.everfree_agent.json,
+managed through /api/agent/settings.
 """
 
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import logging
 import os
 import re
 import time
-from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import quote
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
@@ -39,27 +35,14 @@ SETTINGS_FILE = Path.home() / ".everfree_agent.json"
 CHATS_DIR = Path(os.environ.get("EVERFREE_CHATS_DIR", Path.home() / ".everfree_chats"))
 
 DEFAULT_SETTINGS = {
-    "active_provider": "lmstudio",
-    "lmstudio_url": "http://localhost:1234/v1",
-    "lmstudio_model": "",
-    "openrouter_api_key": "",
-    "openrouter_model": "",
     "gemini_api_key": "",
     "gemini_model": "gemini-2.5-flash",
-    "serper_api_key": "",
-    # Nano Banana 2 Lite. Stored as the OpenRouter slug; the direct Gemini API
-    # call derives its model id by dropping the leading "google/".
-    "image_model": "google/gemini-3.1-flash-lite-image",
 }
 
-PROVIDERS = {"lmstudio", "openrouter", "gemini"}
-
-# Chat allows a handful of tool rounds so the agent can search the web and read
-# a couple of pages (or read your other notes) before it answers.
+# Chat allows a handful of tool rounds so the agent can read a few of your other
+# notes before it answers.
 MAX_TOOL_ROUNDS = 8
 NOTE_CONTEXT_LIMIT = 8000
-PAGE_TEXT_LIMIT = 6000
-SEARCH_RESULT_COUNT = 6
 LLM_TIMEOUT = httpx.Timeout(180.0, connect=10.0)
 
 
@@ -82,15 +65,8 @@ def _save_settings(settings: dict) -> None:
 
 def _public_settings(settings: dict) -> dict:
     return {
-        "active_provider": settings["active_provider"],
-        "lmstudio_url": settings["lmstudio_url"],
-        "lmstudio_model": settings["lmstudio_model"],
-        "openrouter_model": settings["openrouter_model"],
         "gemini_model": settings["gemini_model"],
-        "image_model": settings["image_model"],
-        "openrouter_api_key_set": bool(settings["openrouter_api_key"]),
         "gemini_api_key_set": bool(settings["gemini_api_key"]),
-        "serper_api_key_set": bool(settings["serper_api_key"]),
     }
 
 
@@ -106,8 +82,6 @@ async def update_settings(request: Request):
     for key in DEFAULT_SETTINGS:
         if key in body and isinstance(body[key], str):
             settings[key] = body[key].strip()
-    if settings["active_provider"] not in PROVIDERS:
-        raise HTTPException(status_code=400, detail="Invalid AI provider")
     _save_settings(settings)
     return _public_settings(settings)
 
@@ -115,75 +89,36 @@ async def update_settings(request: Request):
 @router.get("/status")
 async def agent_status():
     settings = _load_settings()
-    provider = settings["active_provider"]
-    labels = {"lmstudio": "Local LLM", "openrouter": "OpenRouter", "gemini": "Gemini"}
-    model = settings.get(f"{provider}_model", "")
-    ready = False
-    detail = ""
-
-    if provider == "lmstudio":
-        try:
-            async with httpx.AsyncClient(timeout=3) as client:
-                resp = await client.get(f"{settings['lmstudio_url'].rstrip('/')}/models")
-            ready = resp.status_code == 200 and bool(resp.json().get("data"))
-            if ready and not model:
-                model = resp.json()["data"][0].get("id", "")
-        except Exception:
-            detail = "Start LM Studio, load a model, and enable its local server."
-    elif provider == "openrouter":
-        ready = bool(settings["openrouter_api_key"] and settings["openrouter_model"])
-        detail = "Add an OpenRouter API key and select a model."
-    else:
-        ready = bool(settings["gemini_api_key"] and settings["gemini_model"])
-        detail = "Add a Gemini API key and select a model."
-
+    ready = bool(settings["gemini_api_key"] and settings["gemini_model"])
     return {
-        "provider": provider,
-        "provider_label": labels[provider],
-        "model": model,
+        "model": settings["gemini_model"],
         "ready": ready,
-        "detail": detail,
+        "detail": "" if ready else "Add a Google Gemini API key and select a model.",
     }
 
 
-@router.post("/models/{provider}")
-async def provider_models(provider: str, request: Request):
-    """Return selectable text-generation models for one provider."""
+@router.post("/models")
+async def gemini_models(request: Request):
+    """Return the Gemini models that can generate content, for the model picker."""
     settings = _load_settings()
     body = await request.json()
+    api_key = (body.get("api_key") or settings["gemini_api_key"]).strip()
+    if not api_key:
+        return {"models": []}
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            if provider == "lmstudio":
-                base_url = (body.get("lmstudio_url") or settings["lmstudio_url"]).strip().rstrip("/")
-                resp = await client.get(f"{base_url}/models")
-                resp.raise_for_status()
-                models = [m.get("id", "") for m in resp.json().get("data", [])]
-            elif provider == "openrouter":
-                api_key = (body.get("api_key") or settings["openrouter_api_key"]).strip()
-                headers = {}
-                if api_key:
-                    headers["Authorization"] = f"Bearer {api_key}"
-                resp = await client.get("https://openrouter.ai/api/v1/models", headers=headers)
-                resp.raise_for_status()
-                models = [m.get("id", "") for m in resp.json().get("data", [])]
-            elif provider == "gemini":
-                api_key = (body.get("api_key") or settings["gemini_api_key"]).strip()
-                if not api_key:
-                    return {"models": []}
-                resp = await client.get(
-                    "https://generativelanguage.googleapis.com/v1beta/models",
-                    params={"key": api_key, "pageSize": 1000},
-                )
-                resp.raise_for_status()
-                models = [
-                    m.get("baseModelId") or m.get("name", "").removeprefix("models/")
-                    for m in resp.json().get("models", [])
-                    if "generateContent" in (m.get("supportedGenerationMethods") or [])
-                ]
-            else:
-                raise HTTPException(status_code=404, detail="Unknown AI provider")
+            resp = await client.get(
+                "https://generativelanguage.googleapis.com/v1beta/models",
+                params={"key": api_key, "pageSize": 1000},
+            )
+            resp.raise_for_status()
     except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail=f"Could not load {provider} models: {exc}") from exc
+        raise HTTPException(status_code=502, detail=f"Could not load Gemini models: {exc}") from exc
+    models = [
+        m.get("baseModelId") or m.get("name", "").removeprefix("models/")
+        for m in resp.json().get("models", [])
+        if "generateContent" in (m.get("supportedGenerationMethods") or [])
+    ]
     return {"models": sorted({m for m in models if m})}
 
 
@@ -295,84 +230,8 @@ async def delete_chat(chat_id: str):
     return {"status": "deleted", "id": chat_id}
 
 
-# ── HTML → text extraction ───────────────────────────────────
-_SKIP_TAGS = {"script", "style", "noscript", "svg", "header", "footer", "nav", "form", "iframe", "aside"}
-_BLOCK_TAGS = {
-    "p", "div", "li", "br", "h1", "h2", "h3", "h4", "h5", "h6",
-    "tr", "section", "article", "blockquote", "pre",
-}
-
-
-class _TextExtractor(HTMLParser):
-    def __init__(self):
-        super().__init__(convert_charrefs=True)
-        self._skip_depth = 0
-        self._chunks: list[str] = []
-
-    def handle_starttag(self, tag, attrs):
-        if tag in _SKIP_TAGS:
-            self._skip_depth += 1
-        elif tag in _BLOCK_TAGS:
-            self._chunks.append("\n")
-
-    def handle_endtag(self, tag):
-        if tag in _SKIP_TAGS and self._skip_depth:
-            self._skip_depth -= 1
-        elif tag in _BLOCK_TAGS:
-            self._chunks.append("\n")
-
-    def handle_data(self, data):
-        if not self._skip_depth and data.strip():
-            self._chunks.append(data)
-
-    def text(self) -> str:
-        lines = ("".join(self._chunks)).splitlines()
-        cleaned = (" ".join(line.split()) for line in lines)
-        return "\n".join(line for line in cleaned if line)
-
-
-def extract_page_text(html: str) -> str:
-    parser = _TextExtractor()
-    try:
-        parser.feed(html)
-    except Exception:
-        pass
-    return parser.text()
-
-
 # ── Agent tools ──────────────────────────────────────────────
 TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "web_search",
-            "description": "Search the web with Google. Returns titles, links, and snippets of the top results.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "Search query"},
-                },
-                "required": ["query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "read_page",
-            "description": (
-                "Fetch a web page and return its readable text. "
-                "Use after web_search to read the most promising results before answering."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "url": {"type": "string", "description": "Full http(s) URL of the page to read"},
-                },
-                "required": ["url"],
-            },
-        },
-    },
     {
         "type": "function",
         "function": {
@@ -448,79 +307,7 @@ TOOLS = [
             },
         },
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "generate_image",
-            "description": (
-                "Generate an image from a text prompt and save it into the current note's "
-                "assets folder. Use this whenever the user asks for an image, illustration, "
-                "diagram, or picture. Never write a Markdown image link yourself — always call "
-                "this tool, then embed the exact Markdown it returns."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "prompt": {"type": "string", "description": "Detailed description of the image to generate"},
-                    "notebook": {"type": "string", "description": "Notebook to save the image in; defaults to the current note's notebook"},
-                },
-                "required": ["prompt"],
-            },
-        },
-    },
 ]
-
-
-async def _tool_web_search(query: str, settings: dict) -> str:
-    api_key = settings["serper_api_key"]
-    if not api_key:
-        return "Error: no Serper API key is configured. Ask the user to add one in the assistant settings."
-    if not query:
-        return "Error: empty search query."
-    try:
-        async with httpx.AsyncClient(timeout=20) as client:
-            resp = await client.post(
-                "https://google.serper.dev/search",
-                headers={"X-API-KEY": api_key, "Content-Type": "application/json"},
-                json={"q": query, "num": SEARCH_RESULT_COUNT},
-            )
-    except httpx.HTTPError as exc:
-        return f"Error reaching Serper: {exc}"
-    if resp.status_code != 200:
-        return f"Error: Serper returned HTTP {resp.status_code}: {resp.text[:200]}"
-
-    data = resp.json()
-    lines = []
-    answer = data.get("answerBox", {}).get("answer") or data.get("answerBox", {}).get("snippet")
-    if answer:
-        lines.append(f"Answer box: {answer}")
-    for item in data.get("organic", [])[:SEARCH_RESULT_COUNT]:
-        lines.append(f"- {item.get('title', '')}\n  {item.get('link', '')}\n  {item.get('snippet', '')}")
-    return "\n".join(lines) or "No results."
-
-
-async def _tool_read_page(url: str) -> str:
-    if not re.match(r"^https?://", url or ""):
-        return "Error: only full http(s) URLs can be read."
-    try:
-        async with httpx.AsyncClient(
-            timeout=20,
-            follow_redirects=True,
-            headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) EverFree/1.0"},
-        ) as client:
-            resp = await client.get(url)
-    except httpx.HTTPError as exc:
-        return f"Error fetching page: {exc}"
-    if resp.status_code != 200:
-        return f"Error: HTTP {resp.status_code} from {url}"
-    content_type = resp.headers.get("content-type", "")
-    if "html" not in content_type and "text" not in content_type:
-        return f"Error: cannot read content type {content_type or 'unknown'}"
-
-    text = extract_page_text(resp.text)
-    if len(text) > PAGE_TEXT_LIMIT:
-        text = text[:PAGE_TEXT_LIMIT] + "\n[truncated]"
-    return text or "No readable text found on the page."
 
 
 # ── Note tools (reuse server.app helpers; imported lazily to avoid the
@@ -627,51 +414,6 @@ async def _tool_create_note(notebook: str, title: str, content: str) -> str:
     return f"Created note '{name}' in notebook '{notebook}'."
 
 
-# ── Streamed-reasoning helpers ───────────────────────────────
-def _safe_emit_len(buf: str, tag: str) -> int:
-    """Length of `buf` that is safe to emit without slicing through a partial
-    occurrence of `tag` sitting at the very end (tags can straddle chunks)."""
-    for k in range(min(len(tag) - 1, len(buf)), 0, -1):
-        if buf.endswith(tag[:k]):
-            return len(buf) - k
-    return len(buf)
-
-
-def _split_think(buf: str, in_think: bool) -> tuple[list[tuple[str, str]], str, bool]:
-    """Split streamed `content` into ('reason', text) inside <think>…</think>
-    and ('answer', text) outside it. Consumes only the unambiguous prefix of
-    `buf`, returning (events, remaining_buf, in_think) so partial tags carry
-    over to the next chunk. Local reasoning models emit thinking this way."""
-    open_tag, close_tag = "<think>", "</think>"
-    events: list[tuple[str, str]] = []
-    while buf:
-        if in_think:
-            idx = buf.find(close_tag)
-            if idx == -1:
-                cut = _safe_emit_len(buf, close_tag)
-                if cut:
-                    events.append(("reason", buf[:cut]))
-                    buf = buf[cut:]
-                break
-            if idx:
-                events.append(("reason", buf[:idx]))
-            buf = buf[idx + len(close_tag):]
-            in_think = False
-        else:
-            idx = buf.find(open_tag)
-            if idx == -1:
-                cut = _safe_emit_len(buf, open_tag)
-                if cut:
-                    events.append(("answer", buf[:cut]))
-                    buf = buf[cut:]
-                break
-            if idx:
-                events.append(("answer", buf[:idx]))
-            buf = buf[idx + len(open_tag):]
-            in_think = True
-    return events, buf, in_think
-
-
 # ── Prompts ──────────────────────────────────────────────────
 # The prompt text is shared with the web/mobile assistant and lives in exactly
 # one place: web/lib/prompts.json. It sits under web/ because Vercel deploys
@@ -701,21 +443,17 @@ except (OSError, ValueError) as exc:
 
 def _build_chat_prompt(prompts: dict) -> str:
     """Assemble the desktop chat prompt from the shared parts. Desktop reaches
-    the user's notes on disk and saves generated images next to them, so it
-    takes the note bullets and the Markdown-embedding tail. Web/mobile builds
-    the same pieces without them — see buildChatPrompt in web/lib/agent-core.js."""
+    the user's notes on disk, so it takes the note bullets; web/mobile has no
+    tools at all and drops that whole section — see buildChatPrompt in
+    web/lib/agent-core.js."""
     chat = prompts["chat"]
     tools = chat["tools"]
-    bullets = [
-        tools["notes"],
-        tools["web"],
-        tools["create_note"],
-        tools["image"] + tools["image_tail"]["desktop"],
-    ]
+    bullets = [tools["notes"], tools["create_note"]]
     return "\n\n".join([
         chat["intro"],
         chat["think"]["desktop"],
         chat["tools_header"] + "\n" + "\n".join(bullets),
+        chat["no_images"],
         chat["language_rule"],
         chat["style"],
     ])
@@ -743,65 +481,24 @@ def _require_prompts() -> None:
 
 
 # ── Agent loop ───────────────────────────────────────────────
-async def _resolve_local_model(client: httpx.AsyncClient, base_url: str, settings: dict) -> str:
-    if settings["lmstudio_model"]:
-        return settings["lmstudio_model"]
-    resp = await client.get(f"{base_url}/models")
-    resp.raise_for_status()
-    models = resp.json().get("data", [])
-    if not models:
-        raise RuntimeError("No model is loaded in LM Studio.")
-    return models[0]["id"]
-
-
-async def _tool_generate_image(prompt: str, notebook: str, settings: dict) -> tuple[str, str, dict]:
-    """Generate and save an image. Returns (detail, model-facing result, extra),
-    where `extra` carries the preview URL so the UI can render the image inline."""
-    try:
-        info = await _generate_image_file(prompt, notebook, settings)
-    except ImageGenError as exc:
-        return prompt[:60], f"Image generation failed: {exc}", {}
-    result = (
-        f"Image generated and saved (via {info['provider']}). "
-        f"Embed it in your reply with exactly this Markdown, unchanged: {info['markdown']}"
-    )
-    extra = {
-        "image": info["preview_url"],
-        "alt": prompt[:120],
-        "provider": info["provider"],
-        "model": info["model"],
-    }
-    return prompt[:60], result, extra
-
-
-async def _run_tool(name: str, args: dict, settings: dict, note_ctx: str = "") -> tuple[str, str, dict]:
-    """Run a tool. Returns (detail, model-facing result, extra). `extra` is empty
-    for most tools; generate_image uses it to pass a preview URL up to the UI.
-    `note_ctx` is the current note's notebook, used as a default where a tool
-    needs one but the model didn't supply it."""
-    if name == "web_search":
-        detail = args.get("query", "")
-        return detail, await _tool_web_search(detail, settings), {}
-    if name == "read_page":
-        detail = args.get("url", "")
-        return detail, await _tool_read_page(detail), {}
+async def _run_tool(name: str, args: dict) -> tuple[str, str]:
+    """Run a tool. Returns (detail, model-facing result), where `detail` is the
+    short label the UI shows beside the tool line."""
     if name == "search_notes":
         detail = args.get("query", "")
-        return detail, await _tool_search_notes(detail), {}
+        return detail, await _tool_search_notes(detail)
     if name == "read_note":
         notebook, note = args.get("notebook", ""), args.get("note", "")
-        return f"{notebook}/{note}".strip("/"), await _tool_read_note(notebook, note), {}
+        return f"{notebook}/{note}".strip("/"), await _tool_read_note(notebook, note)
     if name == "list_notebooks":
-        return "", await _tool_list_notebooks(), {}
+        return "", await _tool_list_notebooks()
     if name == "list_notes":
         notebook = args.get("notebook", "")
-        return notebook, await _tool_list_notes(notebook), {}
+        return notebook, await _tool_list_notes(notebook)
     if name == "create_note":
         notebook, title = args.get("notebook", ""), args.get("title", "")
-        return f"{notebook}/{title}".strip("/"), await _tool_create_note(notebook, title, args.get("content", "")), {}
-    if name == "generate_image":
-        return await _tool_generate_image(args.get("prompt", ""), args.get("notebook") or note_ctx, settings)
-    return "", f"Error: unknown tool {name}", {}
+        return f"{notebook}/{title}".strip("/"), await _tool_create_note(notebook, title, args.get("content", ""))
+    return "", f"Error: unknown tool {name}"
 
 
 def _empty_completion_event(finish_reason: str | None) -> dict:
@@ -815,199 +512,6 @@ def _empty_completion_event(finish_reason: str | None) -> dict:
     else:
         detail = "The model returned no text. Try again or pick a different model."
     return {"type": "error", "detail": detail}
-
-
-def _content_text(value) -> str:
-    """Normalize OpenAI/OpenRouter content shapes into visible text.
-
-    Most providers stream a string in delta.content, but OpenRouter can expose
-    provider-native structured content parts. Treat only text-like parts as
-    visible answer text and ignore images/tool annotations here.
-    """
-    if isinstance(value, str):
-        return value
-    if isinstance(value, list):
-        parts = []
-        for item in value:
-            if isinstance(item, str):
-                parts.append(item)
-            elif isinstance(item, dict):
-                text = item.get("text") or item.get("content")
-                if isinstance(text, str):
-                    parts.append(text)
-        return "".join(parts)
-    if isinstance(value, dict):
-        text = value.get("text") or value.get("content")
-        return text if isinstance(text, str) else ""
-    return ""
-
-
-def _append_visible_text(text: str, answer_text: str, think_buf: str, in_think: bool):
-    if not text:
-        return answer_text, think_buf, in_think, []
-    pieces, think_buf, in_think = _split_think(think_buf + text, in_think)
-    events = []
-    for kind, piece in pieces:
-        if kind == "reason":
-            events.append({"type": "reason", "text": piece})
-        else:
-            answer_text += piece
-            events.append({"type": "delta", "text": piece})
-    return answer_text, think_buf, in_think, events
-
-
-async def _openai_compatible_events(
-    messages: list[dict], tools: list | None, settings: dict, max_tokens: int,
-    no_thinking: bool = False, max_rounds: int = MAX_TOOL_ROUNDS, note_ctx: str = "",
-):
-    """Stream an OpenAI-compatible tool loop, surfacing reasoning live.
-
-    `reasoning` / `reasoning_content` deltas (OpenRouter) and inline
-    <think>…</think> spans (local models) become `reason` events; visible
-    answer text becomes `delta` events. Streamed tool-call fragments are
-    reassembled across chunks, executed, and the loop continues.
-    """
-    provider = settings["active_provider"]
-    if provider == "lmstudio":
-        base_url = settings["lmstudio_url"].rstrip("/")
-        headers = {}
-    else:
-        if not settings["openrouter_api_key"]:
-            raise RuntimeError("Add an OpenRouter API key in assistant settings.")
-        base_url = "https://openrouter.ai/api/v1"
-        headers = {"Authorization": f"Bearer {settings['openrouter_api_key']}"}
-
-    async with httpx.AsyncClient(timeout=LLM_TIMEOUT, headers=headers) as client:
-        if provider == "lmstudio":
-            model = await _resolve_local_model(client, base_url, settings)
-        else:
-            model = settings["openrouter_model"]
-            if not model:
-                raise RuntimeError("Select an OpenRouter chat model in assistant settings.")
-
-        for _ in range(max_rounds):
-            payload = {
-                "model": model,
-                "messages": messages,
-                "temperature": 0.7,
-                "stream": True,
-            }
-            if provider == "openrouter":
-                payload["max_completion_tokens"] = max_tokens
-                if no_thinking:
-                    payload["reasoning"] = {"effort": "minimal", "exclude": True}
-            else:
-                payload["max_tokens"] = max_tokens
-            if tools:
-                payload["tools"] = tools
-
-            answer_text = ""           # visible answer with <think> spans removed
-            snapshot_text = ""         # full-message snapshots some providers stream
-            tool_acc: dict[int, dict] = {}
-            finish_reason = None
-            think_buf, in_think = "", False
-
-            async with client.stream("POST", f"{base_url}/chat/completions", json=payload) as resp:
-                if resp.status_code != 200:
-                    raw = (await resp.aread()).decode("utf-8", "replace")
-                    label = "LM Studio" if provider == "lmstudio" else "OpenRouter"
-                    raise RuntimeError(f"{label} error HTTP {resp.status_code}: {raw[:300]}")
-                async for line in resp.aiter_lines():
-                    line = line.strip()
-                    if not line.startswith("data:"):
-                        continue
-                    data = line[5:].strip()
-                    if data == "[DONE]":
-                        break
-                    try:
-                        chunk = json.loads(data)
-                    except ValueError:
-                        continue
-                    choice = (chunk.get("choices") or [{}])[0]
-                    if choice.get("finish_reason"):
-                        finish_reason = choice["finish_reason"]
-                    delta = choice.get("delta") or {}
-
-                    reason = delta.get("reasoning") or delta.get("reasoning_content")
-                    if not reason:
-                        reason = (choice.get("message") or {}).get("reasoning")
-                    if reason:
-                        yield {"type": "reason", "text": reason}
-
-                    content = _content_text(delta.get("content"))
-                    if not content:
-                        message_content = _content_text((choice.get("message") or {}).get("content"))
-                        if message_content:
-                            if message_content.startswith(snapshot_text):
-                                content = message_content[len(snapshot_text):]
-                            else:
-                                content = message_content
-                            snapshot_text = message_content
-
-                    answer_text, think_buf, in_think, events = _append_visible_text(
-                        content, answer_text, think_buf, in_think
-                    )
-                    for event in events:
-                        yield event
-
-                    for tc in delta.get("tool_calls") or []:
-                        slot = tool_acc.setdefault(
-                            tc.get("index", 0), {"id": None, "name": "", "arguments": ""}
-                        )
-                        if tc.get("id"):
-                            slot["id"] = tc["id"]
-                        fn = tc.get("function") or {}
-                        if fn.get("name"):
-                            slot["name"] += fn["name"]
-                        if fn.get("arguments"):
-                            slot["arguments"] += fn["arguments"]
-
-            if think_buf:  # flush text held back as a possible partial tag
-                if in_think:
-                    yield {"type": "reason", "text": think_buf}
-                else:
-                    answer_text += think_buf
-                    yield {"type": "delta", "text": think_buf}
-
-            tool_calls = [tool_acc[i] for i in sorted(tool_acc)]
-            if not tool_calls:
-                if answer_text:
-                    yield {"type": "done"}
-                else:
-                    yield _empty_completion_event(finish_reason)
-                return
-
-            messages.append({
-                "role": "assistant",
-                "content": answer_text or None,
-                "tool_calls": [
-                    {
-                        "id": tc["id"] or f"call_{i}",
-                        "type": "function",
-                        "function": {"name": tc["name"], "arguments": tc["arguments"] or "{}"},
-                    }
-                    for i, tc in enumerate(tool_calls)
-                ],
-            })
-            for i, tc in enumerate(tool_calls):
-                try:
-                    args = json.loads(tc["arguments"] or "{}")
-                except ValueError:
-                    args = {}
-                detail, result, extra = await _run_tool(tc["name"], args, settings, note_ctx)
-                yield {"type": "tool", "name": tc["name"], "detail": detail}
-                if extra.get("image"):
-                    yield {
-                        "type": "image", "url": extra["image"], "alt": extra.get("alt", ""),
-                        "provider": extra.get("provider", ""), "model": extra.get("model", ""),
-                    }
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc["id"] or f"call_{i}",
-                    "content": result,
-                })
-
-        yield {"type": "error", "detail": "The agent hit the tool-call limit without finishing."}
 
 
 def _gemini_request(messages: list[dict]) -> tuple[dict | None, list[dict]]:
@@ -1040,10 +544,10 @@ def _gemini_tools(tools: list) -> list[dict]:
 
 async def _gemini_events(
     messages: list[dict], tools: list | None, settings: dict, max_tokens: int,
-    no_thinking: bool = False, max_rounds: int = MAX_TOOL_ROUNDS, note_ctx: str = "",
+    no_thinking: bool = False, max_rounds: int = MAX_TOOL_ROUNDS,
 ):
     if not settings["gemini_api_key"]:
-        raise RuntimeError("Add a Gemini API key in assistant settings.")
+        raise RuntimeError("Add a Google Gemini API key in assistant settings.")
     model = settings["gemini_model"]
     if not model:
         raise RuntimeError("Select a Gemini model in assistant settings.")
@@ -1121,13 +625,8 @@ async def _gemini_events(
             for call in function_calls:
                 name = call.get("name", "")
                 args = call.get("args") or {}
-                detail, result, extra = await _run_tool(name, args, settings, note_ctx)
+                detail, result = await _run_tool(name, args)
                 yield {"type": "tool", "name": name, "detail": detail}
-                if extra.get("image"):
-                    yield {
-                        "type": "image", "url": extra["image"], "alt": extra.get("alt", ""),
-                        "provider": extra.get("provider", ""), "model": extra.get("model", ""),
-                    }
                 response_parts.append({
                     "functionResponse": {"name": name, "response": {"result": result}}
                 })
@@ -1136,44 +635,21 @@ async def _gemini_events(
         yield {"type": "error", "detail": "The agent hit the tool-call limit without finishing."}
 
 
-def _resolve_settings(override: dict | None = None) -> dict:
-    """Load settings, optionally swapping the active provider/model for one
-    run (used by a per-request override)."""
-    settings = _load_settings()
-    if override:
-        settings = dict(settings)
-        provider = override.get("provider")
-        if provider in PROVIDERS:
-            settings["active_provider"] = provider
-        model = override.get("model")
-        if model:
-            settings[f"{settings['active_provider']}_model"] = model
-    return settings
-
-
-def _override_from(body: dict) -> dict | None:
-    provider, model = body.get("provider"), body.get("model")
-    return {"provider": provider, "model": model} if (provider or model) else None
-
-
 async def _agent_events(
     messages: list[dict], tools: list | None, max_tokens: int,
-    no_thinking: bool = False, override: dict | None = None,
-    max_rounds: int = MAX_TOOL_ROUNDS, note_ctx: str = "",
+    no_thinking: bool = False, max_rounds: int = MAX_TOOL_ROUNDS,
 ):
-    """Run the selected provider and yield UI events."""
-    settings = _resolve_settings(override)
+    """Run the agent against Gemini and yield UI events."""
+    settings = _load_settings()
     try:
-        if settings["active_provider"] == "gemini":
-            gen = _gemini_events(messages, tools, settings, max_tokens, no_thinking, max_rounds, note_ctx)
-        else:
-            gen = _openai_compatible_events(messages, tools, settings, max_tokens, no_thinking, max_rounds, note_ctx)
-        async for event in gen:
+        async for event in _gemini_events(
+            messages, tools, settings, max_tokens, no_thinking, max_rounds
+        ):
             yield event
     except httpx.ConnectError:
         yield {
             "type": "error",
-            "detail": "Could not reach the selected AI provider. Check its connection and settings.",
+            "detail": "Could not reach the Gemini API. Check your connection and API key.",
         }
     except Exception as exc:
         logger.exception("Agent run failed")
@@ -1191,7 +667,6 @@ async def agent_chat(request: Request):
     mode = body.get("mode", "chat")
     note = body.get("note") or {}
     history = body.get("messages") or []
-    override = _override_from(body)
 
     note_content = (note.get("content") or "").strip()
 
@@ -1241,138 +716,8 @@ async def agent_chat(request: Request):
         max_tokens = 2048
         no_thinking = False
 
-    note_ctx = (note.get("notebook") or "").strip()
     return StreamingResponse(
         (_ndjson(event) async for event in
-         _agent_events(messages, tools, max_tokens, no_thinking, override, note_ctx=note_ctx)),
+         _agent_events(messages, tools, max_tokens, no_thinking)),
         media_type="application/x-ndjson",
     )
-
-
-# ── Image generation (Gemini free tier → OpenRouter fallback) ─
-def _ext_from_mime(mime: str) -> str:
-    subtype = (mime or "image/png").split("/")[-1].lower()
-    return {"jpeg": "jpg"}.get(subtype, subtype)
-
-
-async def _gemini_image(prompt: str, model: str, api_key: str) -> tuple[str, bytes]:
-    """Generate one image through the direct Gemini API. Raises on any failure;
-    a 429 means the free tier is exhausted and the caller should fall back."""
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-    async with httpx.AsyncClient(timeout=120) as client:
-        resp = await client.post(
-            url,
-            params={"key": api_key},
-            json={
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
-            },
-        )
-    if resp.status_code != 200:
-        raise RuntimeError(f"Gemini HTTP {resp.status_code}: {resp.text[:200]}")
-    parts = (((resp.json().get("candidates") or [{}])[0]).get("content") or {}).get("parts") or []
-    for part in parts:
-        inline = part.get("inlineData") or part.get("inline_data")
-        if inline and inline.get("data"):
-            mime = inline.get("mimeType") or inline.get("mime_type") or "image/png"
-            return _ext_from_mime(mime), base64.b64decode(inline["data"])
-    raise RuntimeError("Gemini returned no image")
-
-
-async def _openrouter_image(prompt: str, model: str, api_key: str) -> tuple[str, bytes]:
-    """Generate one image through OpenRouter's chat-completions image modality."""
-    async with httpx.AsyncClient(timeout=120) as client:
-        resp = await client.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={
-                "model": model,
-                "messages": [{"role": "user", "content": prompt}],
-                "modalities": ["image", "text"],
-            },
-        )
-    if resp.status_code != 200:
-        raise RuntimeError(f"OpenRouter HTTP {resp.status_code}: {resp.text[:200]}")
-    message = (resp.json().get("choices") or [{}])[0].get("message", {})
-    images = message.get("images") or []
-    if not images:
-        text = (message.get("content") or "no image returned").strip()
-        raise RuntimeError(f"no image returned: {text[:160]}")
-    image_url = images[0].get("image_url", {}).get("url", "")
-    match = re.match(r"^data:image/(\w+);base64,(.+)$", image_url, re.DOTALL)
-    if not match:
-        raise RuntimeError("unexpected image format")
-    return _ext_from_mime(f"image/{match.group(1)}"), base64.b64decode(match.group(2))
-
-
-class ImageGenError(Exception):
-    """Raised for any image-generation failure with a user/model-facing message."""
-
-
-async def _generate_image_file(prompt: str, notebook: str, settings: dict) -> dict:
-    """Generate one image and save it into the notebook's assets folder. Prefers
-    the free-tier Gemini key, falling back to OpenRouter. Shared by the /image
-    endpoint and the generate_image chat tool. Raises ImageGenError on failure."""
-    prompt = (prompt or "").strip()
-    notebook = (notebook or "").strip()
-    if not prompt:
-        raise ImageGenError("An image prompt is required")
-    if not notebook:
-        raise ImageGenError("A notebook is required so the image can be saved next to the note")
-    if not settings["gemini_api_key"] and not settings["openrouter_api_key"]:
-        raise ImageGenError("No image provider configured — add a Gemini or OpenRouter API key in assistant settings")
-
-    notes_root = NOTES_DIR.resolve()
-    notebook_dir = (NOTES_DIR / notebook).resolve()
-    if notebook_dir == notes_root or not notebook_dir.is_relative_to(notes_root) or not notebook_dir.is_dir():
-        raise ImageGenError(f"Notebook not found: {notebook}")
-
-    # `image_model` is the OpenRouter slug; the Gemini API wants it without the
-    # "google/" vendor prefix (e.g. gemini-3.1-flash-lite-image).
-    or_model = settings["image_model"] or DEFAULT_SETTINGS["image_model"]
-    gemini_model = or_model.split("/", 1)[-1] if "/" in or_model else or_model
-
-    # Prefer the free-tier Gemini key; fall back to OpenRouter when Gemini is
-    # unset, rate-limited, or otherwise fails.
-    result, provider, errors = None, "", []
-    if settings["gemini_api_key"]:
-        try:
-            result = await _gemini_image(prompt, gemini_model, settings["gemini_api_key"])
-            provider = "gemini"
-        except Exception as exc:
-            logger.info("Gemini image generation failed, will try OpenRouter: %s", exc)
-            errors.append(f"Gemini: {exc}")
-    if result is None and settings["openrouter_api_key"]:
-        try:
-            result = await _openrouter_image(prompt, or_model, settings["openrouter_api_key"])
-            provider = "openrouter"
-        except Exception as exc:
-            errors.append(f"OpenRouter: {exc}")
-    if result is None:
-        raise ImageGenError("Image generation failed — " + "; ".join(errors))
-
-    ext, data = result
-    filename = f"agent-{time.strftime('%Y%m%d-%H%M%S')}-{os.urandom(2).hex()}.{ext}"
-    assets_dir = notebook_dir / "assets"
-    assets_dir.mkdir(exist_ok=True)
-    (assets_dir / filename).write_bytes(data)
-
-    rel_path = f"assets/{filename}"
-    return {
-        "markdown": f"![{prompt[:60]}]({rel_path})",
-        "rel_path": rel_path,
-        "preview_url": f"/notes/{quote(notebook)}/{rel_path}",
-        "provider": provider,
-        "model": gemini_model if provider == "gemini" else or_model,
-    }
-
-
-@router.post("/image")
-async def agent_image(request: Request):
-    body = await request.json()
-    try:
-        return await _generate_image_file(
-            body.get("prompt") or "", body.get("notebook") or "", _load_settings()
-        )
-    except ImageGenError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc

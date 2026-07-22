@@ -6,9 +6,9 @@
           The text streams straight into the note; Esc cancels.
      ⌘L — talk about it: toggles the chat panel, attaching the current
           selection as context when there is one.
-   Slash commands: /image <prompt> · /chats [text]
-   The assistant searches the web and reads your notes on its own when useful.
-   Chats persist on local disk, indexed by the note they belong to.
+   Slash command: /chats [text]
+   The assistant runs on Google Gemini and reads your notes on its own when
+   useful. Chats persist on local disk, indexed by the note they belong to.
    ════════════════════════════════════════════════════════════ */
 
 (() => {
@@ -25,23 +25,14 @@
     const $btnNew = document.getElementById("assist-new-btn");
     const $btnSettings = document.getElementById("assist-settings-btn");
     const $settings = document.getElementById("assist-settings");
-    const $setUrl = document.getElementById("assist-set-url");
-    const $setModel = document.getElementById("assist-set-model");
-    const $setModelList = document.getElementById("assist-model-list");
-    const $setSerper = document.getElementById("assist-set-serper");
-    const $setOpenrouter = document.getElementById("assist-set-openrouter");
-    const $setOpenrouterModel = document.getElementById("assist-set-openrouter-model");
-    const $setOpenrouterModelList = document.getElementById("assist-openrouter-model-list");
     const $setGemini = document.getElementById("assist-set-gemini");
     const $setGeminiModel = document.getElementById("assist-set-gemini-model");
     const $setGeminiModelList = document.getElementById("assist-gemini-model-list");
-    const $setImageModel = document.getElementById("assist-set-image-model");
     const $settingsSave = document.getElementById("assist-settings-save");
     const $settingsCancel = document.getElementById("assist-settings-cancel");
     const $context = document.getElementById("assist-context");
     const $contextText = document.getElementById("assist-context-text");
     const $contextDel = document.getElementById("assist-context-del");
-    const $providerQuick = document.getElementById("assist-provider-quick");
 
     // Text the user selected in the note and attached with ⌘L. Folded into the
     // next prompt sent to the model, then cleared.
@@ -50,7 +41,7 @@
     // The active chat session. `id` is null until the first message is sent,
     // at which point it is assigned and the session is persisted to disk.
     // `messages` holds only the conversational turns (user + assistant text);
-    // one-off actions (⌘K writing, /image, /chats) are not persisted.
+    // one-off actions (⌘K writing, /chats) are not persisted.
     let currentChat = newSession();
     let busy = false;
 
@@ -99,32 +90,18 @@
         try {
             const r = await fetch("/api/agent/status");
             const data = await r.json();
-            if ($providerQuick && data.provider) $providerQuick.value = data.provider;
             if (data.ready) {
-                // The provider name lives in the dropdown now; show just the model.
                 $status.textContent = data.model ? `● ${data.model}` : "● ready";
                 $status.className = "assist-status ok";
-                $status.title = `${data.provider_label} is configured`;
+                $status.title = "Gemini is configured";
             } else {
                 $status.textContent = "● not configured";
                 $status.className = "assist-status err";
-                $status.title = data.detail || "Open assistant settings to configure a provider.";
+                $status.title = data.detail || "Open assistant settings to add a Gemini API key.";
             }
         } catch {
             $status.textContent = "";
         }
-    }
-
-    // Flip the active provider from the header dropdown (persisted server-side).
-    async function switchProvider(provider) {
-        try {
-            await fetch("/api/agent/settings", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ active_provider: provider }),
-            });
-        } catch { /* keep the dropdown value; refreshStatus will reconcile */ }
-        refreshStatus();
     }
 
     // ── Message rendering ───────────────────────────────────
@@ -140,8 +117,8 @@
         const h = document.createElement("div");
         h.className = "assist-hint";
         h.innerHTML =
-            "Ask anything about your note — the assistant searches the web and reads your other notes when useful.<br>" +
-            "Type <code>/</code> for commands — <code>/image</code> a prompt, or <code>/chats</code> to browse past chats.<br>" +
+            "Ask anything about your note — the assistant reads your other notes when useful.<br>" +
+            "Type <code>/chats</code> to browse this note's past chats.<br>" +
             "<kbd>⌘K</kbd> in the note: completes your selection (or continues where you stopped) · <kbd>⌘L</kbd> chat about the selection";
         $messages.appendChild(h);
     }
@@ -243,34 +220,12 @@
     }
 
     const TOOL_LABELS = {
-        web_search: ["🔍", "Searching the web"],
-        read_page: ["📖", "Reading page"],
         search_notes: ["🗂", "Searching your notes"],
         read_note: ["📄", "Reading note"],
         list_notebooks: ["🗂", "Listing notebooks"],
         list_notes: ["🗂", "Listing notes"],
         create_note: ["📝", "Creating note"],
-        generate_image: ["🎨", "Generating image"],
     };
-
-    // An assistant bubble holding a generated image, with a small provider caption.
-    function addImageBubble(url, alt, providerLabel, model) {
-        const $wrap = document.createElement("div");
-        $wrap.className = "assist-msg assist-assistant assist-image";
-        const $img = document.createElement("img");
-        $img.src = url;
-        $img.alt = alt || "";
-        $wrap.appendChild($img);
-        if (providerLabel) {
-            const $meta = document.createElement("div");
-            $meta.className = "assist-image-meta";
-            $meta.textContent = model ? `via ${providerLabel} · ${model}` : `via ${providerLabel}`;
-            $wrap.appendChild($meta);
-        }
-        $messages.appendChild($wrap);
-        scrollToBottom();
-        return $wrap;
-    }
 
     function addToolLine(name, detail) {
         const $line = document.createElement("div");
@@ -493,12 +448,6 @@
                 if (event.name === "create_note" && bridge() && bridge().refreshLibrary) {
                     bridge().refreshLibrary();
                 }
-            } else if (event.type === "image") {
-                dropThinking();
-                const providerLabel = { gemini: "Gemini (free)", openrouter: "OpenRouter" }[event.provider];
-                addImageBubble(event.url, event.alt, providerLabel, event.model);
-                // The image lives in the note's assets folder; refresh so it shows.
-                if (bridge() && bridge().refreshLibrary) bridge().refreshLibrary();
             } else if (event.type === "error") {
                 dropThinking();
                 addErrorLine(event.detail);
@@ -675,41 +624,6 @@
         }
     }
 
-    async function generateImage(prompt) {
-        const note = bridge() && bridge().getNote();
-        addBubble("user", `/image ${prompt}`);
-        if (!note) {
-            addErrorLine("Open a note first — images are saved into that notebook's assets folder.");
-            return;
-        }
-        setBusy(true);
-        const $line = document.createElement("div");
-        $line.className = "assist-tool";
-        $line.textContent = "🎨 Generating image…";
-        $messages.appendChild($line);
-        scrollToBottom();
-        try {
-            const resp = await fetch("/api/agent/image", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ prompt, notebook: note.notebook }),
-            });
-            const data = await resp.json();
-            if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
-
-            $line.remove();
-            // Caption notes which provider served it, so the free-tier →
-            // OpenRouter fallback is observable.
-            const providerLabel = { gemini: "Gemini (free)", openrouter: "OpenRouter" }[data.provider];
-            addImageBubble(data.preview_url, prompt, providerLabel, data.model);
-        } catch (err) {
-            $line.remove();
-            addErrorLine(err.message);
-        } finally {
-            setBusy(false);
-        }
-    }
-
     async function listSavedChats(query) {
         const note = bridge() && bridge().getNote();
         addBubble("user", query ? `/chats ${query}` : "/chats");
@@ -733,13 +647,9 @@
         $input.value = "";
         hideSlashMenu();
 
-        const stripQuotes = (s) => s.trim().replace(/^"(.*)"$/s, "$1");
-
         let m;
         if ((m = text.match(/^\/chats(?:\s+(.+))?$/s))) {
             listSavedChats((m[1] || "").trim());
-        } else if ((m = text.match(/^\/image\s+(.+)/s))) {
-            generateImage(stripQuotes(m[1]));
         } else {
             sendChat(text, text);
         }
@@ -749,7 +659,6 @@
     // Typing "/" at the start of an empty prompt opens a filterable list of
     // commands. Selecting one drops "/cmd " into the box so args can follow.
     const SLASH_COMMANDS = [
-        { cmd: "/image", desc: "Generate an image into your note's assets" },
         { cmd: "/chats", desc: "Browse this note's past chats" },
     ];
     let slashItems = [];   // currently shown commands
@@ -806,19 +715,6 @@
     }
 
     // ── Settings ────────────────────────────────────────────
-    function selectSettingsTab(provider) {
-        document.querySelectorAll("[data-provider-tab]").forEach(($tab) => {
-            const active = $tab.dataset.providerTab === provider;
-            $tab.classList.toggle("active", active);
-            $tab.setAttribute("aria-selected", active ? "true" : "false");
-        });
-        document.querySelectorAll("[data-provider-pane]").forEach(($pane) => {
-            const active = $pane.dataset.providerPane === provider;
-            $pane.classList.toggle("active", active);
-            $pane.hidden = !active;
-        });
-    }
-
     function fillModelList($list, models) {
         $list.innerHTML = "";
         for (const model of models || []) {
@@ -828,22 +724,15 @@
         }
     }
 
-    async function loadProviderModels(provider) {
+    async function loadGeminiModels() {
         try {
-            const body = {};
-            if (provider === "lmstudio") body.lmstudio_url = $setUrl.value.trim();
-            if (provider === "openrouter") body.api_key = $setOpenrouter.value.trim();
-            if (provider === "gemini") body.api_key = $setGemini.value.trim();
-            const response = await fetch(`/api/agent/models/${provider}`, {
+            const response = await fetch("/api/agent/models", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(body),
+                body: JSON.stringify({ api_key: $setGemini.value.trim() }),
             });
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            const data = await response.json();
-            if (provider === "lmstudio") fillModelList($setModelList, data.models);
-            if (provider === "openrouter") fillModelList($setOpenrouterModelList, data.models);
-            if (provider === "gemini") fillModelList($setGeminiModelList, data.models);
+            fillModelList($setGeminiModelList, (await response.json()).models);
         } catch {
             /* Model IDs can still be entered manually. */
         }
@@ -852,40 +741,18 @@
     async function openSettings() {
         try {
             const settings = await fetch("/api/agent/settings").then((r) => r.json());
-            $setUrl.value = settings.lmstudio_url;
-            $setModel.value = settings.lmstudio_model;
-            $setOpenrouterModel.value = settings.openrouter_model;
             $setGeminiModel.value = settings.gemini_model;
-            $setImageModel.value = settings.image_model;
-            $setSerper.value = "";
-            $setSerper.placeholder = settings.serper_api_key_set ? "•••••• (saved — leave blank to keep)" : "";
-            $setOpenrouter.value = "";
-            $setOpenrouter.placeholder = settings.openrouter_api_key_set ? "•••••• (saved — leave blank to keep)" : "";
             $setGemini.value = "";
             $setGemini.placeholder = settings.gemini_api_key_set ? "•••••• (saved — leave blank to keep)" : "";
-            // Open the tab for whichever provider currently answers, but the
-            // active provider itself is chosen via the header dropdown.
-            selectSettingsTab(settings.active_provider || "lmstudio");
-            loadProviderModels("lmstudio");
-            loadProviderModels("openrouter");
-            loadProviderModels("gemini");
+            loadGeminiModels();
         } catch { /* show form with whatever we have */ }
         $settings.hidden = false;
     }
 
     async function saveSettings() {
         const body = {
-            // The active provider is owned by the header dropdown; keep it in sync
-            // so saving credentials never silently changes which provider answers.
-            active_provider: $providerQuick ? $providerQuick.value : "lmstudio",
-            lmstudio_url: $setUrl.value.trim() || "http://localhost:1234/v1",
-            lmstudio_model: $setModel.value.trim(),
-            openrouter_model: $setOpenrouterModel.value.trim(),
-            gemini_model: $setGeminiModel.value.trim(),
-            image_model: $setImageModel.value.trim() || "google/gemini-3.1-flash-lite-image",
+            gemini_model: $setGeminiModel.value.trim() || "gemini-2.5-flash",
         };
-        if ($setSerper.value.trim()) body.serper_api_key = $setSerper.value.trim();
-        if ($setOpenrouter.value.trim()) body.openrouter_api_key = $setOpenrouter.value.trim();
         if ($setGemini.value.trim()) body.gemini_api_key = $setGemini.value.trim();
         try {
             const r = await fetch("/api/agent/settings", {
@@ -911,19 +778,8 @@
     });
     $settingsCancel.addEventListener("click", () => { $settings.hidden = true; });
     $settingsSave.addEventListener("click", saveSettings);
-    document.querySelectorAll("[data-provider-tab]").forEach(($tab) => {
-        $tab.addEventListener("click", () => {
-            selectSettingsTab($tab.dataset.providerTab);
-            loadProviderModels($tab.dataset.providerTab);
-        });
-    });
-    $setModel.addEventListener("focus", () => loadProviderModels("lmstudio"));
-    $setOpenrouterModel.addEventListener("focus", () => loadProviderModels("openrouter"));
-    $setGeminiModel.addEventListener("focus", () => loadProviderModels("gemini"));
+    $setGeminiModel.addEventListener("focus", loadGeminiModels);
     $send.addEventListener("click", () => handleInput($input.value));
-    if ($providerQuick) {
-        $providerQuick.addEventListener("change", () => switchProvider($providerQuick.value));
-    }
 
     $input.addEventListener("input", updateSlashMenu);
 
