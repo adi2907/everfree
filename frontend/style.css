@@ -1378,6 +1378,17 @@ mark {
     cursor: pointer;
 }
 
+/* Blocked sync is a stopped backup, not a passing warning — border in the
+   danger colour so it reads differently from the conflict notice. */
+.blocked-banner {
+    border-color: var(--danger);
+}
+.blocked-banner #blocked-retry {
+    background: transparent;
+    color: var(--text-primary);
+    border: 1px solid var(--border-light);
+}
+
 /* ════════════════════════════════════════════════════════════
    Calm library layout — light by default, adaptive with AI
    ════════════════════════════════════════════════════════════ */

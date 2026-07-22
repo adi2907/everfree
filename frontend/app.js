@@ -89,10 +89,12 @@
         offline: ["warn", "Offline — changes saved locally"],
         conflict: ["warn", "Synced — review conflict copies"],
         error: ["error", "Sync issue — retrying"],
+        blocked: ["error", "Not syncing — action needed"],
         local: ["off", "Local only"],
     };
 
     let lastConflictCount = 0;
+    let lastBlockedDetail = null;
 
     function setSyncStatus(state, text) {
         $syncIndicator.className = "sync-dot sync-" + state;
@@ -106,6 +108,18 @@
         }
         const status = data.status || "idle";
         const [dot, label] = SYNC_LABELS[status] || SYNC_LABELS.idle;
+
+        // A blocked sync will never clear on its own, so it takes priority over
+        // the "saved locally" reassurance and states the fault in full.
+        if (status === "blocked") {
+            setSyncStatus(dot, label);
+            $syncText.title = data.detail || "";
+            showBlockedBanner(data);
+            return;
+        }
+        hideBlockedBanner();
+        $syncText.title = "";
+
         let text = data.pending && status !== "syncing" ? "Saved locally" : label;
         if (status === "idle" && !data.remote) {
             setSyncStatus("warn", "Git repo (no remote)");
@@ -172,6 +186,55 @@
     function hideConflictBanner() {
         const $banner = document.getElementById("conflict-banner");
         if ($banner) $banner.remove();
+    }
+
+    // ── Blocked-sync banner ─────────────────────────────────
+    // A revoked sign-in or a remote we refuse to sync stops backups until the
+    // user acts. The old UI showed "Sync issue — retrying" and dropped the
+    // explanation, so a stalled backup looked like a passing hiccup. This says
+    // what broke, that the notes are still safe locally, and how to fix it.
+    const BLOCKED_ACTIONS = {
+        reauth: ["Sign in again", "/setup"],
+        remote: ["Open setup", "/setup"],
+    };
+
+    function showBlockedBanner(data) {
+        const detail = data.detail || "Sync is blocked.";
+        // Only rebuild when the message changes, so the button stays clickable.
+        if (lastBlockedDetail === detail && document.getElementById("blocked-banner")) return;
+        lastBlockedDetail = detail;
+
+        let $banner = document.getElementById("blocked-banner");
+        if (!$banner) {
+            $banner = document.createElement("div");
+            $banner.id = "blocked-banner";
+            $banner.className = "conflict-banner blocked-banner";
+            document.body.appendChild($banner);
+        }
+        const [actionLabel, actionHref] = BLOCKED_ACTIONS[data.action] || [];
+        const actionButton = actionLabel
+            ? `<button id="blocked-action">${escapeHtml(actionLabel)}</button>`
+            : "";
+        $banner.innerHTML = `
+            <span>⛔ Not syncing to GitHub. ${escapeHtml(detail)}
+            Your notes are still saved on this Mac.</span>
+            ${actionButton}
+            <button id="blocked-retry">Retry</button>`;
+
+        if (actionLabel) {
+            $banner.querySelector("#blocked-action").addEventListener("click", () => {
+                window.location.href = actionHref;
+            });
+        }
+        $banner.querySelector("#blocked-retry").addEventListener("click", () => {
+            triggerSync().catch(() => {});
+        });
+    }
+
+    function hideBlockedBanner() {
+        const $banner = document.getElementById("blocked-banner");
+        if ($banner) $banner.remove();
+        lastBlockedDetail = null;
     }
 
     // ── Load notebooks ──────────────────────────────────────

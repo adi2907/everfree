@@ -453,19 +453,43 @@ _sync_stop = threading.Event()
 _sync_thread: threading.Thread | None = None
 
 sync_state = {
-    "status": "idle",      # idle | syncing | offline | conflict | error
+    "status": "idle",      # idle | syncing | offline | conflict | error | blocked
     "detail": "",
     "online": True,
     "pending": False,      # local changes not yet pushed
     "last_synced": None,   # epoch seconds
     "conflicts": [],       # note paths whose remote copy was preserved
     "remote": None,
+    # Set only while status == "blocked": which fix the user has to make.
+    # "reauth" (sign in again) | "remote" (repository is not the fixed one).
+    "action": None,
 }
 
 
 def _set_sync_state(**kwargs) -> None:
     with _sync_lock:
         sync_state.update(kwargs)
+
+
+def _set_sync_blocked(action: str, detail: str) -> None:
+    """Record a fault that retrying cannot clear.
+
+    A revoked token or a remote pointing somewhere other than the fixed
+    repository fails identically on every future cycle. Reporting those as a
+    transient "retrying" error hides a stalled backup behind a hopeful message,
+    so they get their own terminal state plus the fix the user has to make.
+    """
+    _set_sync_state(
+        status="blocked",
+        online=True,
+        action=action,
+        detail=detail.strip()[:300] or "Sync is blocked.",
+    )
+
+
+def _sync_is_blocked() -> bool:
+    with _sync_lock:
+        return sync_state.get("status") == "blocked"
 
 
 def request_sync(*, immediate: bool = False) -> None:
@@ -498,6 +522,32 @@ def _is_network_error(stderr: str) -> bool:
     return any(n in lowered for n in needles)
 
 
+def _is_auth_error(stderr: str) -> bool:
+    """True when GitHub rejected our credentials rather than the network failing.
+
+    A revoked or expired token still exists in the vault, so the token lookup
+    succeeds and Git is the first thing to notice. Git reports that as an HTTP
+    401/403, whose message contains "unable to access" — which `_is_network_error`
+    also matches. This has to be tested first or a dead token reads as "offline"
+    and the user is told to wait for a reconnection that will not help.
+    """
+    lowered = (stderr or "").lower()
+    needles = (
+        "authentication failed", "invalid username or password",
+        "invalid username or token", "bad credentials",
+        "could not read username", "terminal prompts disabled",
+        "error: 401", "error: 403", "http basic: access denied",
+    )
+    return any(n in lowered for n in needles)
+
+
+def _is_missing_repo_error(stderr: str) -> bool:
+    """True when the remote repository is gone, renamed, or invisible to us."""
+    lowered = (stderr or "").lower()
+    needles = ("repository not found", "error: 404", "does not appear to be a git repository")
+    return any(n in lowered for n in needles)
+
+
 def _resolve_merge_conflicts() -> list[str]:
     """After a conflicted merge, keep the local version of each note and save
     the remote version alongside as a "conflicted copy" so nothing is lost.
@@ -527,18 +577,42 @@ def _resolve_merge_conflicts() -> list[str]:
     return saved
 
 
+def _classify_git_failure(stderr: str) -> tuple[str, str] | None:
+    """Map git stderr to a ("action", "message") pair when the fault is terminal."""
+    if _is_auth_error(stderr):
+        return (
+            "reauth",
+            "GitHub rejected the saved sign-in. Sign in again to resume syncing.",
+        )
+    if _is_missing_repo_error(stderr):
+        return (
+            "remote",
+            f"The {REPOSITORY_NAME} repository is no longer reachable on GitHub. "
+            "It may have been renamed, deleted, or had access revoked.",
+        )
+    return None
+
+
 def _sync_cycle(push: bool) -> None:
-    """One pull(+optional commit/push) pass. Updates sync_state; swallows
-    transient network errors by flipping to an 'offline' state to retry later."""
+    """One pull(+optional commit/push) pass. Updates sync_state; transient
+    network errors flip to 'offline' to retry later, while credential and
+    repository faults flip to 'blocked' because retrying cannot clear them."""
     if not _is_git_repo():
-        _set_sync_state(status="idle", online=True, pending=False, detail="Local only")
+        _set_sync_state(status="idle", online=True, pending=False,
+                        action=None, detail="Local only")
         return
 
-    _set_sync_state(status="syncing", detail="Syncing…")
+    _set_sync_state(status="syncing", action=None, detail="Syncing…")
     try:
         # 1. Fetch remote (network) without holding the working-tree lock.
         fetch = _git("fetch", "origin", SYNC_BRANCH, check=False)
         if fetch.returncode != 0:
+            # Terminal faults are checked before the network test: a rejected
+            # token also matches "unable to access" and would read as offline.
+            terminal = _classify_git_failure(fetch.stderr)
+            if terminal:
+                _set_sync_blocked(*terminal)
+                return
             if _is_network_error(fetch.stderr):
                 _set_sync_state(status="offline", online=False,
                                 detail="Offline — will sync when reconnected")
@@ -587,6 +661,10 @@ def _sync_cycle(push: bool) -> None:
         if push and ahead > 0:
             pushed = _git("push", "origin", SYNC_BRANCH, check=False)
             if pushed.returncode != 0:
+                terminal = _classify_git_failure(pushed.stderr)
+                if terminal:
+                    _set_sync_blocked(*terminal)
+                    return
                 if _is_network_error(pushed.stderr):
                     _set_sync_state(status="offline", online=False,
                                     detail="Offline — will sync when reconnected")
@@ -610,6 +688,7 @@ def _sync_cycle(push: bool) -> None:
             sync_state.update({
                 "status": "conflict" if (sync_state.get("conflicts")) else "idle",
                 "online": True,
+                "action": None,
                 "pending": pending,
                 "last_synced": time.time(),
                 "remote": remote,
@@ -619,6 +698,14 @@ def _sync_cycle(push: bool) -> None:
                     "Saved locally" if pending else "Synced to GitHub"
                 ),
             })
+    except CredentialStoreError as exc:
+        # Token revoked, or no readable credential store on this machine.
+        logger.warning("Sync blocked on credentials: %s", exc)
+        _set_sync_blocked("reauth", str(exc))
+    except RepositoryAccessError as exc:
+        # Origin is not the fixed repository, or belongs to another account.
+        logger.warning("Sync blocked on repository: %s", exc)
+        _set_sync_blocked("remote", str(exc))
     except subprocess.TimeoutExpired:
         _set_sync_state(status="offline", online=False, detail="Sync timed out — will retry")
     except subprocess.CalledProcessError as exc:
@@ -638,9 +725,15 @@ def _sync_worker_loop() -> None:
             _sync_now.clear()
             if _sync_stop.is_set():
                 break
+            # An explicit sync always retries, so fixing the cause (signing in
+            # again, repointing the remote) clears a blocked state on demand.
             _sync_cycle(push=True)
         else:
             # Periodic background pull to pick up edits from other devices.
+            # Skipped while blocked: the fault is terminal, so re-running it
+            # every interval only rewrites the same message.
+            if _sync_is_blocked():
+                continue
             _sync_cycle(push=False)
 
 
@@ -1541,6 +1634,18 @@ async def root():
         return HTMLResponse((FRONTEND_DIR / "setup.html").read_text(encoding="utf-8"))
 
 
+@app.get("/setup")
+async def setup_page():
+    """Always serve the sign-in wizard.
+
+    A revoked token leaves `github_auth_state` reading "authorized" until
+    something tries to use it, so `/` would bounce a user who needs to
+    re-authorize straight back into the app. This gives the sync banner a
+    destination that does not depend on that stale flag.
+    """
+    return HTMLResponse((FRONTEND_DIR / "setup.html").read_text(encoding="utf-8"))
+
+
 # ── Helpers ──────────────────────────────────────────────────
 def _is_within(base: Path, target: Path) -> bool:
     """True if `target` is strictly inside `base` (not equal to it). Uses path
@@ -1595,7 +1700,16 @@ async def sync_status():
         git_bin = shutil.which("git", path=env["PATH"]) or "git"
         try:
             state["remote"] = _prepare_origin_remote(git_bin, env, str(NOTES_DIR))
-        except (RepositoryAccessError, subprocess.SubprocessError):
+        except RepositoryAccessError as exc:
+            # Reporting this as a missing remote sends the user looking for a
+            # setup step; the remote exists, it just is not one we will sync.
+            state["remote"] = None
+            if state.get("status") != "blocked":
+                _set_sync_blocked("remote", str(exc))
+                with _sync_lock:
+                    state = dict(sync_state)
+                state["remote"] = None
+        except subprocess.SubprocessError:
             state["remote"] = None
     state["git"] = True
     return state
