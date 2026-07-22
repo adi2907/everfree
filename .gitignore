@@ -11,3 +11,6 @@ env/
 .env*.local
 .antigravity*
 design/
+
+# Agent worktrees live inside the repo; they are checkouts, not content.
+.claude/worktrees/

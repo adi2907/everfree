@@ -38,6 +38,7 @@
     const $btnNewNotebook = document.getElementById("btn-new-notebook");
     const $btnTheme = document.getElementById("btn-theme");
     const $btnSync = document.getElementById("btn-sync");
+    const $btnSignOut = document.getElementById("btn-signout");
     const $syncIndicator = document.getElementById("sync-indicator");
     const $syncText = document.getElementById("sync-text");
     const $searchInput = document.getElementById("search-input");
@@ -154,6 +155,35 @@
             setSyncStatus("error", "Sync failed");
             console.error("Sync error:", err);
         }
+    }
+
+    // Hand the GitHub token back. Notes stay on disk either way, but work that
+    // has not reached GitHub yet cannot be pushed until the user signs back in,
+    // so that case is called out rather than discovered later.
+    async function signOut() {
+        if (isDirty) {
+            try { await saveNote(); } catch { /* fall through to the warning */ }
+        }
+
+        let pending = false;
+        try {
+            const status = await API.get("/api/sync/status");
+            pending = Boolean(status && (status.pending || status.status === "offline"));
+        } catch { /* treat an unreachable status as nothing pending */ }
+
+        const warning = pending
+            ? "\n\nSome changes have not reached GitHub yet. They stay on this Mac, but cannot be pushed until you sign in again."
+            : "";
+        if (!confirm(`Sign out of GitHub?\n\nYour notes stay on this Mac and in Git history.${warning}`)) return;
+
+        try {
+            await API.post("/api/auth/github/logout", {});
+        } catch (err) {
+            console.error("Sign-out failed:", err);
+            alert("Could not sign out. Please try again.");
+            return;
+        }
+        window.location.href = "/setup";
     }
 
     // ── Conflict banner ─────────────────────────────────────
@@ -955,6 +985,7 @@
     $btnSave.addEventListener("click", () => saveNote({ sync: true }).catch(() => {}));
     $btnDeleteNote.addEventListener("click", deleteNote);
     $btnSync.addEventListener("click", triggerSync);
+    if ($btnSignOut) $btnSignOut.addEventListener("click", signOut);
     // Phone single-pane: return from the editor to the note list.
     const $btnMobileBack = document.getElementById("btn-mobile-back");
     if ($btnMobileBack) {

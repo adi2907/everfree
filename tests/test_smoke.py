@@ -98,6 +98,72 @@ class SmokeTests(unittest.TestCase):
         again = self.client.post("/api/notebooks", json={"name": "Dup"})
         self.assertEqual(again.status_code, 409)
 
+    # ── Sign-out ────────────────────────────────────────────
+    def test_sign_out_clears_credentials_without_touching_notes(self):
+        # The real endpoint deletes the OS keyring entry and the auth file, so
+        # both are redirected here. Without this the test suite would sign the
+        # developer running it out of their own installation.
+        cleared = []
+
+        class _FakeStore:
+            def clear(self):
+                cleared.append(True)
+
+        note = Path(self._tmp.name) / "Keep" / "note.md"
+        note.parent.mkdir(parents=True)
+        note.write_text("# Keep me\n", encoding="utf-8")
+
+        original_store, original_auth_file = app.GITHUB_CREDENTIALS, app.AUTH_FILE
+        app.GITHUB_CREDENTIALS = _FakeStore()
+        app.AUTH_FILE = Path(self._tmp.name) / "auth.json"
+        app.AUTH_FILE.write_text("{}", encoding="utf-8")
+        app.github_auth_state.update({"access_token": "gho_x", "username": "octocat",
+                                      "status": "authorized"})
+        try:
+            response = self.client.post("/api/auth/github/logout")
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["status"], "signed_out")
+            self.assertTrue(cleared, "the credential store was never cleared")
+            self.assertFalse(app.AUTH_FILE.exists())
+
+            # The in-memory copy is checked before the vault, so leaving it set
+            # would keep the running process authorized after signing out.
+            self.assertIsNone(app.github_auth_state["access_token"])
+            self.assertIsNone(app.github_auth_state["username"])
+            self.assertEqual(app.github_auth_state["status"], "idle")
+
+            # Signing out hands back a token; it does not discard work.
+            self.assertTrue(note.exists())
+            self.assertIn("Keep me", note.read_text(encoding="utf-8"))
+
+            self.assertEqual(app.sync_state["status"], "blocked")
+            self.assertEqual(app.sync_state["action"], "reauth")
+        finally:
+            app.GITHUB_CREDENTIALS = original_store
+            app.AUTH_FILE = original_auth_file
+            app.github_auth_state.update({"access_token": None, "username": None,
+                                          "status": "idle"})
+            app._set_sync_state(status="idle", action=None, detail="")
+
+    def test_sign_out_survives_an_unavailable_credential_store(self):
+        class _BrokenStore:
+            def clear(self):
+                raise app.CredentialStoreError("vault locked")
+
+        original_store, original_auth_file = app.GITHUB_CREDENTIALS, app.AUTH_FILE
+        app.GITHUB_CREDENTIALS = _BrokenStore()
+        app.AUTH_FILE = Path(self._tmp.name) / "auth.json"
+        try:
+            response = self.client.post("/api/auth/github/logout")
+            # A locked vault must not strand the user signed in.
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertIn("vault locked", " ".join(response.json()["problems"]))
+            self.assertIsNone(app.github_auth_state["access_token"])
+        finally:
+            app.GITHUB_CREDENTIALS = original_store
+            app.AUTH_FILE = original_auth_file
+            app._set_sync_state(status="idle", action=None, detail="")
+
     def test_path_traversal_is_refused(self):
         response = self.client.get("/api/notebooks/..%2F..%2Fetc/notes")
         self.assertIn(response.status_code, (400, 403, 404))

@@ -957,6 +957,48 @@ async def github_auth_status():
     }
 
 
+@app.post("/api/auth/github/logout")
+async def github_logout():
+    """Forget this machine's GitHub credentials.
+
+    Notes are deliberately left on disk and in Git history — signing out is
+    about handing back the token, not discarding work. Without this, an
+    uninstall leaves a live `repo`-scoped token in the OS vault with no way
+    for the user to withdraw it.
+    """
+    problems: list[str] = []
+    try:
+        GITHUB_CREDENTIALS.clear()
+    except CredentialStoreError as exc:
+        # The vault being unreachable must not strand the user signed in;
+        # continue clearing everything else and report it.
+        problems.append(str(exc))
+
+    # The in-memory copy is consulted before the vault, so a running process
+    # would keep using the token that was just deleted.
+    with _github_token_lock:
+        github_auth_state.update({
+            "access_token": None,
+            "repository_id": None,
+            "username": None,
+            "status": "idle",
+            "error": None,
+            "user_code": None,
+            "verification_uri": None,
+        })
+
+    try:
+        AUTH_FILE.unlink(missing_ok=True)
+    except OSError as exc:
+        problems.append(str(exc))
+
+    # Say why sync stopped now, rather than letting the next cycle discover it.
+    _set_sync_blocked("reauth", "Signed out. Sign in again to resume syncing to GitHub.")
+
+    logger.info("Signed out of GitHub%s", f" with problems: {problems}" if problems else "")
+    return {"status": "signed_out", "problems": problems}
+
+
 # ══════════════════════════════════════════════════════════════
 #  EVERNOTE AUTH + SYNC
 # ══════════════════════════════════════════════════════════════
