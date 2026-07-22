@@ -13,33 +13,33 @@ const NOTE_CONTEXT_LIMIT = 8000;
 const MAX_TOOL_ROUNDS = 8;
 const DEFAULT_IMAGE_MODEL = "google/gemini-3.1-flash-lite-image";
 
-const CHAT_SYSTEM_PROMPT = `You are the writing assistant built into EverFree, a Markdown note-taking app.
-The user's current note may be provided below as context — use it to understand what they are working on, but do EXACTLY what the user asks and nothing more. Never continue, extend, rewrite, or add new sections/paragraphs/list items to the note unless the user explicitly asks you to write or continue it. If they ask a question, answer it; if they ask for an image, give them the image.
+// ── Prompts ─────────────────────────────────────────────────
+// The prompt text is shared with the desktop assistant (server/agent.py) and
+// lives in exactly one place: prompts.json, next to this file. Static require
+// so Vercel traces it into the function bundle.
+const PROMPTS = require("./prompts.json");
 
-Think before you act. Decide whether a request is best served from the note in front of you or from the web, then use tools to gather what you need before replying.
+// Web and mobile run on Vercel with no filesystem: the user's notes aren't on
+// the box, so the notes tools and create_note are absent, and a generated image
+// comes back as a data URL rather than a file saved beside the note. Desktop
+// assembles the same pieces with those parts — see _build_chat_prompt in
+// server/agent.py.
+function buildChatPrompt() {
+    const chat = PROMPTS.chat;
+    const t = chat.tools;
+    const bullets = [t.web, t.image + t.image_tail.web];
+    return [
+        chat.intro,
+        chat.think.web,
+        chat.tools_header + "\n" + bullets.join("\n"),
+        chat.language_rule,
+        chat.style,
+    ].join("\n\n");
+}
 
-Tools:
-- web_search (Google) then read_page — for external facts. Read the 2-3 most promising results before answering, and end such a passage with a "Sources:" line of Markdown links.
-- generate_image — whenever the user asks for an image, illustration, diagram, or picture. Write a specific, detailed prompt grounded in the actual subject of the note: name the real people, companies, products, places, and setting involved instead of a generic abstraction. NEVER write a Markdown image link from your own imagination — that produces a broken link. Call generate_image, then reply with a one-line caption only.
-
-When the user's message includes a selected excerpt from their note, respond in the language of that excerpt unless they ask otherwise — a Hindi excerpt gets a Hindi rewrite.
-
-Reply with clean Markdown and no preamble ("Here is...", "Sure,") or commentary about what you did.`;
-
-const CONTINUE_SYSTEM_PROMPT = `You are the writing assistant built into EverFree, a Markdown note-taking app.
-Continue the user's note from exactly where it stops. If the last sentence is unfinished, finish it, then add at most one or two short sentences in the same voice, tone, and formatting. Do not keep expanding the note.
-Write in the same language as the note. If the note is in Hindi, continue in Hindi; if it mixes languages, keep the same mix. Never switch language.
-Reply with the continuation text only — no preamble, no quotes, and do not repeat any of the existing text.`;
-
-const COMPLETE_SYSTEM_PROMPT = `You are the writing assistant built into EverFree, a Markdown note-taking app.
-The user selected a passage from their note and asked you to complete it. Pick up exactly where the selection stops and bring the thought to a natural close.
-Rules:
-- Write in the SAME LANGUAGE as the selection. If the selection is in Hindi, continue in Hindi; if it mixes languages, keep the same mix. Never switch to English unless the selection is in English.
-- Match the selection's voice, tone, tense, and formatting: continue prose as prose. Continue a list as list items — each new item on its own line, starting with the same marker followed by a space (e.g. "- ").
-- If the last sentence is unfinished, finish it first.
-- Stay inside the selected block: complete the paragraph or list, never start new sections or headings.
-- Keep it short — usually one to three sentences (or two or three list items), just enough to complete the thought.
-Reply with the continuation text only — no preamble, no quotes, no code fences, and do not repeat any of the selected text.`;
+const CHAT_SYSTEM_PROMPT = buildChatPrompt();
+const CONTINUE_SYSTEM_PROMPT = PROMPTS["continue"];   // reserved word — bracket access
+const COMPLETE_SYSTEM_PROMPT = PROMPTS.complete;
 
 // ── Tool schemas (OpenAI function-calling shape) ─────────────
 const TOOLS = [
