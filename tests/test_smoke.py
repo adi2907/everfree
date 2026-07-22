@@ -164,6 +164,14 @@ class SmokeTests(unittest.TestCase):
             app.AUTH_FILE = original_auth_file
             app._set_sync_state(status="idle", action=None, detail="")
 
+    def test_static_assets_must_be_revalidated(self):
+        # A cached script paired with an updated backend makes new features
+        # render but do nothing, which reads as "the feature is broken".
+        response = self.client.get("/static/app.js")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers.get("cache-control"), "no-cache")
+        self.assertTrue(response.headers.get("etag"), "revalidation needs an ETag")
+
     def test_path_traversal_is_refused(self):
         response = self.client.get("/api/notebooks/..%2F..%2Fetc/notes")
         self.assertIn(response.status_code, (400, 403, 404))

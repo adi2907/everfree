@@ -2186,4 +2186,24 @@ async def serve_note_asset(file_path: str):
 
 
 # ── Static assets ────────────────────────────────────────────
-app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
+class _RevalidatingStaticFiles(StaticFiles):
+    """Serve the bundled UI with revalidation always required.
+
+    Without an explicit header browsers fall back to heuristic caching, which
+    lets an updated app pair a newly restarted backend with a script the
+    browser cached before the update. Whatever changed then silently does
+    nothing — the markup is fresh because it comes from a route, while the
+    behaviour behind it is stale.
+
+    "no-cache" still caches; it just forces an ETag revalidation first, which
+    costs nothing when the file is on local disk and answers 304 when
+    unchanged.
+    """
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
+app.mount("/static", _RevalidatingStaticFiles(directory=str(FRONTEND_DIR)), name="static")
