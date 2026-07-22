@@ -683,7 +683,20 @@ if os.environ.get("RESOURCEPATH"):
 else:
     PROMPTS_FILE = Path(__file__).resolve().parent.parent / "web" / "lib" / "prompts.json"
 
-_PROMPTS = json.loads(PROMPTS_FILE.read_text(encoding="utf-8"))
+try:
+    _PROMPTS = json.loads(PROMPTS_FILE.read_text(encoding="utf-8"))
+    _PROMPTS_ERROR = None
+except (OSError, ValueError) as exc:
+    # This module is imported by server.app at startup, so raising here would
+    # stop EverFree from launching at all — notes, sync and every other feature
+    # taken down by one missing data file. A bundle that shipped without
+    # prompts.json should cost the user the assistant, nothing more.
+    _PROMPTS = None
+    _PROMPTS_ERROR = f"{PROMPTS_FILE}: {exc}"
+    logging.getLogger("everfree.agent").error(
+        "Assistant prompts could not be loaded (%s); the assistant is disabled.",
+        _PROMPTS_ERROR,
+    )
 
 
 def _build_chat_prompt(prompts: dict) -> str:
@@ -708,9 +721,25 @@ def _build_chat_prompt(prompts: dict) -> str:
     ])
 
 
-CHAT_SYSTEM_PROMPT = _build_chat_prompt(_PROMPTS)
-CONTINUE_SYSTEM_PROMPT = _PROMPTS["continue"]
-COMPLETE_SYSTEM_PROMPT = _PROMPTS["complete"]
+if _PROMPTS is None:
+    CHAT_SYSTEM_PROMPT = CONTINUE_SYSTEM_PROMPT = COMPLETE_SYSTEM_PROMPT = None
+else:
+    CHAT_SYSTEM_PROMPT = _build_chat_prompt(_PROMPTS)
+    CONTINUE_SYSTEM_PROMPT = _PROMPTS["continue"]
+    COMPLETE_SYSTEM_PROMPT = _PROMPTS["complete"]
+
+
+def _require_prompts() -> None:
+    """Refuse assistant requests when the prompt file is unavailable.
+
+    Sending an empty system prompt would be worse than refusing: the model
+    still answers, just without any of the rules the prompts encode.
+    """
+    if _PROMPTS is None:
+        raise HTTPException(
+            status_code=503,
+            detail="The assistant is unavailable: its prompt file could not be loaded.",
+        )
 
 
 # ── Agent loop ───────────────────────────────────────────────
@@ -1157,6 +1186,7 @@ def _ndjson(event: dict) -> str:
 
 @router.post("/chat")
 async def agent_chat(request: Request):
+    _require_prompts()
     body = await request.json()
     mode = body.get("mode", "chat")
     note = body.get("note") or {}

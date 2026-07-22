@@ -164,6 +164,29 @@ class SmokeTests(unittest.TestCase):
             app.AUTH_FILE = original_auth_file
             app._set_sync_state(status="idle", action=None, detail="")
 
+    def test_missing_prompt_file_disables_the_assistant_not_the_app(self):
+        # server.agent is imported by server.app at startup, so a prompt file
+        # that failed to make it into the bundle must not take the whole
+        # application down with it. Run in a subprocess: the module is already
+        # imported in this process with its prompts intact.
+        import subprocess
+        import sys
+
+        probe = (
+            "import server.agent as ag;"
+            "assert ag._PROMPTS is None, 'prompts should be unavailable';"
+            "assert ag.CHAT_SYSTEM_PROMPT is None;"
+            "print('imported')"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", probe],
+            cwd=str(Path(__file__).resolve().parent.parent),
+            env={**os.environ, "RESOURCEPATH": "/nonexistent-everfree-bundle"},
+            capture_output=True, text=True, timeout=60,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("imported", result.stdout)
+
     def test_static_assets_must_be_revalidated(self):
         # A cached script paired with an updated backend makes new features
         # render but do nothing, which reads as "the feature is broken".
