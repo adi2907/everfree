@@ -14,21 +14,24 @@
     const LS_LIGHT_THEME_MIGRATED = "everfree-light-theme-migrated";
     const LS_SIDEBAR_WIDTH = "everfree-sidebar-width";
     const LS_NOTE_BROWSER_WIDTH = "everfree-note-browser-width";
-    // Note metadata (modified time + display title) keyed by Git blob SHA. This
-    // holds no credentials — see ADR 0001: caching metadata durably is fine,
-    // caching the OAuth token is not. It stays in sessionStorage.
+    // Note metadata (modified time + display title) keyed by Git blob SHA.
     const LS_NOTE_META = "everfree-note-meta-v1";
     const DEFAULT_REPO = "everfree-notes";
 
-    // Migrate away from the legacy broad OAuth token. Authentication data is
-    // tab-scoped; preferences such as theme remain in localStorage.
-    [AUTH_TOKEN_KEY, AUTH_USER_KEY, AUTH_REPO_KEY].forEach(key => localStorage.removeItem(key));
+    // A session lasts until the user signs out, so authentication data is stored
+    // durably rather than per tab. See ADR 0001: this trades XSS exposure of a
+    // resting token for not re-running the device flow on every browser start.
+    // Aliased so the store is one line to change if that trade is revisited.
+    const authStore = localStorage;
 
     // ── State ───────────────────────────────────────────────
-    let token = sessionStorage.getItem(AUTH_TOKEN_KEY) || null;
-    let user = sessionStorage.getItem(AUTH_USER_KEY) || null;
-    let repoFull = sessionStorage.getItem(AUTH_REPO_KEY) || null; // "owner/everfree-notes"
-    let tokenExpiresAt = Number(sessionStorage.getItem(AUTH_EXPIRES_KEY) || 0);
+    let token = authStore.getItem(AUTH_TOKEN_KEY) || null;
+    let user = authStore.getItem(AUTH_USER_KEY) || null;
+    let repoFull = authStore.getItem(AUTH_REPO_KEY) || null; // "owner/everfree-notes"
+    // 0 means "no expiry advertised", not "expired". EverFree's OAuth App issues
+    // non-expiring gho_ tokens, so GitHub omits expires_in from the device-flow
+    // response; a stored "NaN" from before that was handled must read as 0.
+    let tokenExpiresAt = Number(authStore.getItem(AUTH_EXPIRES_KEY)) || 0;
     let defaultBranch = "main";
 
     let notebooks = [];
@@ -196,9 +199,9 @@
 
                 if (data.access_token) {
                     token = data.access_token;
-                    tokenExpiresAt = Date.now() + (Number(data.expires_in) * 1000);
-                    sessionStorage.setItem(AUTH_TOKEN_KEY, token);
-                    sessionStorage.setItem(AUTH_EXPIRES_KEY, String(tokenExpiresAt));
+                    tokenExpiresAt = expiryFromResponse(data);
+                    authStore.setItem(AUTH_TOKEN_KEY, token);
+                    authStore.setItem(AUTH_EXPIRES_KEY, String(tokenExpiresAt));
                     await fetchUserAndProceed();
                 }
             } catch (err) {
@@ -206,6 +209,12 @@
             }
         };
         devicePollTimer = setTimeout(tick, interval);
+    }
+
+    // Returns an absolute expiry, or 0 when GitHub advertises none.
+    function expiryFromResponse(data) {
+        const seconds = Number(data.expires_in);
+        return Number.isFinite(seconds) && seconds > 0 ? Date.now() + seconds * 1000 : 0;
     }
 
     function showSigninError(msg) {
@@ -220,7 +229,7 @@
         try {
             const me = await gh("GET", "/user");
             user = me.login;
-            sessionStorage.setItem(AUTH_USER_KEY, user);
+            authStore.setItem(AUTH_USER_KEY, user);
             await autoConnectRepo();
         } catch (err) {
             showSigninError("Failed to fetch GitHub profile: " + err.message);
@@ -273,13 +282,13 @@
         }
         repoFull = repo.full_name;
         defaultBranch = repo.default_branch || "main";
-        sessionStorage.setItem(AUTH_REPO_KEY, repoFull);
+        authStore.setItem(AUTH_REPO_KEY, repoFull);
     }
 
     function clearRememberedRepo() {
         repoFull = null;
         defaultBranch = "main";
-        sessionStorage.removeItem(AUTH_REPO_KEY);
+        authStore.removeItem(AUTH_REPO_KEY);
         resetRepoData();
     }
 
@@ -333,10 +342,12 @@
         user = null;
         repoFull = null;
         tokenExpiresAt = 0;
-        sessionStorage.removeItem(AUTH_TOKEN_KEY);
-        sessionStorage.removeItem(AUTH_USER_KEY);
-        sessionStorage.removeItem(AUTH_REPO_KEY);
-        sessionStorage.removeItem(AUTH_EXPIRES_KEY);
+        // sessionStorage is cleared too: builds between 5759c38 and this one kept
+        // auth there, and a tab open across the upgrade would still hold a token.
+        for (const key of [AUTH_TOKEN_KEY, AUTH_USER_KEY, AUTH_REPO_KEY, AUTH_EXPIRES_KEY]) {
+            authStore.removeItem(key);
+            sessionStorage.removeItem(key);
+        }
         if (devicePollTimer) { clearTimeout(devicePollTimer); devicePollTimer = null; }
         // Cached note titles are not credentials, but they are the user's
         // content and should not outlive an explicit sign-out on a shared
@@ -1632,7 +1643,7 @@
     applyTheme(getInitialTheme());
     loadNoteMeta();
 
-    if (token && (!tokenExpiresAt || tokenExpiresAt <= Date.now())) {
+    if (token && tokenExpiresAt && tokenExpiresAt <= Date.now()) {
         signOut();
     } else if (token && user) {
         if (repoFull) {

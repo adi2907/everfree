@@ -2,6 +2,7 @@
 
 - Status: accepted
 - Date: 2026-07-21
+- Amended: 2026-07-23 (browser token storage — see "Credential handling")
 
 ## Decision
 
@@ -41,13 +42,35 @@ KWallet. EverFree fails closed and asks the user to configure a secure keyring;
 it does not fall back to a plaintext file. Windows/Linux desktop packaging must
 test the appropriate backend before those platforms are advertised.
 
-The web and mobile clients remove the legacy OAuth token from `localStorage`.
-They keep the short-lived OAuth access token in tab-scoped `sessionStorage`.
-This
-reduces persistence but does not make a browser token immune to XSS. A future
-hosted backend could move the token to an encrypted server-side session and an
-HttpOnly, Secure, SameSite cookie, at the cost of adding hosted auth state and a
-GitHub API proxy.
+The web and mobile clients keep the OAuth access token in `localStorage`, so a
+session ends only at an explicit sign out.
+
+This supersedes the tab-scoped `sessionStorage` decision (commit `5759c38`,
+2026-07-21), which was reversed on 2026-07-23. Two reasons:
+
+1. It did not deliver what it promised. EverFree's OAuth App issues
+   non-expiring `gho_` tokens, so GitHub omits `expires_in` from the device-flow
+   response. The client computed `Date.now() + NaN`, and its start-up guard read
+   a falsy expiry as *expired*, signing the user out on **every** page load —
+   including a reload in the same tab. Expiry is now only enforced when GitHub
+   actually advertises one; `0` means "no expiry advertised".
+2. Its security benefit is narrower than it appears. The clients call
+   `api.github.com` directly, so the token must sit in page memory whenever the
+   app is open. Against XSS during an active session the two stores are
+   equivalent; `sessionStorage` only shortens the window for an attacker
+   reading storage at rest, and it does so by charging a full device-flow
+   re-login on every browser start.
+
+The residual risk is real: a token at rest in `localStorage` is readable by any
+XSS on the origin, and it carries the broad `repo` scope. The accepted
+mitigation is that sign-out clears it (along with the cached note metadata), and
+that EverFree ships no third-party scripts on the app origin.
+
+The durable fix remains the one previously noted: move the token into an
+encrypted server-side session behind an HttpOnly, Secure, SameSite cookie. Done
+properly that also means proxying GitHub API calls, since a token the page can
+read is a token XSS can read. That adds hosted auth state, a GitHub API proxy,
+and per-request latency, and has not been built.
 
 ## Rejected alternatives
 

@@ -100,10 +100,10 @@ async function runOnce({ notebooks, notesPerNotebook, port, browser, quiet, stor
   await context.addInitScript(INSTRUMENT);
   await context.addInitScript(
     ({ owner, repo }) => {
-      sessionStorage.setItem("everfree-token", "gho_faketoken");
-      sessionStorage.setItem("everfree-user", owner);
-      sessionStorage.setItem("everfree-repo", `${owner}/${repo}`);
-      sessionStorage.setItem("everfree-token-expires-at", String(Date.now() + 3600 * 1000));
+      localStorage.setItem("everfree-token", "gho_faketoken");
+      localStorage.setItem("everfree-user", owner);
+      localStorage.setItem("everfree-repo", `${owner}/${repo}`);
+      localStorage.setItem("everfree-token-expires-at", String(Date.now() + 3600 * 1000));
     },
     { owner: OWNER, repo: REPO }
   );
