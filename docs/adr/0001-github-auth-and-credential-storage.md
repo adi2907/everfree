@@ -72,6 +72,39 @@ properly that also means proxying GitHub API calls, since a token the page can
 read is a token XSS can read. That adds hosted auth state, a GitHub API proxy,
 and per-request latency, and has not been built.
 
+### Assistant API keys
+
+The embedded assistant stores two third-party keys, entered by the user in its
+settings pane and held in `localStorage` on **all** clients — desktop, web, and
+mobile — under `everfree-gemini-key` and `everfree-serper-key`. `web/assistant.js`
+is shared by the three, so there is one code path and one behaviour.
+
+These were tab-scoped in `sessionStorage` until 2026-08-03. That was reversed for
+the same reason as the OAuth token, and more easily justified:
+
+- **The trade is strictly better here than for the token.** The OAuth token
+  carries the `repo` scope — read/write on every repository the user owns. A
+  Gemini key is rate-limited, revocable from the issuing console, and grants
+  nothing in the user's GitHub account. Guarding the weaker secret more strictly
+  than the stronger one on the same origin buys nothing and costs a re-paste on
+  every browser start.
+- **The same XSS argument applies.** The keys are sent from the page to the model
+  provider, so they are in page memory whenever the assistant is used. Against
+  XSS during an active session the two stores are equivalent.
+
+Two properties are deliberately preserved:
+
+- **Sign-out clears them**, in `signOut()` in both `web/app.js` and
+  `web/mobile/app.js`, alongside the auth keys and cached note metadata. Without
+  this, the keys outlive the session that created them on a shared machine. The
+  settings pane also offers an explicit *Clear keys* control, so removing a key
+  does not require signing out.
+- **The desktop app does not put these in the OS keyring**, unlike the GitHub
+  tokens above. `server/assistant.py` documents that the API key is never stored
+  by the server; routing it through `keyring` would break that property and split
+  desktop behaviour from web for no security gain, since the key still has to
+  reach the browser to be used.
+
 ## Rejected alternatives
 
 - OAuth App with `repo` scope: one-step device flow, but grants broad private

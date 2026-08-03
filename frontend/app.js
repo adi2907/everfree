@@ -17,6 +17,8 @@
     let searchSeq = 0;
     let noteBrowserRenderSeq = 0;
     const NOTE_CARD_BATCH_SIZE = 100;
+    // Owned by assistant.js, cleared here: sign-out lives in this file.
+    const ASSISTANT_KEYS = ["everfree-gemini-key", "everfree-serper-key"];
 
     // ── DOM References ──────────────────────────────────────
     const $notebookList = document.getElementById("notebook-list");
@@ -182,6 +184,13 @@
             console.error("Sign-out failed:", err);
             alert("Could not sign out. Please try again.");
             return;
+        }
+        // The assistant's API keys live in this webview's localStorage (ADR
+        // 0001), the same as on web and mobile, so sign-out has to take them
+        // with it here too.
+        for (const key of ASSISTANT_KEYS) {
+            localStorage.removeItem(key);
+            sessionStorage.removeItem(key);
         }
         window.location.href = "/setup";
     }

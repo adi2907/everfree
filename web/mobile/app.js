@@ -9,6 +9,8 @@
     const AUTH_USER_KEY  = 'everfree-user';
     const AUTH_REPO_KEY  = 'everfree-repo';
     const AUTH_EXPIRES_KEY = 'everfree-token-expires-at';
+    // Owned by assistant.js, cleared here: sign-out lives in this file.
+    const ASSISTANT_KEYS = ['everfree-gemini-key', 'everfree-serper-key'];
     const DEFAULT_REPO = 'everfree-notes';
 
     // A session lasts until the user signs out — see web/app.js and ADR 0001.
@@ -829,6 +831,13 @@
             sessionStorage.removeItem(key);
         }
         if (devicePollTimer) { clearTimeout(devicePollTimer); devicePollTimer = null; }
+        // The assistant's API keys live in localStorage too (ADR 0001) — see
+        // web/app.js signOut(). assistant.js is shared, so mobile stores the
+        // same two entries and has to clear them here as well.
+        for (const key of ASSISTANT_KEYS) {
+            localStorage.removeItem(key);
+            sessionStorage.removeItem(key);
+        }
         allNotesLoaded = false; notebooks = []; notesByNotebook = {}; fileShas = {}; noteContentCache = {}; noteModifiedCache = {};
         $('si-idle').classList.remove('hidden');
         $('si-pending').classList.add('hidden');

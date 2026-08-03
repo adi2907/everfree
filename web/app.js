@@ -16,6 +16,8 @@
     const LS_NOTE_BROWSER_WIDTH = "everfree-note-browser-width";
     // Note metadata (modified time + display title) keyed by Git blob SHA.
     const LS_NOTE_META = "everfree-note-meta-v1";
+    // Owned by assistant.js, cleared here: sign-out lives in this file.
+    const ASSISTANT_KEYS = ["everfree-gemini-key", "everfree-serper-key"];
     const DEFAULT_REPO = "everfree-notes";
 
     // A session lasts until the user signs out, so authentication data is stored
@@ -349,6 +351,14 @@
             sessionStorage.removeItem(key);
         }
         if (devicePollTimer) { clearTimeout(devicePollTimer); devicePollTimer = null; }
+        // The assistant's API keys live in localStorage too (ADR 0001), so an
+        // explicit sign-out has to take them with it — otherwise they outlive
+        // the session that created them on a shared machine. Both stores are
+        // swept for the same upgrade reason as the auth keys above.
+        for (const key of ASSISTANT_KEYS) {
+            localStorage.removeItem(key);
+            sessionStorage.removeItem(key);
+        }
         // Cached note titles are not credentials, but they are the user's
         // content and should not outlive an explicit sign-out on a shared
         // machine. Signing back in re-derives them.

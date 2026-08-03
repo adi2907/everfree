@@ -6,6 +6,10 @@
     if (!trigger) return;
 
     const CHAT_STORE_KEY = "everfree-assistant-chats-v1";
+    // Both keys live in localStorage, so a session survives a browser restart
+    // and ends at an explicit sign-out or a Clear from the settings pane. See
+    // ADR 0001: this is the same trade already made for the GitHub token, which
+    // carries the far broader `repo` scope.
     const API_KEY = "everfree-gemini-key";
     // Stored alongside the Gemini key, same lifetime. Nothing consumes it yet —
     // web search is not wired up; this only captures the key.
@@ -82,7 +86,11 @@
         .ef-ai-field-label{display:block;margin:0 0 6px;font-size:12px;font-weight:600}
         .ef-ai-field-label span{margin-left:5px;color:var(--text-muted,#777);font-weight:400}
         .ef-ai-settings input + .ef-ai-field-label{margin-top:14px}
-        .ef-ai-settings-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:12px}
+        .ef-ai-settings-actions{display:flex;align-items:center;gap:8px;margin-top:12px}
+        .ef-ai-settings-spacer{flex:1}
+        .ef-ai-button-danger{border-color:var(--danger,#b64f4f);background:transparent;color:var(--danger,#b64f4f)}
+        .ef-ai-button-danger[hidden]{display:none!important}
+        .ef-ai-storage-note{margin:14px 0 0;color:var(--text-muted,#777);font-size:11px;line-height:1.45}
         .ef-ai-button{padding:7px 11px;border:1px solid var(--border,#ddd);border-radius:7px;background:var(--bg-input,#f4f4f4);color:var(--text-primary,#222);font:inherit;font-size:12px;cursor:pointer}
         .ef-ai-button-primary{border-color:var(--accent,#47735a);background:var(--accent,#47735a);color:#fff}
         .ef-ai-chat-row{width:100%;display:block;margin:0 0 8px;padding:10px 11px;border:1px solid var(--border,#ddd);border-radius:9px;background:transparent;color:var(--text-primary,#222);font:inherit;text-align:left;cursor:pointer}
@@ -136,7 +144,10 @@
                 <input type="password" id="ef-ai-key" aria-label="Gemini API key" autocomplete="off" placeholder="Paste your Gemini API key">
                 <label class="ef-ai-field-label" for="ef-ai-serper-key">Serper key <span>optional</span></label>
                 <input type="password" id="ef-ai-serper-key" aria-label="Serper API key" autocomplete="off" placeholder="Paste your Serper API key">
+                <p class="ef-ai-storage-note">Keys stay in this browser until you clear them or sign out.</p>
                 <div class="ef-ai-settings-actions">
+                    <button class="ef-ai-button ef-ai-button-danger" id="ef-ai-settings-clear" hidden>Clear keys</button>
+                    <span class="ef-ai-settings-spacer"></span>
                     <button class="ef-ai-button" id="ef-ai-settings-cancel">Cancel</button>
                     <button class="ef-ai-button ef-ai-button-primary" id="ef-ai-settings-save">Save</button>
                 </div>
@@ -401,13 +412,27 @@
         $("ef-ai-help").setAttribute("aria-expanded", open ? "true" : "false");
     }
 
+    // The pane has two states: nothing stored yet, where the help text is the
+    // point, and keys already stored, where it is noise and Clear is the thing
+    // that needs to be reachable.
+    function renderSettings() {
+        const stored = localStorage.getItem(API_KEY);
+        $("ef-ai-key").value = stored || "";
+        $("ef-ai-serper-key").value = localStorage.getItem(SERPER_KEY) || "";
+        setHelpOpen(!stored);
+        $("ef-ai-settings-clear").hidden = !stored && !localStorage.getItem(SERPER_KEY);
+    }
+
+    function clearStoredKeys() {
+        localStorage.removeItem(API_KEY);
+        localStorage.removeItem(SERPER_KEY);
+        renderSettings();
+        $("ef-ai-key").focus();
+    }
+
     function openSettings() {
         closeViews();
-        $("ef-ai-key").value = sessionStorage.getItem(API_KEY) || "";
-        $("ef-ai-serper-key").value = sessionStorage.getItem(SERPER_KEY) || "";
-        // Explain on first arrival, when there is no key yet and the reader has
-        // no idea what to paste; stay out of the way on every later visit.
-        setHelpOpen(!sessionStorage.getItem(API_KEY));
+        renderSettings();
         $("ef-ai-settings").hidden = false;
         $("ef-ai-key").focus();
     }
@@ -532,7 +557,7 @@
         const context = bridge();
         const note = context && context.getNote ? context.getNote() : null;
         if (!note) { addError("Open a note first."); return; }
-        const apiKey = sessionStorage.getItem(API_KEY) || "";
+        const apiKey = localStorage.getItem(API_KEY) || "";
         if (!apiKey) { openSettings(); return; }
         if (!currentChat || currentChat.noteKey !== noteKey(note)) currentChat = blankChat();
 
@@ -685,14 +710,15 @@
     $("ef-ai-help").addEventListener("click", () => {
         setHelpOpen($("ef-ai-help-text").hidden);
     });
+    $("ef-ai-settings-clear").addEventListener("click", clearStoredKeys);
     $("ef-ai-settings-save").addEventListener("click", () => {
         const key = $("ef-ai-key").value.trim();
         if (!key) return;
-        sessionStorage.setItem(API_KEY, key);
+        localStorage.setItem(API_KEY, key);
         // Optional, and clearing the box is the way to remove it.
         const serper = $("ef-ai-serper-key").value.trim();
-        if (serper) sessionStorage.setItem(SERPER_KEY, serper);
-        else sessionStorage.removeItem(SERPER_KEY);
+        if (serper) localStorage.setItem(SERPER_KEY, serper);
+        else localStorage.removeItem(SERPER_KEY);
         closeViews();
         $("ef-ai-input").focus();
     });
