@@ -13,8 +13,17 @@
     const bridge = () => window.EverFreeNoteContext || null;
 
     document.head.insertAdjacentHTML("beforeend", `<style>
-        .ef-ai-panel{position:fixed;inset:0 0 0 auto;width:370px;max-width:100vw;z-index:1200;display:flex;flex-direction:column;background:var(--bg-surface,#fff);color:var(--text-primary,#222);border-left:1px solid var(--border,#ddd);box-shadow:-12px 0 32px rgba(0,0,0,.12);font-family:var(--font-sans,var(--font,system-ui,sans-serif))}
+        /* The panel is a flex sibling of the note panes, so opening it shrinks
+           the editor instead of covering it. */
+        .ef-ai-panel{position:relative;flex:0 0 var(--ef-ai-width,370px);width:var(--ef-ai-width,370px);max-width:100vw;height:100vh;z-index:3;display:flex;flex-direction:column;background:var(--bg-surface,#fff);color:var(--text-primary,#222);border-left:1px solid var(--border,#ddd);font-family:var(--font-sans,var(--font,system-ui,sans-serif))}
         .ef-ai-panel[hidden],.ef-ai-view[hidden],.ef-ai-selection[hidden]{display:none!important}
+        .ef-ai-resizer{position:absolute;top:0;bottom:0;left:-4px;width:8px;z-index:4;cursor:col-resize;touch-action:none}
+        .ef-ai-resizer::after{content:"";position:absolute;inset:0 3px;background:var(--border,#ddd);opacity:0;transition:opacity 120ms ease,background 120ms ease}
+        .ef-ai-resizer:hover::after,.ef-ai-resizer:focus-visible::after,.ef-ai-resizer.is-active::after{background:var(--accent,#47735a);opacity:1}
+        body.ef-ai-resizing,body.ef-ai-resizing *{cursor:col-resize!important;user-select:none!important}
+        /* Widening the panel re-clamps the note panes; their width animation
+           would otherwise lag a pointer that is still moving. */
+        body.ef-ai-resizing .sidebar,body.ef-ai-resizing .note-browser{transition:none!important}
         .ef-ai-header{height:54px;display:flex;align-items:center;gap:4px;padding:0 10px 0 14px;border-bottom:1px solid var(--border,#ddd)}
         .ef-ai-title{flex:1;font-weight:650;font-size:14px}
         .ef-ai-icon{width:32px;height:32px;border:0;border-radius:7px;background:transparent;color:var(--text-secondary,#666);font:inherit;font-size:18px;cursor:pointer}
@@ -55,11 +64,18 @@
         .ef-ai-chat-row:hover{background:var(--bg-input,#f4f4f4)}
         .ef-ai-chat-row strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
         .ef-ai-chat-row span{display:block;margin-top:4px;color:var(--text-muted,#777);font-size:10px}
-        @media(max-width:640px){.ef-ai-panel{width:100vw}}
+        /* Phones have no room to split, so the panel goes back to a full-screen
+           overlay and the drag handle is pointless. */
+        @media(max-width:768px){.ef-ai-panel{position:fixed;inset:0 0 0 auto;flex:none;width:100vw;height:100%;z-index:1200;box-shadow:-12px 0 32px rgba(0,0,0,.12)}.ef-ai-resizer{display:none}}
     </style>`);
 
-    document.body.insertAdjacentHTML("beforeend", `
+    // Mount inside the flex row that holds the panes (the web shell wraps them
+    // in #view-app; the desktop shell uses <body> directly).
+    const shell = document.getElementById("view-app") || document.body;
+    shell.insertAdjacentHTML("beforeend", `
         <aside class="ef-ai-panel" id="ef-ai-panel" aria-label="AI assistant" hidden>
+            <div class="ef-ai-resizer" id="ef-ai-resizer" role="separator" aria-orientation="vertical"
+                aria-label="Resize assistant" tabindex="0"></div>
             <header class="ef-ai-header">
                 <span class="ef-ai-title">Assistant</span>
                 <button class="ef-ai-icon" id="ef-ai-resume" title="Resume chat" aria-label="Resume chat">◷</button>
@@ -376,8 +392,96 @@
         }
     }
 
+    const WIDTH_KEY = "everfree-assistant-width";
+    const MIN_WIDTH = 300;
+    const MAX_WIDTH = 640;
+
+    // Tell the pane resizers to re-clamp: the assistant just took (or gave
+    // back) horizontal space they were sharing.
+    function announceLayoutChange() {
+        window.dispatchEvent(new CustomEvent("everfree:layout-change"));
+    }
+
+    function closePanel() {
+        if ($("ef-ai-panel").hidden) return;
+        $("ef-ai-panel").hidden = true;
+        announceLayoutChange();
+    }
+
+    function setPanelWidth(width, persist = false) {
+        const editorMin = 320;
+        const available = window.innerWidth - editorMin;
+        const max = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, available));
+        const next = Math.round(Math.max(MIN_WIDTH, Math.min(max, width)));
+        document.documentElement.style.setProperty("--ef-ai-width", `${next}px`);
+        const handle = $("ef-ai-resizer");
+        handle.setAttribute("aria-valuemin", String(MIN_WIDTH));
+        handle.setAttribute("aria-valuemax", String(max));
+        handle.setAttribute("aria-valuenow", String(next));
+        if (persist) localStorage.setItem(WIDTH_KEY, String(next));
+        announceLayoutChange();
+    }
+
+    function setupPanelResizer() {
+        const handle = $("ef-ai-resizer");
+        const panel = $("ef-ai-panel");
+        let startX = 0;
+        let startWidth = 0;
+        let dragging = false;
+
+        const saved = Number(localStorage.getItem(WIDTH_KEY));
+        if (Number.isFinite(saved) && saved > 0) setPanelWidth(saved);
+
+        // The panel is docked on the right, so dragging left widens it.
+        handle.addEventListener("pointerdown", (event) => {
+            if (!window.matchMedia("(min-width: 769px)").matches) return;
+            event.preventDefault();
+            dragging = true;
+            startX = event.clientX;
+            startWidth = panel.getBoundingClientRect().width;
+            handle.classList.add("is-active");
+            document.body.classList.add("ef-ai-resizing");
+            handle.setPointerCapture?.(event.pointerId);
+        });
+
+        handle.addEventListener("keydown", (event) => {
+            if (!window.matchMedia("(min-width: 769px)").matches) return;
+            const current = panel.getBoundingClientRect().width;
+            let next = current;
+            if (event.key === "ArrowLeft") next += 16;
+            if (event.key === "ArrowRight") next -= 16;
+            if (event.key === "Home") next = MAX_WIDTH;
+            if (event.key === "End") next = MIN_WIDTH;
+            if (next === current) return;
+            event.preventDefault();
+            setPanelWidth(next, true);
+        });
+
+        window.addEventListener("pointermove", (event) => {
+            if (!dragging) return;
+            setPanelWidth(startWidth + startX - event.clientX);
+        });
+
+        const stop = () => {
+            if (!dragging) return;
+            dragging = false;
+            setPanelWidth(panel.getBoundingClientRect().width, true);
+            handle.classList.remove("is-active");
+            document.body.classList.remove("ef-ai-resizing");
+        };
+        window.addEventListener("pointerup", stop);
+        window.addEventListener("pointercancel", stop);
+        window.addEventListener("resize", () => {
+            if (panel.hidden) return;
+            setPanelWidth(panel.getBoundingClientRect().width);
+        });
+    }
+
+    setupPanelResizer();
+
     function openPanel() {
         $("ef-ai-panel").hidden = false;
+        announceLayoutChange();
         closeViews();
         if (!currentChat) currentChat = blankChat();
         renderMessages();
@@ -386,8 +490,8 @@
     }
 
     trigger.addEventListener("pointerdown", () => captureSelection(true));
-    trigger.addEventListener("click", () => $("ef-ai-panel").hidden ? openPanel() : ($("ef-ai-panel").hidden = true));
-    $("ef-ai-close").addEventListener("click", () => { $("ef-ai-panel").hidden = true; });
+    trigger.addEventListener("click", () => $("ef-ai-panel").hidden ? openPanel() : closePanel());
+    $("ef-ai-close").addEventListener("click", closePanel);
     $("ef-ai-new").addEventListener("click", () => {
         if (busy) return;
         currentChat = blankChat();
@@ -413,7 +517,7 @@
         if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); send(); }
     });
     document.addEventListener("keydown", (event) => {
-        if (event.key === "Escape" && !$("ef-ai-panel").hidden) $("ef-ai-panel").hidden = true;
+        if (event.key === "Escape") closePanel();
     });
     document.addEventListener("mouseup", (event) => {
         if (!(event.target instanceof Element) || !event.target.closest("#ef-ai-panel")) setTimeout(captureSelection, 0);

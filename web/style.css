@@ -126,6 +126,13 @@ body.resizing-panes * {
     user-select: none !important;
 }
 
+/* The panes animate their width for the responsive breakpoints; during a drag
+   that animation lags the pointer and the pane would settle short. */
+body.resizing-panes .sidebar,
+body.resizing-panes .note-browser {
+    transition: none !important;
+}
+
 
 /* ── Auth Card ───────────────────────────────────────────── */
 .auth-card {
