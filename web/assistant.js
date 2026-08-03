@@ -51,6 +51,14 @@
         .ef-ai-input{flex:1;min-height:46px;max-height:150px;resize:none;border:0;outline:0;background:transparent;color:var(--text-primary,#222);font:inherit;font-size:13px;line-height:1.5}
         .ef-ai-send{width:32px;height:32px;flex:0 0 auto;border:0;border-radius:50%;background:var(--accent,#47735a);color:#fff;font-size:17px;cursor:pointer}
         .ef-ai-send:disabled{opacity:.4;cursor:default}
+        .ef-ai-mic{width:32px;height:32px;flex:0 0 auto;display:flex;align-items:center;justify-content:center;border:0;border-radius:50%;background:transparent;color:var(--text-secondary,#666);cursor:pointer}
+        .ef-ai-mic:hover{background:var(--bg-input,#eee);color:var(--text-primary,#222)}
+        .ef-ai-mic[hidden]{display:none!important}
+        .ef-ai-mic:disabled{opacity:.4;cursor:default}
+        .ef-ai-mic.is-listening{background:var(--accent,#47735a);color:#fff}
+        /* Interim speech is a preview only — it is never committed to the box. */
+        .ef-ai-interim{margin:0 2px 6px;color:var(--text-muted,#777);font-size:12px;line-height:1.4;font-style:italic}
+        .ef-ai-interim[hidden]{display:none!important}
         .ef-ai-settings,.ef-ai-history{position:absolute;inset:54px 0 0;z-index:2;overflow:auto;padding:18px 14px;background:var(--bg-surface,#fff)}
         .ef-ai-settings h3,.ef-ai-history h3{margin:0 0 6px;font-size:14px}
         .ef-ai-settings p,.ef-ai-history p{margin:0 0 16px;color:var(--text-muted,#777);font-size:12px;line-height:1.5}
@@ -69,9 +77,12 @@
         @media(max-width:768px){.ef-ai-panel{position:fixed;inset:0 0 0 auto;flex:none;width:100vw;height:100%;z-index:1200;box-shadow:-12px 0 32px rgba(0,0,0,.12)}.ef-ai-resizer{display:none}}
     </style>`);
 
-    // Mount inside the flex row that holds the panes (the web shell wraps them
-    // in #view-app; the desktop shell uses <body> directly).
-    const shell = document.getElementById("view-app") || document.body;
+    // Dock as a sibling of the note panes so opening the panel shrinks the
+    // editor rather than covering it. Anchoring to the note browser rather than
+    // to #view-app matters: mobile has a #view-app too, but it is hidden while a
+    // note is open, which would take the panel down with it.
+    const noteBrowser = document.getElementById("note-browser");
+    const shell = (noteBrowser && noteBrowser.parentElement) || document.body;
     shell.insertAdjacentHTML("beforeend", `
         <aside class="ef-ai-panel" id="ef-ai-panel" aria-label="AI assistant" hidden>
             <div class="ef-ai-resizer" id="ef-ai-resizer" role="separator" aria-orientation="vertical"
@@ -105,8 +116,17 @@
                     <strong>Text selected</strong><span id="ef-ai-selection-text"></span>
                     <button id="ef-ai-selection-clear" title="Remove selection" aria-label="Remove selection">×</button>
                 </div>
+                <div class="ef-ai-interim" id="ef-ai-interim" hidden aria-live="polite"></div>
                 <form class="ef-ai-form" id="ef-ai-form">
                     <textarea class="ef-ai-input" id="ef-ai-input" rows="2" placeholder="Reply"></textarea>
+                    <button class="ef-ai-mic" id="ef-ai-mic" type="button" title="Dictate your message" aria-label="Dictate your message" aria-pressed="false" hidden>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                            <line x1="12" y1="19" x2="12" y2="23"/>
+                            <line x1="8" y1="23" x2="16" y2="23"/>
+                        </svg>
+                    </button>
                     <button class="ef-ai-send" id="ef-ai-send" type="submit" title="Send" aria-label="Send">↑</button>
                 </form>
             </div>
@@ -238,6 +258,96 @@
         busy = value;
         $("ef-ai-send").disabled = value;
         $("ef-ai-input").disabled = value;
+        $("ef-ai-mic").disabled = value;
+    }
+
+    // ── Prompt dictation ────────────────────────────────────
+    // Mirrors the notes editor: interim speech is previewed but never
+    // committed, and only finalized chunks reach the box.
+    let promptDictation = null;
+
+    // The note editor owns its own dictation in app.js, which this file cannot
+    // reach. Its mic buttons are the shared handle: a listening one carries
+    // .is-listening, and clicking it toggles that session off. Same rule mobile
+    // already applies between its two mics.
+    const NOTE_MIC_IDS = ["btn-editor-mic", "btn-note-mic", "btn-capture-mic"];
+
+    function stopNoteDictation() {
+        for (const id of NOTE_MIC_IDS) {
+            const mic = document.getElementById(id);
+            if (mic && mic.classList.contains("is-listening")) mic.click();
+        }
+    }
+
+    function stopPromptDictation() {
+        if (promptDictation && promptDictation.active) promptDictation.stop();
+    }
+
+    function setPromptMicActive(listening) {
+        const mic = $("ef-ai-mic");
+        mic.classList.toggle("is-listening", listening);
+        mic.setAttribute("aria-pressed", listening ? "true" : "false");
+        mic.title = listening ? "Stop dictation" : "Dictate your message";
+        if (!listening) showInterim("");
+    }
+
+    function showInterim(text) {
+        const el = $("ef-ai-interim");
+        el.textContent = text;
+        el.hidden = !text;
+    }
+
+    function insertAtCursor(text) {
+        const spoken = String(text || "").trim();
+        const input = $("ef-ai-input");
+        if (!spoken || input.disabled) return;
+        const chunk = spoken + " ";
+        const start = input.selectionStart ?? input.value.length;
+        const end = input.selectionEnd ?? input.value.length;
+        input.value = input.value.slice(0, start) + chunk + input.value.slice(end);
+        const cursor = start + chunk.length;
+        input.selectionStart = cursor;
+        input.selectionEnd = cursor;
+        input.focus();
+    }
+
+    function setupPromptDictation() {
+        const mic = $("ef-ai-mic");
+        if (typeof window.createDictation !== "function" || !window.voiceInputSupported) return;
+
+        promptDictation = window.createDictation({
+            onInterim: showInterim,
+            onFinal(text) {
+                showInterim("");
+                insertAtCursor(text);
+            },
+            onState: setPromptMicActive,
+            onError(error) {
+                setPromptMicActive(false);
+                addError(
+                    error === "not-allowed"
+                        ? "Microphone permission denied."
+                        : error === "audio-capture"
+                            ? "No microphone found."
+                            : "Voice input stopped."
+                );
+            },
+        });
+        if (!promptDictation) return;
+
+        mic.hidden = false;
+        mic.addEventListener("click", () => {
+            if (busy) return;
+            if (!promptDictation.active) stopNoteDictation();
+            promptDictation.toggle();
+        });
+
+        // The other direction of the same exclusion: starting a note mic ends
+        // the prompt's session.
+        document.addEventListener("click", (event) => {
+            if (!(event.target instanceof Element)) return;
+            if (NOTE_MIC_IDS.some((id) => event.target.closest(`#${id}`))) stopPromptDictation();
+        }, true);
     }
 
     function addError(detail) {
@@ -353,6 +463,7 @@
     async function send() {
         const prompt = $("ef-ai-input").value;
         if (!prompt.trim() || busy) return;
+        stopPromptDictation();
         const context = bridge();
         const note = context && context.getNote ? context.getNote() : null;
         if (!note) { addError("Open a note first."); return; }
@@ -404,6 +515,7 @@
 
     function closePanel() {
         if ($("ef-ai-panel").hidden) return;
+        stopPromptDictation();
         $("ef-ai-panel").hidden = true;
         announceLayoutChange();
     }
@@ -478,6 +590,7 @@
     }
 
     setupPanelResizer();
+    setupPromptDictation();
 
     function openPanel() {
         $("ef-ai-panel").hidden = false;
