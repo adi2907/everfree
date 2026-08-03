@@ -419,7 +419,12 @@
         try {
             const resp = await fetch("/api/setup/status");
             const data = await resp.json();
-            if (data.configured) {
+            // Both halves matter. Handing a configured install back to "/"
+            // when it has no GitHub credential bounces it straight here
+            // again — `/` serves this wizard until the app is authorized —
+            // and the two redirect at each other forever. Signing out is
+            // exactly that state, so the loop was reachable from a button.
+            if (data.configured && data.github_authenticated) {
                 window.location.href = "/";
             } else if (data.configured || data.evernote_synced) {
                 // Notes already imported — skip straight to GitHub step
