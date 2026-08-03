@@ -37,6 +37,8 @@
         .ef-ai-error{align-self:stretch;color:var(--danger,#b64f4f);font-size:12px}
         .ef-ai-thinking{align-self:flex-start;color:var(--text-muted,#777);font-size:12px}
         .ef-ai-thinking::after{content:'…';animation:ef-ai-pulse 1s infinite}
+        .ef-ai-thinking[data-slow="true"]{animation:ef-ai-pulse 1.6s infinite}
+        .ef-ai-thinking[data-slow="true"]::after{content:''}
         @keyframes ef-ai-pulse{50%{opacity:.25}}
         .ef-ai-sources{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
         .ef-ai-sources a{max-width:100%;padding:3px 7px;border:1px solid var(--border,#ddd);border-radius:999px;color:var(--text-secondary,#666);font-size:10px;text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -414,6 +416,20 @@
         thinking.className = "ef-ai-thinking";
         thinking.textContent = "Thinking";
         $("ef-ai-messages").appendChild(thinking);
+        // Gemini's time to first token swings from under a second to about half
+        // a minute. Past a few seconds, count up so a slow answer still reads as
+        // running rather than hung.
+        const startedAt = Date.now();
+        const ticker = setInterval(() => {
+            const seconds = Math.round((Date.now() - startedAt) / 1000);
+            if (seconds < 4) return;
+            thinking.dataset.slow = "true";
+            thinking.textContent = `Thinking ${seconds}s`;
+        }, 1000);
+        const stopThinking = () => {
+            clearInterval(ticker);
+            thinking.remove();
+        };
         scrollBottom();
 
         const answer = { role: "assistant", content: "", sources: [] };
@@ -428,7 +444,7 @@
                 answer.fallback = Boolean(event.fallback);
                 setActiveModel(event);
             } else if (event.type === "delta") {
-                thinking.remove();
+                stopThinking();
                 if (!rendered) {
                     rendered = messageBubble(answer);
                     $("ef-ai-messages").appendChild(rendered.bubble);
@@ -442,19 +458,23 @@
             }
             scrollBottom();
         };
-        for (;;) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split("\n");
-            buffer = lines.pop();
-            for (const line of lines) {
-                if (!line.trim()) continue;
-                try { handle(JSON.parse(line)); } catch (error) { thinking.remove(); throw error; }
+        try {
+            for (;;) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split("\n");
+                buffer = lines.pop();
+                for (const line of lines) {
+                    if (!line.trim()) continue;
+                    handle(JSON.parse(line));
+                }
             }
+            if (buffer.trim()) handle(JSON.parse(buffer));
+        } finally {
+            // Every exit, including a thrown error event, stops the counter.
+            stopThinking();
         }
-        if (buffer.trim()) handle(JSON.parse(buffer));
-        thinking.remove();
         if (!answer.content) throw new Error("The assistant returned an empty response.");
         if (rendered && answer.sources.length) sourceLinks(rendered.bubble, answer.sources);
         return answer;
