@@ -15,8 +15,8 @@ out. This reverses the tab-scoped `sessionStorage` rule that commit `5759c38`
 introduced; do not switch it back without raising it first. ADR 0001 records the
 trade and the cookie-based alternative that would replace it.
 
-The assistant's API keys (`everfree-gemini-key`, `everfree-serper-key`) follow
-the same rule and live in `localStorage` on every client, including desktop —
+The assistant's API key (`everfree-gemini-key`) follows
+the same rule and lives in `localStorage` on every client, including desktop —
 not in the OS keyring, which would break the "the API key is never stored by the
 server" property `server/assistant.py` documents. Sign-out must clear them: both
 `signOut()` in `web/app.js` and the parallel sweep in `web/mobile/app.js`. ADR

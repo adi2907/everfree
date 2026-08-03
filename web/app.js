@@ -17,7 +17,7 @@
     // Note metadata (modified time + display title) keyed by Git blob SHA.
     const LS_NOTE_META = "everfree-note-meta-v1";
     // Owned by assistant.js, cleared here: sign-out lives in this file.
-    const ASSISTANT_KEYS = ["everfree-gemini-key", "everfree-serper-key"];
+    const ASSISTANT_KEYS = ["everfree-gemini-key"];
     const DEFAULT_REPO = "everfree-notes";
 
     // A session lasts until the user signs out, so authentication data is stored

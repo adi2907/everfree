@@ -10,7 +10,7 @@
     const AUTH_REPO_KEY  = 'everfree-repo';
     const AUTH_EXPIRES_KEY = 'everfree-token-expires-at';
     // Owned by assistant.js, cleared here: sign-out lives in this file.
-    const ASSISTANT_KEYS = ['everfree-gemini-key', 'everfree-serper-key'];
+    const ASSISTANT_KEYS = ['everfree-gemini-key'];
     const DEFAULT_REPO = 'everfree-notes';
 
     // A session lasts until the user signs out — see web/app.js and ADR 0001.

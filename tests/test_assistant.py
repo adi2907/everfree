@@ -26,10 +26,11 @@ class AssistantTests(unittest.TestCase):
     def test_request_keeps_contexts_separate_and_prompt_exact(self):
         captured = {}
 
-        async def fake_events(api_key, payload, model):
+        async def fake_events(api_key, payload, model, search=False):
             captured["api_key"] = api_key
             captured["payload"] = payload
             captured["model"] = model
+            captured["search"] = search
             yield {"type": "delta", "text": "Done"}
             yield {"type": "done"}
 
@@ -57,31 +58,89 @@ class AssistantTests(unittest.TestCase):
         payload = captured["payload"]
         parts = payload["systemInstruction"]["parts"]
         self.assertEqual(parts[0]["text"], assistant.SYSTEM_PROMPT)
-        self.assertIn("<current_note name=\"Work / Draft.md\">", parts[1]["text"])
-        self.assertIn("# Current note\n\nThe draft.\n", parts[1]["text"])
-        self.assertIn("<selected_text>\nselected words", parts[2]["text"])
+        self.assertEqual(parts[1]["text"], assistant.CHAT_NOTE)
+        self.assertIn("<current_note name=\"Work / Draft.md\">", parts[2]["text"])
+        self.assertIn("# Current note\n\nThe draft.\n", parts[2]["text"])
+        self.assertIn("<selected_text>\nselected words", parts[3]["text"])
         self.assertEqual(payload["contents"][-1]["parts"][0]["text"], prompt)
-        # No tools at all: grounding is rejected on a key without billing, and
-        # sending it made every request 429 into the Gemma fallback.
+        # An ordinary turn carries no tools: the Gemini 3 family that answers
+        # chat has a zero search-grounding allowance on the free tier.
         self.assertNotIn("tools", payload)
         self.assertNotIn("api_key", payload)
-        self.assertEqual(captured["model"]["id"], "gemini-3.5-flash-lite")
+        self.assertFalse(captured["search"])
+        self.assertEqual(captured["model"]["id"], "gemini-3.5-flash")
 
-    def test_daily_quota_falls_back_to_gemma(self):
+    def test_search_turns_ground_on_the_gemini_2_5_chain(self):
+        captured = {}
+
+        async def fake_events(api_key, payload, model, search=False):
+            captured["payload"] = payload
+            captured["model"] = model
+            captured["search"] = search
+            yield {"type": "delta", "text": "Grounded"}
+            yield {"type": "done"}
+
+        with patch.object(assistant, "_events", fake_events):
+            response = self.client.post(
+                "/api/assistant/chat",
+                json={
+                    "api_key": "test-key",
+                    "prompt": "who won today",
+                    "note": {"content": "A note"},
+                    "search": True,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(captured["search"])
+        self.assertEqual(captured["payload"]["tools"], [{"google_search": {}}])
+        # Search must not run on the chat models, whose grounding quota is zero.
+        self.assertEqual(captured["model"]["id"], "gemini-2.5-flash")
+        self.assertEqual(
+            captured["payload"]["systemInstruction"]["parts"][1]["text"],
+            assistant.SEARCH_NOTE,
+        )
+
+    def test_daily_quota_walks_the_chain_then_reports_the_spent_mode(self):
+        for search, expected_ids, scope in (
+            (False, ["gemini-3.5-flash", "gemini-3.5-flash-lite"], "chat"),
+            (True, ["gemini-2.5-flash", "gemini-2.5-flash-lite"], "search"),
+        ):
+            calls = []
+
+            async def fake_events(api_key, payload, model, search=False):
+                calls.append(model)
+                raise assistant.DailyQuotaExceeded
+                yield  # pragma: no cover - generator marker
+
+            with self.subTest(search=search):
+                with patch.object(assistant, "_events", fake_events):
+                    response = self.client.post(
+                        "/api/assistant/chat",
+                        json={
+                            "api_key": "test-key",
+                            "prompt": "help",
+                            "note": {"content": "A note"},
+                            "search": search,
+                        },
+                    )
+
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual([model["id"] for model in calls], expected_ids)
+                events = [json.loads(line) for line in response.text.splitlines()]
+                self.assertEqual(events[-1]["type"], "error")
+                # The client needs the mode: a spent search budget still leaves
+                # ordinary chat usable, and the two must not be conflated.
+                self.assertEqual(events[-1]["scope"], scope)
+
+    def test_a_model_that_starts_answering_is_never_retried(self):
+        """Falling through mid-stream would duplicate text already shown."""
         calls = []
 
-        async def fake_events(api_key, payload, model):
-            calls.append((payload, model))
-            if model["id"] == assistant.PRIMARY_MODEL["id"]:
-                raise assistant.DailyQuotaExceeded
-            yield {
-                "type": "model",
-                "id": model["id"],
-                "name": model["name"],
-                "fallback": True,
-            }
-            yield {"type": "delta", "text": "Fallback answer"}
-            yield {"type": "done"}
+        async def fake_events(api_key, payload, model, search=False):
+            calls.append(model)
+            yield {"type": "delta", "text": "Partial"}
+            raise assistant.DailyQuotaExceeded
 
         with patch.object(assistant, "_events", fake_events):
             response = self.client.post(
@@ -90,17 +149,13 @@ class AssistantTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual([model["id"] for _, model in calls], [
-            "gemini-3.5-flash-lite",
-            "gemma-4-31b-it",
-        ])
-        # Both models get the identical payload; nothing is model-specific now.
-        self.assertEqual(calls[0][0], calls[1][0])
-        self.assertNotIn("tools", calls[1][0])
-        events = [json.loads(line) for line in response.text.splitlines()]
-        self.assertEqual(events[0]["type"], "model")
-        self.assertTrue(events[0]["fallback"])
-        self.assertEqual(events[1], {"type": "delta", "text": "Fallback answer"})
+        # No second attempt, so the shown text is never restarted or doubled.
+        self.assertEqual(len(calls), 1)
+        deltas = [
+            json.loads(line) for line in response.text.splitlines()
+            if json.loads(line)["type"] == "delta"
+        ]
+        self.assertEqual(len(deltas), 1)
 
     def test_quota_errors_distinguish_daily_temporary_and_opaque_429s(self):
         daily = '{"quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier"}'
@@ -141,8 +196,9 @@ class AssistantTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers.get("cache-control"), "no-cache")
         self.assertIn("EverFreeNoteContext", response.text)
-        self.assertIn("Using Gemini 3.5 Flash-Lite", response.text)
-        self.assertIn("14,400 Gemma 4 31B requests per day", response.text)
+        self.assertIn("Using Gemini 3.5 Flash", response.text)
+        self.assertIn("500 Gemini 3.5 Flash-Lite requests per day", response.text)
+        self.assertIn("/search", response.text)
 
 
 class ConfigRefreshTests(unittest.TestCase):
@@ -152,8 +208,8 @@ class ConfigRefreshTests(unittest.TestCase):
 
     def setUp(self):
         self.bundled = {
-            "primary_model": assistant.PRIMARY_MODEL,
-            "fallback_model": assistant.FALLBACK_MODEL,
+            "chat_models": assistant.CHAT_MODELS,
+            "search_models": assistant.SEARCH_MODELS,
             "system_prompt": assistant.SYSTEM_PROMPT,
             "config": assistant.CONFIG,
         }
@@ -165,21 +221,21 @@ class ConfigRefreshTests(unittest.TestCase):
         self.addCleanup(self._restore_bundled)
 
     def _restore_bundled(self):
-        assistant.PRIMARY_MODEL = self.bundled["primary_model"]
-        assistant.FALLBACK_MODEL = self.bundled["fallback_model"]
+        assistant.CHAT_MODELS = self.bundled["chat_models"]
+        assistant.SEARCH_MODELS = self.bundled["search_models"]
         assistant.SYSTEM_PROMPT = self.bundled["system_prompt"]
         assistant.CONFIG = self.bundled["config"]
 
     def _assert_bundled_config_in_use(self):
         self.assertEqual(assistant.SYSTEM_PROMPT, self.bundled["system_prompt"])
-        self.assertEqual(assistant.PRIMARY_MODEL, self.bundled["primary_model"])
-        self.assertEqual(assistant.FALLBACK_MODEL, self.bundled["fallback_model"])
+        self.assertEqual(assistant.CHAT_MODELS, self.bundled["chat_models"])
+        self.assertEqual(assistant.SEARCH_MODELS, self.bundled["search_models"])
 
     @staticmethod
     def _deployed_config():
         return {
-            "primary_model": {"id": "gemini-next", "name": "Gemini Next", "daily_requests": 500},
-            "fallback_model": {"id": "gemma-next", "name": "Gemma Next", "daily_requests": 14400},
+            "chat_models": [{"id": "gemini-next", "name": "Gemini Next", "daily_requests": 500}],
+            "search_models": [{"id": "gemini-next-search", "name": "Gemini Next Search", "daily_requests": 20}],
             "system_prompt": "You are the deployed assistant.",
         }
 
@@ -202,8 +258,8 @@ class ConfigRefreshTests(unittest.TestCase):
 
         self.assertTrue(self._refresh_with(fetch))
         self.assertEqual(assistant.SYSTEM_PROMPT, "You are the deployed assistant.")
-        self.assertEqual(assistant.PRIMARY_MODEL["id"], "gemini-next")
-        self.assertEqual(assistant.FALLBACK_MODEL["name"], "Gemma Next")
+        self.assertEqual(assistant.CHAT_MODELS[0]["id"], "gemini-next")
+        self.assertEqual(assistant.SEARCH_MODELS[0]["name"], "Gemini Next Search")
 
     def test_malformed_or_incomplete_fetched_configs_are_rejected(self):
         deployed = self._deployed_config()
@@ -211,11 +267,13 @@ class ConfigRefreshTests(unittest.TestCase):
             None,
             "not a config",
             {},
-            {k: v for k, v in deployed.items() if k != "fallback_model"},
+            {k: v for k, v in deployed.items() if k != "search_models"},
             {**deployed, "system_prompt": "   "},
-            {**deployed, "primary_model": {"id": "gemini-next"}},          # no name
-            {**deployed, "fallback_model": {"name": "Gemma Next"}},        # no id
-            {**deployed, "primary_model": "gemini-next"},
+            {**deployed, "chat_models": [{"id": "gemini-next"}]},            # no name
+            {**deployed, "search_models": [{"name": "Gemini Next"}]},        # no id
+            {**deployed, "chat_models": "gemini-next"},                      # not a list
+            {**deployed, "chat_models": []},                                 # nothing to call
+            {**deployed, "search_models": ["gemini-next"]},                  # not model dicts
         ]
         for bad in rejected:
             with self.subTest(config=bad):

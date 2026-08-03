@@ -1,6 +1,12 @@
 // Minimal EverFree chat proxy. The Gemini key is used only for this request.
+// Mirrors server/assistant.py: chat and search each walk their own model list,
+// because free-tier search grounding is metered per model family and the family
+// that answers ordinary chat has no grounding allowance. Keep the two in step.
 
 const CONFIG = require("../../lib/assistant-config.json");
+
+const DEFAULT_CHAT_NOTE = "You have no web access in this turn.";
+const DEFAULT_SEARCH_NOTE = "Google Search is available in this turn.";
 
 const NOTE_LIMIT = 60000;
 const SELECTION_LIMIT = 20000;
@@ -12,8 +18,9 @@ function clean(value, limit) {
 }
 
 class DailyQuotaError extends Error {}
+class ChainExhaustedError extends Error {}
 
-function systemParts(note, selection) {
+function systemParts(note, selection, search) {
     const notebook = clean(note.notebook, 500).trim();
     const name = clean(note.note, 500).trim() || "Untitled note";
     const location = notebook ? `${notebook} / ${name}` : name;
@@ -21,6 +28,9 @@ function systemParts(note, selection) {
     const selected = clean(selection.text, SELECTION_LIMIT);
     return [
         { text: CONFIG.system_prompt },
+        // Whether the model may search changes per turn, so the claim it is
+        // allowed to make about searching has to be part of the same turn.
+        { text: search ? (CONFIG.search_note || DEFAULT_SEARCH_NOTE) : (CONFIG.chat_note || DEFAULT_CHAT_NOTE) },
         { text: `<current_note name=${JSON.stringify(location)}>\n${content}\n</current_note>` },
         { text: selected.trim() ? `<selected_text>\n${selected}\n</selected_text>` : "<selected_text>(none)</selected_text>" },
     ];
@@ -73,6 +83,12 @@ function sources(metadata) {
     return found.slice(0, 8);
 }
 
+// Google's Terms require showing this markup alongside a grounded answer.
+function searchSuggestions(metadata) {
+    const rendered = (metadata.searchEntryPoint || {}).renderedContent;
+    return typeof rendered === "string" && rendered.trim() ? rendered : "";
+}
+
 function quotaKind(status, detail) {
     if (status !== 429) return null;
     const compact = detail.toLowerCase().replace(/\s/g, "");
@@ -114,15 +130,17 @@ function googleErrorDetail(status, detail) {
         : `Gemini request failed (${status}).`;
 }
 
-function requestPayload(note, selection, history, prompt) {
-    return {
-        systemInstruction: { parts: systemParts(note, selection) },
+function requestPayload(note, selection, history, prompt, search) {
+    const payload = {
+        systemInstruction: { parts: systemParts(note, selection, search) },
         contents: contents(history, prompt),
         generationConfig: { maxOutputTokens: 2048 },
     };
+    if (search) payload.tools = [{ google_search: {} }];
+    return payload;
 }
 
-async function streamModel(apiKey, payload, model, write) {
+async function streamModel(apiKey, payload, model, write, search) {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model.id}:streamGenerateContent?alt=sse`;
     let response;
     try {
@@ -145,12 +163,7 @@ async function streamModel(apiKey, payload, model, write) {
         throw new Error(googleErrorDetail(response.status, detail));
     }
 
-    write({
-        type: "model",
-        id: model.id,
-        name: model.name,
-        fallback: model.id === CONFIG.fallback_model.id,
-    });
+    write({ type: "model", id: model.id, name: model.name, search: !!search });
     let answered = false;
     let grounding = {};
     for await (const raw of sse(response.body)) {
@@ -167,8 +180,27 @@ async function streamModel(apiKey, payload, model, write) {
         }
     }
     const groundedSources = sources(grounding);
-    if (groundedSources.length) write({ type: "sources", sources: groundedSources });
+    if (groundedSources.length) {
+        write({ type: "sources", sources: groundedSources, suggestions: searchSuggestions(grounding) });
+    }
     write(answered ? { type: "done" } : { type: "error", detail: "Gemini returned no text. Please try again." });
+}
+
+// Try each model in turn, moving on only when its daily quota is spent. A model
+// that has already written events cannot be retried without the user seeing the
+// answer restart, so the fall-through is refused once anything has been written.
+async function streamChain(apiKey, payload, models, write, search) {
+    for (const model of models) {
+        let started = false;
+        const once = (event) => { started = true; write(event); };
+        try {
+            await streamModel(apiKey, payload, model, once, search);
+            return;
+        } catch (error) {
+            if (started || !(error instanceof DailyQuotaError)) throw error;
+        }
+    }
+    throw new ChainExhaustedError();
 }
 
 module.exports = async (req, res) => {
@@ -182,6 +214,7 @@ module.exports = async (req, res) => {
     const note = body.note && typeof body.note === "object" ? body.note : {};
     const selection = body.selection && typeof body.selection === "object" ? body.selection : {};
     const history = Array.isArray(body.history) ? body.history : [];
+    const search = !!body.search;
     if (!apiKey || !prompt.trim()) {
         res.status(400).json({ detail: !apiKey ? "Add your Gemini API key first." : "Write a message first." });
         return;
@@ -196,21 +229,21 @@ module.exports = async (req, res) => {
     res.setHeader("X-Accel-Buffering", "no");
     const write = (event) => res.write(JSON.stringify(event) + "\n");
 
-    const payload = requestPayload(note, selection, history, prompt);
+    const payload = requestPayload(note, selection, history, prompt, search);
+    const models = search ? CONFIG.search_models : CONFIG.chat_models;
     try {
-        await streamModel(apiKey, payload, CONFIG.primary_model, write);
+        await streamChain(apiKey, payload, models, write, search);
     } catch (error) {
-        if (error instanceof DailyQuotaError) {
-            try {
-                await streamModel(apiKey, payload, CONFIG.fallback_model, write);
-            } catch (fallbackError) {
-                write({
-                    type: "error",
-                    detail: fallbackError instanceof DailyQuotaError
-                        ? "Gemma is also unavailable because its quota has been reached. Try again later."
-                        : fallbackError.message || String(fallbackError),
-                });
-            }
+        if (error instanceof ChainExhaustedError) {
+            // The client hides /search once it sees this, so name the mode: a
+            // spent search budget leaves ordinary chat perfectly usable.
+            write({
+                type: "error",
+                scope: search ? "search" : "chat",
+                detail: search
+                    ? "Today's search quota is used up. Ask without /search to keep chatting."
+                    : "Today's Gemini quota is used up. Try again after it resets.",
+            });
         } else {
             write({ type: "error", detail: error.message || String(error) });
         }

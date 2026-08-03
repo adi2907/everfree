@@ -74,10 +74,15 @@ and per-request latency, and has not been built.
 
 ### Assistant API keys
 
-The embedded assistant stores two third-party keys, entered by the user in its
+The embedded assistant stores one third-party key, entered by the user in its
 settings pane and held in `localStorage` on **all** clients — desktop, web, and
-mobile — under `everfree-gemini-key` and `everfree-serper-key`. `web/assistant.js`
-is shared by the three, so there is one code path and one behaviour.
+mobile — under `everfree-gemini-key`. `web/assistant.js` is shared by the three,
+so there is one code path and one behaviour.
+
+A second key, `everfree-serper-key`, was stored for web search until 2026-08-03.
+Nothing ever consumed it: Gemini's own Google Search grounding covers the same
+need with the key already present, so the field was removed and `assistant.js`
+purges any leftover value on load.
 
 These were tab-scoped in `sessionStorage` until 2026-08-03. That was reversed for
 the same reason as the OAuth token, and more easily justified:

@@ -18,7 +18,7 @@
     let noteBrowserRenderSeq = 0;
     const NOTE_CARD_BATCH_SIZE = 100;
     // Owned by assistant.js, cleared here: sign-out lives in this file.
-    const ASSISTANT_KEYS = ["everfree-gemini-key", "everfree-serper-key"];
+    const ASSISTANT_KEYS = ["everfree-gemini-key"];
 
     // ── DOM References ──────────────────────────────────────
     const $notebookList = document.getElementById("notebook-list");
