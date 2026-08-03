@@ -54,11 +54,13 @@ class AssistantTests(unittest.TestCase):
         self.assertIn("# Current note\n\nThe draft.\n", parts[1]["text"])
         self.assertIn("<selected_text>\nselected words", parts[2]["text"])
         self.assertEqual(payload["contents"][-1]["parts"][0]["text"], prompt)
-        self.assertEqual(payload["tools"], [{"google_search": {}}])
+        # No tools at all: grounding is rejected on a key without billing, and
+        # sending it made every request 429 into the Gemma fallback.
+        self.assertNotIn("tools", payload)
         self.assertNotIn("api_key", payload)
         self.assertEqual(captured["model"]["id"], "gemini-3.5-flash-lite")
 
-    def test_daily_quota_falls_back_to_gemma_without_search(self):
+    def test_daily_quota_falls_back_to_gemma(self):
         calls = []
 
         async def fake_events(api_key, payload, model):
@@ -85,9 +87,9 @@ class AssistantTests(unittest.TestCase):
             "gemini-3.5-flash-lite",
             "gemma-4-31b-it",
         ])
-        fallback_payload = calls[1][0]
-        self.assertNotIn("tools", fallback_payload)
-        self.assertEqual(fallback_payload["systemInstruction"]["parts"][-1]["text"], assistant.FALLBACK_PROMPT)
+        # Both models get the identical payload; nothing is model-specific now.
+        self.assertEqual(calls[0][0], calls[1][0])
+        self.assertNotIn("tools", calls[1][0])
         events = [json.loads(line) for line in response.text.splitlines()]
         self.assertEqual(events[0]["type"], "model")
         self.assertTrue(events[0]["fallback"])
