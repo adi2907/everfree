@@ -1073,19 +1073,8 @@
     }
 
     function setupImageHandling() {
-        const $button = $("btn-editor-image");
-        const $input = $("editor-image-input");
         const $editorRoot = $("editor");
-        if (!$button || !$input || !$editorRoot) return;
-
-        $button.addEventListener("click", () => {
-            $input.value = "";
-            $input.click();
-        });
-        $input.addEventListener("change", () => {
-            const file = $input.files && $input.files[0];
-            if (file) uploadAndInsertImage(file);
-        });
+        if (!$editorRoot) return;
 
         // Toast UI's hook handles its normal image commands. These capture
         // handlers also cover clipboard and drag/drop images when its hidden
