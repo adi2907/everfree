@@ -7,6 +7,9 @@
 
     const CHAT_STORE_KEY = "everfree-assistant-chats-v1";
     const API_KEY = "everfree-gemini-key";
+    // Stored alongside the Gemini key, same lifetime. Nothing consumes it yet —
+    // web search is not wired up; this only captures the key.
+    const SERPER_KEY = "everfree-serper-key";
     const MAX_CHATS = 30;
     const MAX_MESSAGES = 40;
     const $ = (id) => document.getElementById(id);
@@ -63,10 +66,22 @@
         .ef-ai-interim[hidden]{display:none!important}
         .ef-ai-settings,.ef-ai-history{position:absolute;inset:54px 0 0;z-index:2;overflow:auto;padding:18px 14px;background:var(--bg-surface,#fff)}
         .ef-ai-settings h3,.ef-ai-history h3{margin:0 0 6px;font-size:14px}
-        .ef-ai-settings p,.ef-ai-history p{margin:0 0 16px;color:var(--text-muted,#777);font-size:12px;line-height:1.5}
+        .ef-ai-history p{margin:0 0 16px;color:var(--text-muted,#777);font-size:12px;line-height:1.5}
         .ef-ai-settings a{color:var(--accent,#47735a)}
-        .ef-ai-settings label{display:block;margin-bottom:6px;font-size:12px;font-weight:600}
         .ef-ai-settings input{width:100%;padding:10px;border:1px solid var(--border,#ddd);border-radius:8px;background:var(--bg-input,#f4f4f4);color:var(--text-primary,#222);font:inherit;font-size:13px;outline:none}
+        .ef-ai-settings-head{display:flex;align-items:center;gap:4px;margin-bottom:14px}
+        .ef-ai-settings-head h3{margin:0;flex:1}
+        .ef-ai-help{width:26px;height:26px;flex:0 0 auto;font-size:15px;line-height:1}
+        .ef-ai-help[aria-expanded="true"]{background:var(--bg-input,#eee);color:var(--text-primary,#222)}
+        /* Reference material, not something to read on the way to pasting a key. */
+        .ef-ai-help-text{margin:-4px 0 16px;padding:11px 12px;border-radius:9px;background:var(--bg-input,#f4f4f4)}
+        .ef-ai-help-text[hidden]{display:none!important}
+        .ef-ai-help-text p{margin:0 0 9px;color:var(--text-secondary,#666);font-size:12px;line-height:1.5}
+        .ef-ai-help-text p:last-child{margin-bottom:0}
+        .ef-ai-help-text strong{color:var(--text-primary,#222)}
+        .ef-ai-field-label{display:block;margin:0 0 6px;font-size:12px;font-weight:600}
+        .ef-ai-field-label span{margin-left:5px;color:var(--text-muted,#777);font-weight:400}
+        .ef-ai-settings input + .ef-ai-field-label{margin-top:14px}
         .ef-ai-settings-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:12px}
         .ef-ai-button{padding:7px 11px;border:1px solid var(--border,#ddd);border-radius:7px;background:var(--bg-input,#f4f4f4);color:var(--text-primary,#222);font:inherit;font-size:12px;cursor:pointer}
         .ef-ai-button-primary{border-color:var(--accent,#47735a);background:var(--accent,#47735a);color:#fff}
@@ -93,13 +108,34 @@
                 <span class="ef-ai-title">Assistant</span>
                 <button class="ef-ai-icon" id="ef-ai-resume" title="Resume chat" aria-label="Resume chat">◷</button>
                 <button class="ef-ai-icon" id="ef-ai-new" title="New chat" aria-label="New chat">＋</button>
-                <button class="ef-ai-icon" id="ef-ai-info" title="Assistant settings" aria-label="Assistant settings">ⓘ</button>
+                <button class="ef-ai-icon" id="ef-ai-info" title="API keys" aria-label="API keys">
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="7.5" cy="15.5" r="4.5"/>
+                        <path d="M10.7 12.3 21 2"/>
+                        <path d="m17 6 3 3"/>
+                        <path d="m14 9 3 3"/>
+                    </svg>
+                </button>
                 <button class="ef-ai-icon" id="ef-ai-close" title="Close" aria-label="Close">×</button>
             </header>
             <section class="ef-ai-settings ef-ai-view" id="ef-ai-settings" hidden>
-                <h3>Gemini API Key</h3>
-                <p>Get it from <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">Google AI Studio</a>. The free tier currently includes 500 Gemini 3.5 Flash-Lite requests and 14,400 Gemma 4 31B requests per day.</p>
-                <input type="password" id="ef-ai-key" aria-label="Gemini API Key" autocomplete="off" placeholder="Paste your Gemini API key">
+                <div class="ef-ai-settings-head">
+                    <h3>API keys</h3>
+                    <button class="ef-ai-icon ef-ai-help" id="ef-ai-help" type="button" title="About these keys"
+                        aria-label="About these keys" aria-expanded="false" aria-controls="ef-ai-help-text">ⓘ</button>
+                </div>
+                <div class="ef-ai-help-text" id="ef-ai-help-text" hidden>
+                    <p><strong>Gemini</strong> answers your questions. Get a key from
+                        <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">Google AI Studio</a>.
+                        The free tier currently includes 500 Gemini 3.5 Flash-Lite requests and 14,400 Gemma 4 31B requests per day.</p>
+                    <p><strong>Serper</strong> is for web search. Gemini's own search grounding is not available on the
+                        free tier, so a separate key from <a href="https://serper.dev" target="_blank" rel="noopener noreferrer">serper.dev</a>
+                        is needed instead. Optional — the assistant works without it.</p>
+                </div>
+                <label class="ef-ai-field-label" for="ef-ai-key">Gemini key</label>
+                <input type="password" id="ef-ai-key" aria-label="Gemini API key" autocomplete="off" placeholder="Paste your Gemini API key">
+                <label class="ef-ai-field-label" for="ef-ai-serper-key">Serper key <span>optional</span></label>
+                <input type="password" id="ef-ai-serper-key" aria-label="Serper API key" autocomplete="off" placeholder="Paste your Serper API key">
                 <div class="ef-ai-settings-actions">
                     <button class="ef-ai-button" id="ef-ai-settings-cancel">Cancel</button>
                     <button class="ef-ai-button ef-ai-button-primary" id="ef-ai-settings-save">Save</button>
@@ -360,9 +396,18 @@
         scrollBottom();
     }
 
+    function setHelpOpen(open) {
+        $("ef-ai-help-text").hidden = !open;
+        $("ef-ai-help").setAttribute("aria-expanded", open ? "true" : "false");
+    }
+
     function openSettings() {
         closeViews();
         $("ef-ai-key").value = sessionStorage.getItem(API_KEY) || "";
+        $("ef-ai-serper-key").value = sessionStorage.getItem(SERPER_KEY) || "";
+        // Explain on first arrival, when there is no key yet and the reader has
+        // no idea what to paste; stay out of the way on every later visit.
+        setHelpOpen(!sessionStorage.getItem(API_KEY));
         $("ef-ai-settings").hidden = false;
         $("ef-ai-key").focus();
     }
@@ -637,10 +682,17 @@
     $("ef-ai-info").addEventListener("click", openSettings);
     $("ef-ai-settings-cancel").addEventListener("click", closeViews);
     $("ef-ai-history-close").addEventListener("click", closeViews);
+    $("ef-ai-help").addEventListener("click", () => {
+        setHelpOpen($("ef-ai-help-text").hidden);
+    });
     $("ef-ai-settings-save").addEventListener("click", () => {
         const key = $("ef-ai-key").value.trim();
         if (!key) return;
         sessionStorage.setItem(API_KEY, key);
+        // Optional, and clearing the box is the way to remove it.
+        const serper = $("ef-ai-serper-key").value.trim();
+        if (serper) sessionStorage.setItem(SERPER_KEY, serper);
+        else sessionStorage.removeItem(SERPER_KEY);
         closeViews();
         $("ef-ai-input").focus();
     });
