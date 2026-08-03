@@ -1,7 +1,6 @@
 /* ════════════════════════════════════════════════════════════
    EverFree — Voice input (Web Speech API)
-   Shared dictation helper used by both the AI input (assist.js)
-   and the notes editor (app.js). Runs entirely in the browser via
+   Dictation helper used by the notes editor (app.js). Runs entirely via
    the browser's built-in SpeechRecognition (live, streaming).
    ════════════════════════════════════════════════════════════ */
 (() => {

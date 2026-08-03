@@ -3,10 +3,8 @@
 I had to pay $100 for an Evernote renewal. For my notes. No way.
 
 EverFree started as a script to get my notes out of Evernote, and grew into
-the writing tool I actually wanted: an editor where an AI assistant sits next
-to the draft — rewriting a paragraph, continuing where I stalled, checking a
-claim — while the notes themselves stay plain Markdown files in a repo I own.
-Think Cursor, but for writing.
+the writing tool I actually wanted: a focused editor where notes stay plain
+Markdown files in a repository I own.
 
 It's free, MIT-licensed, and the Mac app ships as a signed and notarized DMG.
 
@@ -16,35 +14,25 @@ It's free, MIT-licensed, and the Mac app ships as a signed and notarized DMG.
 
 ## What it is
 
-EverFree is a three-pane note editor with an AI assistant wired into it the
-way Cursor is wired into code, on Cursor's own two keys. Select a passage
-and press ⌘K, and the AI completes that block right there in the note — in
-the same language and voice you were writing in (press ⌘K with nothing
-selected and it continues from where you stopped; Esc cancels). Select a
-passage and press ⌘L, and that exact excerpt becomes the context for a chat
-message instead — ask it to rewrite the section, summarize the note, pull in
-what you wrote in your other notes, then insert the reply into the note with
-one click.
-
-The same workspace is available on Mac, in the browser, and on mobile — all
+EverFree is a three-pane Markdown note editor. The same workspace is available
+on Mac, in the browser, and on mobile — all
 three edit the same notes, synced through a private GitHub repository you
 own. Under the hood everything is plain Markdown in ordinary folders, so if
 this project disappeared tomorrow, your notes would still be sitting in your
 repo as files you can open anywhere.
 
-## Setting up the AI
+## Assistant
 
-The editor works without any AI configuration. When you want the assistant,
-bring one key: a free Google Gemini key from
-[AI Studio](https://aistudio.google.com/apikey), which powers chat and ⌘K
-writing on the Mac, in the browser, and on mobile. It is entered in the
-assistant settings — on the desktop it is stored in `~/.everfree_agent.json`;
-in the web app it stays in your browser and is sent only with the request
-being made.
+Open a note and use the sparkle button to start a chat. The assistant receives
+the current note, any text selected in the editor, the current conversation,
+and your message as separate context. There are no slash commands: ask in
+natural language, including when you want it to search the public web. It
+cannot search your other notes.
 
-The assistant has no web access and cannot generate images: Gemini's image
-models require a billing-enabled key, and the point of this setup is that the
-free key is enough.
+The only chat actions are **New chat** and **Resume chat**. A Google Gemini API
+key is required and is kept in the current browser tab; EverFree does not save
+it on the server. Previous chats are saved locally in the browser so they can
+be resumed from the same note.
 
 ## Getting started
 

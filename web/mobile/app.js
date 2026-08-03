@@ -886,50 +886,23 @@
         btn.addEventListener('click', () => switchTab(btn.dataset.tab));
     });
 
-    // ── Assistant bridge ─────────────────────────────────────
-    window.EverFreeBridge = {
+    // ── Init ─────────────────────────────────────────────────
+    window.EverFreeNoteContext = {
         getNote() {
-            const ta = $('note-edit-area');
-            if (!editingNotebook || !editingNote || !ta) return null;
-            return { notebook: editingNotebook, note: editingNote, content: ta.value };
+            if (!editingNotebook || !editingNote) return null;
+            return {
+                notebook: editingNotebook,
+                note: editingNote,
+                content: $('note-edit-area').value,
+            };
         },
         getSelection() {
-            const ta = $('note-edit-area');
-            if (!ta) return '';
-            return (ta.value.slice(ta.selectionStart || 0, ta.selectionEnd || 0) || '').trim();
-        },
-        getSelectionInfo() {
-            const ta = $('note-edit-area');
-            if (!ta) return null;
-            const start = ta.selectionStart || 0;
-            const end = ta.selectionEnd || 0;
-            return { text: (ta.value.slice(start, end) || '').trim(), range: [start, end] };
-        },
-        insertAfterRange(range, text) {
-            const ta = $('note-edit-area');
-            if (!ta) return false;
-            const pos = range ? Math.min(range[1], ta.value.length) : (ta.selectionEnd || ta.value.length);
-            ta.value = ta.value.slice(0, pos) + text + ta.value.slice(pos);
-            ta.selectionStart = ta.selectionEnd = pos + text.length;
-            return true;
-        },
-        insertAtCursor(text) {
-            const ta = $('note-edit-area');
-            if (!ta) return false;
-            const pos = ta.selectionEnd || ta.value.length;
-            ta.value = ta.value.slice(0, pos) + text + ta.value.slice(pos);
-            ta.selectionStart = ta.selectionEnd = pos + text.length;
-            return true;
-        },
-        insertMarkdown(text) {
-            const ta = $('note-edit-area');
-            if (!ta || ta.disabled) return false;
-            ta.value = ta.value.trim() ? ta.value.replace(/\s+$/, '') + '\n\n' + text + '\n' : text + '\n';
-            return true;
+            const textarea = $('note-edit-area');
+            return textarea.selectionStart !== textarea.selectionEnd
+                ? textarea.value.slice(textarea.selectionStart, textarea.selectionEnd) : '';
         },
     };
 
-    // ── Init ─────────────────────────────────────────────────
     setupVoiceInput();
     if (token && tokenExpiresAt && tokenExpiresAt <= Date.now()) {
         signOut();

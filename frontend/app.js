@@ -487,8 +487,8 @@
             placeholder: "Start writing…",
             hooks: {
                 // Paste or drag-drop an image: upload the blob to the notebook's
-                // assets/ folder and insert it as a note-relative path (the same
-                // form the agent uses), so it renders here and stays portable in
+                // assets/ folder and insert it as a note-relative path, so it
+                // renders here and stays portable in
                 // the synced Markdown. Returning false prevents Toast UI's default
                 // base64 inlining.
                 addImageBlobHook(blob, callback) {
@@ -1037,11 +1037,12 @@
     });
 
     $btnShowNotes.addEventListener("click", () => {
-        document.getElementById("assist-close-btn")?.click();
+        selectedNotebook = null;
+        $searchInput.value = "";
+        renderSidebar();
     });
 
     $btnRailSearch.addEventListener("click", () => {
-        document.getElementById("assist-close-btn")?.click();
         setTimeout(() => $searchInput.focus(), 50);
     });
 
@@ -1073,74 +1074,26 @@
         }
     });
 
-    // ── Bridge for the writing assistant panel (assist.js) ──
-    window.EverFreeBridge = {
+    // ── Init ────────────────────────────────────────────────
+    window.EverFreeNoteContext = {
         getNote() {
             if (!currentNotebook || !currentNote || !editor) return null;
             return { notebook: currentNotebook, note: currentNote, content: editor.getMarkdown() };
         },
         getSelection() {
-            if (!editor) return "";
-            try {
-                return (editor.getSelectedText() || "").trim();
-            } catch {
-                return "";
+            const root = document.getElementById("editor");
+            if (!root) return "";
+            for (const textarea of root.querySelectorAll("textarea")) {
+                if (textarea.selectionStart !== textarea.selectionEnd) {
+                    return textarea.value.slice(textarea.selectionStart, textarea.selectionEnd);
+                }
             }
-        },
-        // Selection text plus its range, captured together so text generated
-        // for it later can be placed after it even if focus moved meanwhile.
-        getSelectionInfo() {
-            if (!editor) return null;
-            let text = "", range = null;
-            try { text = (editor.getSelectedText() || "").trim(); } catch { /* no selection */ }
-            try { range = editor.getSelection(); } catch { /* keep null */ }
-            return { text, range };
-        },
-        // Insert text right after `range` (from getSelectionInfo), leaving the
-        // selected text itself untouched. Falls back to the cursor position.
-        insertAfterRange(range, text) {
-            if (!editor) return false;
-            try {
-                if (range) editor.setSelection(range[1], range[1]);
-            } catch { /* stale range: insert at cursor instead */ }
-            editor.insertText(text);
-            editor.focus();
-            return true;
-        },
-        insertAtCursor(text) {
-            if (!editor) return false;
-            editor.insertText(text);
-            editor.focus();
-            return true;
-        },
-        // WYSIWYG insertText would show raw Markdown syntax literally, so
-        // formatted passages are appended through setMarkdown instead.
-        insertMarkdown(text) {
-            if (!editor) return false;
-            if (editor.isMarkdownMode()) {
-                editor.insertText(text);
-            } else {
-                const md = editor.getMarkdown();
-                editor.setMarkdown(md ? md.replace(/\s+$/, "") + "\n\n" + text + "\n" : text + "\n");
-                editor.moveCursorToEnd();
-            }
-            editor.focus();
-            return true;
-        },
-        insertImage(relPath, altText) {
-            if (!editor) return false;
-            editor.exec("addImage", { imageUrl: relPath, altText: altText || "image" });
-            editor.focus();
-            return true;
-        },
-        saveNote,
-        // Lets the assistant surface a note it just created with create_note.
-        refreshLibrary() {
-            loadNotebooks();
+            const selection = window.getSelection();
+            return selection && selection.anchorNode && root.contains(selection.anchorNode)
+                ? selection.toString() : "";
         },
     };
 
-    // ── Init ────────────────────────────────────────────────
     setupEditorDictation();
     loadNotebooks();
     pollSyncStatus();

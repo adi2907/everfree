@@ -16,19 +16,14 @@ DATA_FILES = [
         'frontend/index.html',
         'frontend/style.css',
         'frontend/app.js',
-        'frontend/assist.js',
         'frontend/setup.html',
         'frontend/setup.css',
         'frontend/setup.js',
+        'web/assistant.js',
+        'web/lib/assistant-config.json',
     ]),
     ('frontend/assets', [
         'frontend/assets/everfree-logo.svg',
-    ]),
-    # Assistant system prompts, shared verbatim with the web/mobile assistant.
-    # The file lives under web/ because Vercel deploys from that directory only;
-    # server/agent.py reads it from RESOURCEPATH/prompts once bundled.
-    ('prompts', [
-        'web/lib/prompts.json',
     ]),
 ]
 

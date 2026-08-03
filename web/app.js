@@ -1009,8 +1009,8 @@
 
     // ── Image paste / drag-drop upload ──────────────────────
     // Commits the pasted image into the open note's assets/ folder in the repo
-    // and returns the note-relative path (assets/<file>) to embed — the same
-    // form the local app and agent use, so the Markdown stays portable.
+    // and returns the note-relative path (assets/<file>) to keep the Markdown
+    // portable across the web and local apps.
     async function uploadImageBlob(blob) {
         if (!currentNotebook) {
             alert("Open a note before adding an image.");
@@ -1582,61 +1582,26 @@
         if (isDirty) { e.preventDefault(); e.returnValue = ""; }
     });
 
-    // ── Assistant bridge ────────────────────────────────────
-    // Lets assist.js read the open note and the user's selection without
-    // reaching into this module's private state.
-    window.EverFreeBridge = {
+    // ── Init ────────────────────────────────────────────────
+    window.EverFreeNoteContext = {
         getNote() {
             if (!currentNotebook || !currentNote || !editor) return null;
             return { notebook: currentNotebook, note: currentNote, content: editor.getMarkdown() };
         },
         getSelection() {
-            if (!editor || !editor.getSelectedText) return "";
-            try { return (editor.getSelectedText() || "").trim(); } catch { return ""; }
-        },
-        // Selection text plus its range, captured together so text generated
-        // for it later can be placed after it even if focus moved meanwhile.
-        getSelectionInfo() {
-            if (!editor) return null;
-            let text = "", range = null;
-            try { text = (editor.getSelectedText() || "").trim(); } catch { /* no selection */ }
-            try { range = editor.getSelection(); } catch { /* keep null */ }
-            return { text, range };
-        },
-        // Insert text right after `range` (from getSelectionInfo), leaving the
-        // selected text itself untouched. Falls back to the cursor position.
-        insertAfterRange(range, text) {
-            if (!editor) return false;
-            try {
-                if (range) editor.setSelection(range[1], range[1]);
-            } catch { /* stale range: insert at cursor instead */ }
-            editor.insertText(text);
-            editor.focus();
-            return true;
-        },
-        insertAtCursor(text) {
-            if (!editor) return false;
-            editor.insertText(text);
-            editor.focus();
-            return true;
-        },
-        // WYSIWYG insertText would show raw Markdown syntax literally, so
-        // formatted passages are appended through setMarkdown instead.
-        insertMarkdown(text) {
-            if (!editor) return false;
-            if (editor.isMarkdownMode && editor.isMarkdownMode()) {
-                editor.insertText(text);
-            } else {
-                const md = editor.getMarkdown();
-                editor.setMarkdown(md ? md.replace(/\s+$/, "") + "\n\n" + text + "\n" : text + "\n");
-                editor.moveCursorToEnd();
+            const root = document.getElementById("editor");
+            if (!root) return "";
+            for (const textarea of root.querySelectorAll("textarea")) {
+                if (textarea.selectionStart !== textarea.selectionEnd) {
+                    return textarea.value.slice(textarea.selectionStart, textarea.selectionEnd);
+                }
             }
-            editor.focus();
-            return true;
+            const selection = window.getSelection();
+            return selection && selection.anchorNode && root.contains(selection.anchorNode)
+                ? selection.toString() : "";
         },
     };
 
-    // ── Init ────────────────────────────────────────────────
     setupEditorDictation();
     setupImageHandling();
     setupPaneResizers();

@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>EverFree - AI writing IDE</title>
+    <title>EverFree - Open-source notes</title>
     <script>
         (function () {
             var params = new URLSearchParams(location.search);
@@ -13,7 +13,7 @@
             if (isMobile) window.location.replace('/mobile/');
         })();
     </script>
-    <meta name="description" content="EverFree is a free, open-source AI writing IDE. Draft, revise, and keep writing with a built-in assistant, Evernote sync, and a notarized Mac DMG.">
+    <meta name="description" content="EverFree is a free, open-source note editor with Evernote sync and a notarized Mac DMG.">
     <script type="application/ld+json">
         {
             "@context": "https://schema.org",
@@ -21,7 +21,7 @@
             "name": "EverFree",
             "applicationCategory": "WritingApplication",
             "operatingSystem": "macOS, Web browser",
-            "description": "A free, open-source AI writing IDE with a built-in assistant, Evernote sync, and a notarized Mac DMG.",
+            "description": "A free, open-source note editor with Evernote sync and a notarized Mac DMG.",
             "offers": {
                 "@type": "Offer",
                 "price": "0",
@@ -55,7 +55,6 @@
                     <span>EverFree</span>
                 </h1>
                 <nav class="landing-nav-actions" aria-label="Primary navigation">
-                    <a class="landing-nav-link" href="#assistant">Assistant</a>
                     <a class="landing-nav-link" href="#get-started">Get started</a>
                     <a class="landing-nav-link" href="#faq">FAQ</a>
                     <a class="landing-nav-link" href="/blog/">Blog</a>
@@ -65,11 +64,10 @@
             </header>
 
             <section class="landing-hero">
-                <h2>An IDE for your writing</h2>
+                <h2>Your notes, in files you own</h2>
                 <p class="landing-lede">
-                    EverFree is a free, open-source note editor with an AI assistant beside the draft
-                    &mdash; think Cursor, but for writing. Your notes stay plain Markdown files in a
-                    GitHub repo you own.
+                    EverFree is a free, open-source note editor. Your notes stay plain Markdown files
+                    in a private GitHub repository you own.
                 </p>
 
                 <div id="signin-idle" class="landing-actions">
@@ -113,62 +111,6 @@
                 </div>
             </section>
 
-            <section class="landing-section" id="assistant">
-                <div class="section-head">
-                    <h3>A Cursor for writing</h3>
-                    <p>
-                        Code editors got AI that understands the whole project. Writing tools got a chatbot
-                        bolted onto the side. EverFree wires the assistant into the editor the way Cursor
-                        wires it into code &mdash; it reads the note you have open and takes the exact
-                        passage you select as context.
-                    </p>
-                </div>
-
-                <div class="demo-frame">
-                    <div class="demo-bar">
-                        <span></span><span></span><span></span>
-                        <small>Assistant &mdash; &#8984;K writes &middot; &#8984;L chats</small>
-                    </div>
-                    <div class="demo-media">
-                        <div class="demo-placeholder">Assistant demo</div>
-                        <video class="demo-video" src="/assets/demo-assistant.mp4" autoplay muted loop playsinline preload="metadata"></video>
-                    </div>
-                </div>
-
-                <ul class="assistant-list">
-                    <li>
-                        <strong>Complete the block you're in</strong>
-                        Select a passage and press <kbd>&#8984;K</kbd> &mdash; the AI finishes it right in the
-                        note, in the same language and voice. No selection? It continues where you stopped.
-                    </li>
-                    <li>
-                        <strong>Quote a passage</strong>
-                        Select text and press <kbd>&#8984;L</kbd> &mdash; the excerpt is attached to your next
-                        message, so "rewrite this" means exactly this.
-                    </li>
-                    <li>
-                        <strong>Work on the current note</strong>
-                        Continue a stalled draft, rewrite a section, summarize the whole note, or have it
-                        create a new one &mdash; replies drop into the note with one click.
-                    </li>
-                    <li>
-                        <strong>Draw on your other notes</strong>
-                        In the Mac app the assistant can search and read everything you've written, so
-                        answers are grounded in your own material rather than invented.
-                    </li>
-                    <li>
-                        <strong>Bring your own key</strong>
-                        One free Google Gemini key powers the assistant in both the browser and the
-                        Mac app. Nothing else to configure.
-                    </li>
-                    <li>
-                        <strong>Keyboard-first</strong>
-                        <kbd>&#8984;K</kbd> writes in the note, <kbd>&#8984;L</kbd> opens the chat,
-                        <kbd>Ctrl+S</kbd> saves the note.
-                    </li>
-                </ul>
-            </section>
-
             <section class="landing-section landing-storage" id="how-it-works">
                 <div class="storage-copy">
                     <h3>Your notes are files you own</h3>
@@ -179,9 +121,7 @@
                     </p>
                     <p>
                         There is no EverFree account and no EverFree database. If this project disappeared
-                        tomorrow, your notes would still be sitting in your repo as ordinary files. The same
-                        goes for AI keys: they are stored in your browser and only forwarded with the
-                        requests you make &mdash; nothing is retained server-side.
+                        tomorrow, your notes would still be sitting in your repo as ordinary files.
                     </p>
                 </div>
                 <pre class="repo-tree" aria-label="Example workspace repository layout">everfree-notes/            &larr; your private repo
@@ -202,7 +142,7 @@
                         <ol>
                             <li>Open the web editor and sign in with GitHub &mdash; a one-time device code, no password.</li>
                             <li>Connect your private <code>everfree-notes</code> repository. EverFree creates it if needed and never uses another repository.</li>
-                            <li>Start writing. Add a Google Gemini key in the assistant settings whenever you want the AI.</li>
+                            <li>Start writing. Every save commits the note to your repository.</li>
                         </ol>
                     </div>
                     <div class="start-column">
@@ -223,14 +163,11 @@
                 </p>
                 <p>
                     EverFree started as a script to get my notes out of Evernote, and grew into the writing
-                    tool I actually wanted: an editor where the assistant sits next to the draft &mdash;
-                    rewriting a paragraph, continuing where I stalled, checking a claim &mdash; while the
-                    notes themselves stay plain files in a repo I own. No subscription, no lock-in, nothing
-                    between me and my own writing.
+                    tool I actually wanted: a focused editor where the notes stay plain files in a repo I
+                    own. No subscription, no lock-in, nothing between me and my own writing.
                 </p>
                 <p>
-                    It's MIT-licensed and free. If a Cursor for writing is the tool you've been missing too,
-                    I hope it's useful.
+                    It's MIT-licensed and free. I hope it's useful.
                 </p>
                 <p class="why-signature">
                     &mdash; Aditya Ganguli &middot; <a href="https://github.com/adi2907" target="_blank" rel="noopener">@adi2907</a>
@@ -242,11 +179,7 @@
                 <div class="faq-grid">
                     <div class="faq-item">
                         <h4>Is it really free?</h4>
-                        <p>Yes. EverFree is MIT-licensed open source. There's no account, no plan, and no trial &mdash; the only cost is the AI API usage on keys you bring yourself.</p>
-                    </div>
-                    <div class="faq-item">
-                        <h4>Do I need an API key?</h4>
-                        <p>The editor works without any. The assistant needs one Google Gemini API key, free from <a href="https://aistudio.google.com/apikey">Google AI Studio</a> &mdash; the same key works in the browser and in the Mac app.</p>
+                        <p>Yes. EverFree is MIT-licensed open source. There's no account, no plan, and no trial.</p>
                     </div>
                     <div class="faq-item">
                         <h4>Where are my notes stored?</h4>
@@ -257,8 +190,8 @@
                         <p>Yes, in the Mac app. The setup wizard connects your Evernote account and converts notebooks to Markdown (using <code>evernote2md</code>).</p>
                     </div>
                     <div class="faq-item">
-                        <h4>Does EverFree see my notes or keys?</h4>
-                        <p>Notes sync between your browser and GitHub. AI keys stay in your browser and are only forwarded with the requests you make; nothing is stored on EverFree's servers.</p>
+                        <h4>Does EverFree store my notes?</h4>
+                        <p>There is no EverFree database. Notes sync directly between your browser and your GitHub repository.</p>
                     </div>
                     <div class="faq-item">
                         <h4>Is there a mobile version?</h4>
@@ -387,9 +320,11 @@
                     </div>
                     <div class="editor-actions">
                         <span class="save-status" id="save-status"></span>
-                        <button class="btn-icon" id="btn-assist" title="Assistant (Ctrl/⌘L)" aria-label="Assistant">
-                            <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor">
-                                <path d="M12 2l2.1 6.4L20.5 10l-6.4 2.1L12 18.5 9.9 12.1 3.5 10l6.4-1.6L12 2z"/>
+                        <button class="btn-icon" id="btn-assistant" title="Assistant" aria-label="Open assistant">
+                            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M12 3l1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5L12 3z"/>
+                                <path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8L19 15z"/>
                             </svg>
                         </button>
                         <button class="btn-icon editor-mic" id="btn-editor-mic" title="Dictate into note (voice input)" aria-label="Dictate into note">
@@ -453,91 +388,10 @@
         <button class="popover-item popover-item-danger" id="btn-signout">Sign out</button>
     </div>
 
-    <!-- ── Writing Assistant Panel ─────────────────────────── -->
-    <aside class="assist-panel" id="assist-panel" hidden>
-        <div class="assist-header">
-            <span class="assist-title">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M12 2l2.1 6.4L20.5 10l-6.4 2.1L12 18.5 9.9 12.1 3.5 10l6.4-1.6L12 2z"/>
-                </svg>
-                Assistant
-            </span>
-            <span class="assist-status" id="assist-status" title=""></span>
-            <button class="btn-icon" id="assist-new-btn" title="Clear chat" aria-label="Clear chat">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                    stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4 12.5-12.5z"/>
-                </svg>
-            </button>
-            <button class="btn-icon" id="assist-settings-btn" title="Assistant settings" aria-label="Assistant settings">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                    stroke-linecap="round" stroke-linejoin="round">
-                    <circle cx="12" cy="12" r="3"/>
-                    <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/>
-                </svg>
-            </button>
-            <button class="btn-icon" id="assist-close-btn" title="Close (⌘L or Esc)" aria-label="Close assistant">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                    stroke-linecap="round" stroke-linejoin="round">
-                    <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-                </svg>
-            </button>
-        </div>
-
-        <div class="assist-settings" id="assist-settings" hidden>
-            <div class="assist-settings-hint">The assistant runs on Google Gemini. Your key is stored only in this browser and sent per request.</div>
-
-            <div class="assist-provider-pane active">
-                <label>Google Gemini API key
-                    <input type="password" id="assist-set-gemini" placeholder="">
-                    <span class="assist-label-hint">Get a free key at aistudio.google.com/apikey.</span>
-                </label>
-                <label>Model
-                    <input type="text" id="assist-set-gemini-model" list="assist-gemini-model-list"
-                        placeholder="gemini-2.5-flash">
-                    <datalist id="assist-gemini-model-list">
-                        <option value="gemini-2.5-flash"></option>
-                        <option value="gemini-3.1-flash-lite"></option>
-                        <option value="gemini-2.5-pro"></option>
-                    </datalist>
-                </label>
-            </div>
-
-
-            <div class="assist-settings-actions">
-                <button class="btn btn-ghost" id="assist-settings-cancel">Cancel</button>
-                <button class="btn btn-primary" id="assist-settings-save">Save</button>
-            </div>
-        </div>
-
-        <div class="assist-messages" id="assist-messages">
-            <div class="assist-hint">
-                Ask anything about your note — the assistant reads what you're working on before answering.<br>
-                <kbd>⌘K</kbd> in the note: completes your selection (or continues where you stopped) · <kbd>⌘L</kbd> chat about the selection
-            </div>
-        </div>
-
-        <div class="assist-context" id="assist-context" hidden>
-            <span class="assist-context-label">✎ Selected excerpt</span>
-            <span class="assist-context-text" id="assist-context-text"></span>
-            <button class="assist-context-del" id="assist-context-del" title="Remove excerpt" aria-label="Remove excerpt">×</button>
-        </div>
-
-        <div class="assist-inputbar">
-            <textarea id="assist-input" rows="2" placeholder="Ask anything, or type / for commands"></textarea>
-            <button class="btn-icon assist-send" id="assist-send" title="Send (Enter)" aria-label="Send">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                    stroke-linecap="round" stroke-linejoin="round">
-                    <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
-                </svg>
-            </button>
-        </div>
-    </aside>
-
     <script src="https://uicdn.toast.com/editor/latest/toastui-editor-all.min.js"></script>
     <script src="/voice.js"></script>
     <script src="/app.js"></script>
-    <script src="/assist.js"></script>
+    <script src="/assistant.js"></script>
     <script>
         // Demo slots show their placeholder until the video files exist in /assets/.
         document.querySelectorAll("video.demo-video").forEach(function (v) {

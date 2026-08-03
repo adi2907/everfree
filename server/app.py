@@ -34,7 +34,7 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from server import agent
+from server import assistant
 from server.github_auth import (
     CredentialStoreError,
     REPOSITORY_NAME,
@@ -64,8 +64,10 @@ EVERNOTE_SYNC_MAX_DOWNLOAD_WORKERS = int(
 )
 if os.environ.get("RESOURCEPATH"):
     FRONTEND_DIR = Path(os.environ["RESOURCEPATH"]) / "frontend"
+    ASSISTANT_UI_FILE = FRONTEND_DIR / "assistant.js"
 else:
     FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
+    ASSISTANT_UI_FILE = Path(__file__).resolve().parent.parent / "web" / "assistant.js"
 
 logger = logging.getLogger("everfree")
 
@@ -775,7 +777,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="EverFree", version="4.0.0", lifespan=lifespan)
-app.include_router(agent.router)
+app.include_router(assistant.router)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -2186,6 +2188,13 @@ async def serve_note_asset(file_path: str):
 
 
 # ── Static assets ────────────────────────────────────────────
+@app.get("/static/assistant.js")
+async def serve_assistant_ui():
+    response = FileResponse(ASSISTANT_UI_FILE, media_type="text/javascript")
+    response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 class _RevalidatingStaticFiles(StaticFiles):
     """Serve the bundled UI with revalidation always required.
 

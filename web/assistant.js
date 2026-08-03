@@ -1,0 +1,430 @@
+/* EverFree — minimal embedded assistant. */
+(() => {
+    "use strict";
+
+    const trigger = document.getElementById("btn-assistant");
+    if (!trigger) return;
+
+    const CHAT_STORE_KEY = "everfree-assistant-chats-v1";
+    const API_KEY = "everfree-gemini-key";
+    const MAX_CHATS = 30;
+    const MAX_MESSAGES = 40;
+    const $ = (id) => document.getElementById(id);
+    const bridge = () => window.EverFreeNoteContext || null;
+
+    document.head.insertAdjacentHTML("beforeend", `<style>
+        .ef-ai-panel{position:fixed;inset:0 0 0 auto;width:370px;max-width:100vw;z-index:1200;display:flex;flex-direction:column;background:var(--bg-surface,#fff);color:var(--text-primary,#222);border-left:1px solid var(--border,#ddd);box-shadow:-12px 0 32px rgba(0,0,0,.12);font-family:var(--font-sans,var(--font,system-ui,sans-serif))}
+        .ef-ai-panel[hidden],.ef-ai-view[hidden],.ef-ai-selection[hidden]{display:none!important}
+        .ef-ai-header{height:54px;display:flex;align-items:center;gap:4px;padding:0 10px 0 14px;border-bottom:1px solid var(--border,#ddd)}
+        .ef-ai-title{flex:1;font-weight:650;font-size:14px}
+        .ef-ai-icon{width:32px;height:32px;border:0;border-radius:7px;background:transparent;color:var(--text-secondary,#666);font:inherit;font-size:18px;cursor:pointer}
+        .ef-ai-icon:hover{background:var(--bg-input,#eee);color:var(--text-primary,#222)}
+        .ef-ai-messages{flex:1;min-height:0;overflow:auto;padding:18px 14px;display:flex;flex-direction:column;gap:14px}
+        .ef-ai-empty{margin:auto;text-align:center;color:var(--text-muted,#777);font-size:13px;line-height:1.6}
+        .ef-ai-message{max-width:92%;font-size:13px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere}
+        .ef-ai-user{align-self:flex-end;padding:9px 12px;border-radius:12px 12px 3px 12px;background:var(--accent,#47735a);color:#fff}
+        .ef-ai-assistant{align-self:stretch;max-width:100%;padding:2px 4px;color:var(--text-primary,#222)}
+        .ef-ai-quote{margin:0 0 7px;padding:6px 8px;border-left:2px solid currentColor;background:rgba(255,255,255,.12);font-size:11px;opacity:.9}
+        .ef-ai-error{align-self:stretch;color:var(--danger,#b64f4f);font-size:12px}
+        .ef-ai-thinking{align-self:flex-start;color:var(--text-muted,#777);font-size:12px}
+        .ef-ai-thinking::after{content:'…';animation:ef-ai-pulse 1s infinite}
+        @keyframes ef-ai-pulse{50%{opacity:.25}}
+        .ef-ai-sources{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+        .ef-ai-sources a{max-width:100%;padding:3px 7px;border:1px solid var(--border,#ddd);border-radius:999px;color:var(--text-secondary,#666);font-size:10px;text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .ef-ai-compose{padding:8px 12px max(12px,env(safe-area-inset-bottom));background:var(--bg-surface,#fff)}
+        .ef-ai-model{margin:0 2px 7px;color:var(--text-muted,#777);font-size:11px;line-height:1.35}
+        .ef-ai-model[data-fallback="true"]{color:var(--accent,#47735a)}
+        .ef-ai-selection{display:flex;align-items:center;gap:8px;margin-bottom:7px;padding:7px 9px;border:1px solid var(--border,#ddd);border-radius:8px;background:var(--bg-input,#f4f4f4);font-size:11px}
+        .ef-ai-selection strong{white-space:nowrap;color:var(--accent,#47735a)}
+        .ef-ai-selection span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-secondary,#666)}
+        .ef-ai-selection button{border:0;background:none;color:var(--text-muted,#777);font-size:17px;cursor:pointer}
+        .ef-ai-form{display:flex;align-items:flex-end;gap:8px;padding:10px;border:1px solid var(--border,#ddd);border-radius:14px;background:var(--bg-editor,var(--bg-surface,#fff));box-shadow:0 2px 12px rgba(0,0,0,.05)}
+        .ef-ai-input{flex:1;min-height:46px;max-height:150px;resize:none;border:0;outline:0;background:transparent;color:var(--text-primary,#222);font:inherit;font-size:13px;line-height:1.5}
+        .ef-ai-send{width:32px;height:32px;flex:0 0 auto;border:0;border-radius:50%;background:var(--accent,#47735a);color:#fff;font-size:17px;cursor:pointer}
+        .ef-ai-send:disabled{opacity:.4;cursor:default}
+        .ef-ai-settings,.ef-ai-history{position:absolute;inset:54px 0 0;z-index:2;overflow:auto;padding:18px 14px;background:var(--bg-surface,#fff)}
+        .ef-ai-settings h3,.ef-ai-history h3{margin:0 0 6px;font-size:14px}
+        .ef-ai-settings p,.ef-ai-history p{margin:0 0 16px;color:var(--text-muted,#777);font-size:12px;line-height:1.5}
+        .ef-ai-settings a{color:var(--accent,#47735a)}
+        .ef-ai-settings label{display:block;margin-bottom:6px;font-size:12px;font-weight:600}
+        .ef-ai-settings input{width:100%;padding:10px;border:1px solid var(--border,#ddd);border-radius:8px;background:var(--bg-input,#f4f4f4);color:var(--text-primary,#222);font:inherit;font-size:13px;outline:none}
+        .ef-ai-settings-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:12px}
+        .ef-ai-button{padding:7px 11px;border:1px solid var(--border,#ddd);border-radius:7px;background:var(--bg-input,#f4f4f4);color:var(--text-primary,#222);font:inherit;font-size:12px;cursor:pointer}
+        .ef-ai-button-primary{border-color:var(--accent,#47735a);background:var(--accent,#47735a);color:#fff}
+        .ef-ai-chat-row{width:100%;display:block;margin:0 0 8px;padding:10px 11px;border:1px solid var(--border,#ddd);border-radius:9px;background:transparent;color:var(--text-primary,#222);font:inherit;text-align:left;cursor:pointer}
+        .ef-ai-chat-row:hover{background:var(--bg-input,#f4f4f4)}
+        .ef-ai-chat-row strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
+        .ef-ai-chat-row span{display:block;margin-top:4px;color:var(--text-muted,#777);font-size:10px}
+        @media(max-width:640px){.ef-ai-panel{width:100vw}}
+    </style>`);
+
+    document.body.insertAdjacentHTML("beforeend", `
+        <aside class="ef-ai-panel" id="ef-ai-panel" aria-label="AI assistant" hidden>
+            <header class="ef-ai-header">
+                <span class="ef-ai-title">Assistant</span>
+                <button class="ef-ai-icon" id="ef-ai-resume" title="Resume chat" aria-label="Resume chat">◷</button>
+                <button class="ef-ai-icon" id="ef-ai-new" title="New chat" aria-label="New chat">＋</button>
+                <button class="ef-ai-icon" id="ef-ai-info" title="Assistant settings" aria-label="Assistant settings">ⓘ</button>
+                <button class="ef-ai-icon" id="ef-ai-close" title="Close" aria-label="Close">×</button>
+            </header>
+            <section class="ef-ai-settings ef-ai-view" id="ef-ai-settings" hidden>
+                <h3>Gemini API Key</h3>
+                <p>Get it from <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">Google AI Studio</a>. The free tier currently includes 500 Gemini 3.5 Flash-Lite requests and 14,400 Gemma 4 31B requests per day.</p>
+                <input type="password" id="ef-ai-key" aria-label="Gemini API Key" autocomplete="off" placeholder="Paste your Gemini API key">
+                <div class="ef-ai-settings-actions">
+                    <button class="ef-ai-button" id="ef-ai-settings-cancel">Cancel</button>
+                    <button class="ef-ai-button ef-ai-button-primary" id="ef-ai-settings-save">Save</button>
+                </div>
+            </section>
+            <section class="ef-ai-history ef-ai-view" id="ef-ai-history" hidden>
+                <h3>Resume chat</h3>
+                <p id="ef-ai-history-note"></p>
+                <div id="ef-ai-history-list"></div>
+                <button class="ef-ai-button" id="ef-ai-history-close">Back</button>
+            </section>
+            <div class="ef-ai-messages" id="ef-ai-messages"></div>
+            <div class="ef-ai-compose">
+                <div class="ef-ai-model" id="ef-ai-model">Using Gemini 3.5 Flash-Lite</div>
+                <div class="ef-ai-selection" id="ef-ai-selection" hidden>
+                    <strong>Text selected</strong><span id="ef-ai-selection-text"></span>
+                    <button id="ef-ai-selection-clear" title="Remove selection" aria-label="Remove selection">×</button>
+                </div>
+                <form class="ef-ai-form" id="ef-ai-form">
+                    <textarea class="ef-ai-input" id="ef-ai-input" rows="2" placeholder="Reply"></textarea>
+                    <button class="ef-ai-send" id="ef-ai-send" type="submit" title="Send" aria-label="Send">↑</button>
+                </form>
+            </div>
+        </aside>`);
+
+    let currentChat = null;
+    let pendingSelection = "";
+    let busy = false;
+
+    function chatStore() {
+        try {
+            const value = JSON.parse(localStorage.getItem(CHAT_STORE_KEY) || "[]");
+            return Array.isArray(value) ? value : [];
+        } catch { return []; }
+    }
+
+    function writeStore(chats) {
+        try { localStorage.setItem(CHAT_STORE_KEY, JSON.stringify(chats.slice(0, MAX_CHATS))); }
+        catch { /* Resume is optional when browser storage is unavailable. */ }
+    }
+
+    function noteKey(note) {
+        if (!note) return "";
+        return `${note.notebook || ""}/${note.note || ""}`;
+    }
+
+    function newId() {
+        return crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    }
+
+    function blankChat() {
+        const note = bridge() && bridge().getNote ? bridge().getNote() : null;
+        return { id: newId(), noteKey: noteKey(note), title: "New chat", updatedAt: Date.now(), messages: [] };
+    }
+
+    function persistChat() {
+        if (!currentChat || !currentChat.messages.length) return;
+        currentChat.updatedAt = Date.now();
+        currentChat.messages = currentChat.messages.slice(-MAX_MESSAGES);
+        const chats = chatStore().filter((chat) => chat.id !== currentChat.id);
+        chats.unshift(currentChat);
+        writeStore(chats);
+    }
+
+    function closeViews() {
+        $("ef-ai-settings").hidden = true;
+        $("ef-ai-history").hidden = true;
+    }
+
+    function sourceLinks(container, sources) {
+        if (!Array.isArray(sources) || !sources.length) return;
+        const row = document.createElement("div");
+        row.className = "ef-ai-sources";
+        for (const source of sources) {
+            if (!source || typeof source.url !== "string" || !/^https?:\/\//.test(source.url)) continue;
+            const link = document.createElement("a");
+            link.href = source.url;
+            link.target = "_blank";
+            link.rel = "noopener noreferrer";
+            link.textContent = source.title || "Source";
+            row.appendChild(link);
+        }
+        if (row.childNodes.length) container.appendChild(row);
+    }
+
+    function messageBubble(message) {
+        const bubble = document.createElement("div");
+        bubble.className = `ef-ai-message ef-ai-${message.role}`;
+        if (message.role === "user" && message.selection) {
+            const quote = document.createElement("div");
+            quote.className = "ef-ai-quote";
+            quote.textContent = message.selection.length > 220 ? `${message.selection.slice(0, 220)}…` : message.selection;
+            bubble.appendChild(quote);
+        }
+        const text = document.createElement("div");
+        text.textContent = message.content || "";
+        bubble.appendChild(text);
+        sourceLinks(bubble, message.sources);
+        return { bubble, text };
+    }
+
+    function scrollBottom() {
+        const messages = $("ef-ai-messages");
+        messages.scrollTop = messages.scrollHeight;
+    }
+
+    function setActiveModel(model) {
+        const indicator = $("ef-ai-model");
+        const fallback = Boolean(model && model.fallback);
+        const name = model && model.name ? model.name : "Gemini 3.5 Flash-Lite";
+        indicator.dataset.fallback = String(fallback);
+        indicator.textContent = fallback
+            ? `Gemini quota reached — using ${name}`
+            : `Using ${name}`;
+    }
+
+    function renderMessages() {
+        const messages = $("ef-ai-messages");
+        messages.replaceChildren();
+        if (!currentChat || !currentChat.messages.length) {
+            setActiveModel(null);
+            const empty = document.createElement("div");
+            empty.className = "ef-ai-empty";
+            empty.textContent = "Ask anything about the note you have open.";
+            messages.appendChild(empty);
+            return;
+        }
+        for (const message of currentChat.messages) messages.appendChild(messageBubble(message).bubble);
+        const lastModel = [...currentChat.messages].reverse().find((message) => message.modelName);
+        setActiveModel(lastModel ? { name: lastModel.modelName, fallback: lastModel.fallback } : null);
+        scrollBottom();
+    }
+
+    function setSelection(text) {
+        pendingSelection = typeof text === "string" ? text : "";
+        $("ef-ai-selection").hidden = !pendingSelection.trim();
+        $("ef-ai-selection-text").textContent = pendingSelection.length > 120
+            ? `${pendingSelection.slice(0, 120)}…` : pendingSelection;
+    }
+
+    function captureSelection(whileOpening = false) {
+        if ($("ef-ai-panel").hidden && !whileOpening) return;
+        const context = bridge();
+        const selected = context && context.getSelection ? context.getSelection() : "";
+        if (selected) setSelection(selected);
+    }
+
+    function setBusy(value) {
+        busy = value;
+        $("ef-ai-send").disabled = value;
+        $("ef-ai-input").disabled = value;
+    }
+
+    function addError(detail) {
+        const error = document.createElement("div");
+        error.className = "ef-ai-error";
+        error.textContent = detail;
+        $("ef-ai-messages").appendChild(error);
+        scrollBottom();
+    }
+
+    function openSettings() {
+        closeViews();
+        $("ef-ai-key").value = sessionStorage.getItem(API_KEY) || "";
+        $("ef-ai-settings").hidden = false;
+        $("ef-ai-key").focus();
+    }
+
+    function showHistory() {
+        closeViews();
+        const note = bridge() && bridge().getNote ? bridge().getNote() : null;
+        const key = noteKey(note);
+        const chats = chatStore().filter((chat) => chat.noteKey === key && chat.messages && chat.messages.length);
+        $("ef-ai-history-note").textContent = note ? `Chats for ${note.note || "this note"}` : "Open a note first.";
+        const list = $("ef-ai-history-list");
+        list.replaceChildren();
+        if (!chats.length) {
+            const empty = document.createElement("p");
+            empty.textContent = "No previous chats for this note.";
+            list.appendChild(empty);
+        }
+        for (const chat of chats) {
+            const button = document.createElement("button");
+            button.className = "ef-ai-chat-row";
+            const title = document.createElement("strong");
+            title.textContent = chat.title || "Chat";
+            const date = document.createElement("span");
+            date.textContent = new Date(chat.updatedAt || 0).toLocaleString();
+            button.append(title, date);
+            button.addEventListener("click", () => {
+                currentChat = chat;
+                closeViews();
+                setSelection("");
+                renderMessages();
+                $("ef-ai-input").focus();
+            });
+            list.appendChild(button);
+        }
+        $("ef-ai-history").hidden = false;
+    }
+
+    async function streamReply(body) {
+        const response = await fetch("/api/assistant/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+        });
+        if (!response.ok) {
+            let detail = `Request failed (${response.status})`;
+            try { detail = (await response.json()).detail || detail; } catch { /* keep default */ }
+            throw new Error(detail);
+        }
+
+        const thinking = document.createElement("div");
+        thinking.className = "ef-ai-thinking";
+        thinking.textContent = "Thinking";
+        $("ef-ai-messages").appendChild(thinking);
+        scrollBottom();
+
+        const answer = { role: "assistant", content: "", sources: [] };
+        let rendered = null;
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        const handle = (event) => {
+            if (event.type === "model") {
+                answer.model = event.id || "";
+                answer.modelName = event.name || "";
+                answer.fallback = Boolean(event.fallback);
+                setActiveModel(event);
+            } else if (event.type === "delta") {
+                thinking.remove();
+                if (!rendered) {
+                    rendered = messageBubble(answer);
+                    $("ef-ai-messages").appendChild(rendered.bubble);
+                }
+                answer.content += event.text || "";
+                rendered.text.append(event.text || "");
+            } else if (event.type === "sources") {
+                answer.sources = Array.isArray(event.sources) ? event.sources : [];
+            } else if (event.type === "error") {
+                throw new Error(event.detail || "The assistant could not answer.");
+            }
+            scrollBottom();
+        };
+        for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop();
+            for (const line of lines) {
+                if (!line.trim()) continue;
+                try { handle(JSON.parse(line)); } catch (error) { thinking.remove(); throw error; }
+            }
+        }
+        if (buffer.trim()) handle(JSON.parse(buffer));
+        thinking.remove();
+        if (!answer.content) throw new Error("The assistant returned an empty response.");
+        if (rendered && answer.sources.length) sourceLinks(rendered.bubble, answer.sources);
+        return answer;
+    }
+
+    async function send() {
+        const prompt = $("ef-ai-input").value;
+        if (!prompt.trim() || busy) return;
+        const context = bridge();
+        const note = context && context.getNote ? context.getNote() : null;
+        if (!note) { addError("Open a note first."); return; }
+        const apiKey = sessionStorage.getItem(API_KEY) || "";
+        if (!apiKey) { openSettings(); return; }
+        if (!currentChat || currentChat.noteKey !== noteKey(note)) currentChat = blankChat();
+
+        const history = currentChat.messages.map((message) => ({
+            role: message.role,
+            content: message.content,
+            selection: message.selection || "",
+        }));
+        const selection = pendingSelection;
+        const userMessage = { role: "user", content: prompt, selection };
+        if (!currentChat.messages.length) currentChat.title = prompt.slice(0, 60);
+        currentChat.messages.push(userMessage);
+        $("ef-ai-input").value = "";
+        setSelection("");
+        renderMessages();
+        persistChat();
+        setBusy(true);
+        try {
+            const answer = await streamReply({
+                api_key: apiKey,
+                note,
+                selection: { text: selection },
+                history,
+                prompt,
+            });
+            currentChat.messages.push(answer);
+            persistChat();
+        } catch (error) {
+            addError(error.message || String(error));
+        } finally {
+            setBusy(false);
+            $("ef-ai-input").focus();
+        }
+    }
+
+    function openPanel() {
+        $("ef-ai-panel").hidden = false;
+        closeViews();
+        if (!currentChat) currentChat = blankChat();
+        renderMessages();
+        captureSelection();
+        $("ef-ai-input").focus();
+    }
+
+    trigger.addEventListener("pointerdown", () => captureSelection(true));
+    trigger.addEventListener("click", () => $("ef-ai-panel").hidden ? openPanel() : ($("ef-ai-panel").hidden = true));
+    $("ef-ai-close").addEventListener("click", () => { $("ef-ai-panel").hidden = true; });
+    $("ef-ai-new").addEventListener("click", () => {
+        if (busy) return;
+        currentChat = blankChat();
+        setSelection("");
+        closeViews();
+        renderMessages();
+        $("ef-ai-input").focus();
+    });
+    $("ef-ai-resume").addEventListener("click", showHistory);
+    $("ef-ai-info").addEventListener("click", openSettings);
+    $("ef-ai-settings-cancel").addEventListener("click", closeViews);
+    $("ef-ai-history-close").addEventListener("click", closeViews);
+    $("ef-ai-settings-save").addEventListener("click", () => {
+        const key = $("ef-ai-key").value.trim();
+        if (!key) return;
+        sessionStorage.setItem(API_KEY, key);
+        closeViews();
+        $("ef-ai-input").focus();
+    });
+    $("ef-ai-selection-clear").addEventListener("click", () => setSelection(""));
+    $("ef-ai-form").addEventListener("submit", (event) => { event.preventDefault(); send(); });
+    $("ef-ai-input").addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); send(); }
+    });
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && !$("ef-ai-panel").hidden) $("ef-ai-panel").hidden = true;
+    });
+    document.addEventListener("mouseup", (event) => {
+        if (!(event.target instanceof Element) || !event.target.closest("#ef-ai-panel")) setTimeout(captureSelection, 0);
+    });
+    document.addEventListener("keyup", (event) => {
+        if (!(event.target instanceof Element) || !event.target.closest("#ef-ai-panel")) setTimeout(captureSelection, 0);
+    });
+    window.addEventListener("everfree:note-changed", () => {
+        if (busy) return;
+        currentChat = blankChat();
+        setSelection("");
+        if (!$("ef-ai-panel").hidden) renderMessages();
+    });
+})();
