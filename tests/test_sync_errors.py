@@ -6,11 +6,57 @@ boundary between faults that time will fix and faults that only the user can.
 """
 
 import os
+import subprocess
 import unittest
+from unittest import mock
 
 os.environ.setdefault("EVERFREE_DIR", "/tmp/everfree-tests-notes")
 
 import server.app as app
+
+
+RATE_LIMITED_403 = (
+    "remote: You have exceeded a secondary rate limit. "
+    "Please wait a few minutes before you try again.\n"
+    "fatal: unable to access 'https://github.com/octocat/everfree-notes.git/': "
+    "The requested URL returned error: 403"
+)
+
+
+def _completed(returncode: int = 0, stdout: str = "", stderr: str = ""):
+    return subprocess.CompletedProcess(
+        args=["git"], returncode=returncode, stdout=stdout, stderr=stderr,
+    )
+
+
+class FakeGit:
+    """Stands in for `_git`, replying per subcommand.
+
+    `push_stderr` makes the push fail; everything else answers the way a clean
+    repo with one unpushed commit would.
+    """
+
+    def __init__(self, *, push_stderr: str | None = None, ahead: int = 1, dirty: bool = False):
+        self.push_stderr = push_stderr
+        self.ahead = ahead
+        self.dirty = dirty
+        self.calls: list[tuple[str, ...]] = []
+
+    def __call__(self, *args: str, check: bool = True, cwd: str | None = None):
+        self.calls.append(args)
+        command = args[0]
+        if command == "status":
+            return _completed(stdout=" M note.md\n" if self.dirty else "")
+        if command == "rev-list":
+            return _completed(stdout=f"{self.ahead}\n")
+        if command == "remote":
+            return _completed(stdout="https://github.com/octocat/everfree-notes.git\n")
+        if command == "push" and self.push_stderr:
+            return _completed(returncode=1, stderr=self.push_stderr)
+        return _completed()
+
+    def ran(self, command: str) -> bool:
+        return any(call[0] == command for call in self.calls)
 
 
 class GitFailureClassificationTests(unittest.TestCase):
@@ -86,6 +132,208 @@ class BlockedStateTests(unittest.TestCase):
             app.sync_state.update({"status": "idle", "action": None, "detail": "Synced to GitHub"})
         self.assertFalse(app._sync_is_blocked())
         self.assertIsNone(app.sync_state["action"])
+
+
+class RateLimitClassificationTests(unittest.TestCase):
+    """GitHub answers a secondary rate limit with the same 403 a revoked token
+    gets. Reading that as an auth fault blocks sync and tells the user to sign
+    in again, which cannot help — the throttle clears on its own."""
+
+    def test_secondary_rate_limit_is_not_terminal(self):
+        self.assertTrue(app._is_rate_limit_error(RATE_LIMITED_403))
+        # The 403 needle still matches; the ordering is what saves us.
+        self.assertTrue(app._is_auth_error(RATE_LIMITED_403))
+        self.assertIsNone(app._classify_git_failure(RATE_LIMITED_403))
+
+    def test_429_and_abuse_wording_are_recognised(self):
+        for stderr in (
+            "fatal: unable to access '…': The requested URL returned error: 429",
+            "remote: You have triggered an abuse detection mechanism.",
+            "remote: API rate limit exceeded for user ID 1234.",
+            "error: RPC failed; HTTP 403 — retry-after: 60",
+        ):
+            with self.subTest(stderr=stderr):
+                self.assertTrue(app._is_rate_limit_error(stderr))
+                self.assertIsNone(app._classify_git_failure(stderr))
+
+    def test_a_real_credential_rejection_is_still_terminal(self):
+        # The rate-limit check must not swallow genuine auth faults.
+        stderr = (
+            "fatal: unable to access 'https://github.com/octocat/everfree-notes.git/': "
+            "The requested URL returned error: 403"
+        )
+        self.assertFalse(app._is_rate_limit_error(stderr))
+        action, _ = app._classify_git_failure(stderr)
+        self.assertEqual(action, "reauth")
+
+
+class SyncStateHarness(unittest.TestCase):
+    def setUp(self):
+        self._original = dict(app.sync_state)
+        app._clear_push_retry()
+        self.addCleanup(app._clear_push_retry)
+
+    def tearDown(self):
+        with app._sync_lock:
+            app.sync_state.clear()
+            app.sync_state.update(self._original)
+
+    def run_cycle(self, fake: "FakeGit", **kwargs):
+        with mock.patch.object(app, "_git", fake), \
+             mock.patch.object(app, "_is_git_repo", return_value=True):
+            app._sync_cycle(**kwargs)
+
+
+class RateLimitedPushTests(SyncStateHarness):
+    def test_rate_limited_push_does_not_block_sync(self):
+        fake = FakeGit(push_stderr=RATE_LIMITED_403)
+        self.run_cycle(fake, push=True)
+
+        self.assertFalse(app._sync_is_blocked())
+        self.assertIsNone(app.sync_state["action"])
+        self.assertIn("rate limiting", app.sync_state["detail"])
+        # The commit is still ours to deliver.
+        self.assertTrue(app.sync_state["pending"])
+
+    def test_rate_limited_push_schedules_a_retry(self):
+        fake = FakeGit(push_stderr=RATE_LIMITED_403)
+        self.run_cycle(fake, push=True)
+        self.assertEqual(app._push_retry["failures"], 1)
+
+    def test_rejected_token_still_blocks(self):
+        fake = FakeGit(push_stderr="fatal: Authentication failed for 'https://github.com/'")
+        self.run_cycle(fake, push=True)
+        self.assertTrue(app._sync_is_blocked())
+        self.assertEqual(app.sync_state["action"], "reauth")
+
+
+class PushRetryTests(SyncStateHarness):
+    def test_backoff_doubles_and_is_capped(self):
+        delays = []
+        with mock.patch.object(app.time, "monotonic", return_value=1000.0):
+            for _ in range(12):
+                app._note_push_failure()
+                delays.append(app._push_retry["due"] - 1000.0)
+
+        self.assertEqual(delays[0], app.SYNC_PUSH_RETRY_BASE)
+        self.assertEqual(delays[1], app.SYNC_PUSH_RETRY_BASE * 2)
+        self.assertEqual(delays[2], app.SYNC_PUSH_RETRY_BASE * 4)
+        # A long outage must not turn into a tight loop, nor grow unbounded.
+        self.assertEqual(delays[-1], app.SYNC_PUSH_RETRY_MAX)
+        self.assertEqual(delays, sorted(delays))
+
+    def test_retry_is_not_due_before_its_backoff_expires(self):
+        with mock.patch.object(app.time, "monotonic", return_value=0.0):
+            app._note_push_failure()
+            self.assertFalse(app._push_retry_due())
+        with mock.patch.object(app.time, "monotonic",
+                               return_value=app.SYNC_PUSH_RETRY_BASE - 1):
+            self.assertFalse(app._push_retry_due())
+        with mock.patch.object(app.time, "monotonic",
+                               return_value=app.SYNC_PUSH_RETRY_BASE):
+            self.assertTrue(app._push_retry_due())
+
+    def test_no_retry_is_due_when_nothing_failed(self):
+        self.assertFalse(app._push_retry_due())
+
+    def test_successful_push_clears_the_backoff(self):
+        self.run_cycle(FakeGit(push_stderr=RATE_LIMITED_403), push=True)
+        self.assertTrue(app._push_retry["failures"])
+
+        self.run_cycle(FakeGit(), push=True)
+        self.assertEqual(app._push_retry["failures"], 0)
+        self.assertFalse(app._push_retry_due())
+        self.assertFalse(app.sync_state["pending"])
+
+    def test_background_cycle_pushes_once_the_retry_comes_due(self):
+        # The bug: background cycles only ever pulled, so a commit left behind
+        # by a failed push sat locally until the user synced by hand.
+        app._note_push_failure()
+        fake = FakeGit()
+        with mock.patch.object(app, "_git", fake), \
+             mock.patch.object(app, "_is_git_repo", return_value=True), \
+             mock.patch.object(app, "_push_retry_due", return_value=True), \
+             mock.patch.object(app, "_sync_wanted", app_event(triggered=False)), \
+             mock.patch.object(app, "_sync_stop", app_event_stop()):
+            app._sync_worker_loop()
+
+        self.assertTrue(fake.ran("push"))
+
+    def test_background_cycle_does_not_push_with_no_pending_failure(self):
+        fake = FakeGit()
+        with mock.patch.object(app, "_git", fake), \
+             mock.patch.object(app, "_is_git_repo", return_value=True), \
+             mock.patch.object(app, "_sync_wanted", app_event(triggered=False)), \
+             mock.patch.object(app, "_sync_stop", app_event_stop()):
+            app._sync_worker_loop()
+
+        self.assertFalse(fake.ran("push"))
+
+    def test_retry_never_commits_unsaved_edits(self):
+        # The retry re-sends what already failed; edits the user has not asked
+        # to save stay dirty in the working tree.
+        fake = FakeGit(dirty=True)
+        self.run_cycle(fake, push=True, commit=False)
+
+        self.assertFalse(fake.ran("commit"))
+        self.assertFalse(fake.ran("add"))
+        self.assertTrue(fake.ran("push"))
+        self.assertTrue(app.sync_state["pending"])
+
+    def test_blocked_sync_does_not_retry_in_the_background(self):
+        app._set_sync_blocked("reauth", "GitHub rejected the saved sign-in.")
+        app._note_push_failure()
+        fake = FakeGit()
+        with mock.patch.object(app, "_git", fake), \
+             mock.patch.object(app, "_is_git_repo", return_value=True), \
+             mock.patch.object(app, "_push_retry_due", return_value=True), \
+             mock.patch.object(app, "_sync_wanted", app_event(triggered=False)), \
+             mock.patch.object(app, "_sync_stop", app_event_stop()):
+            app._sync_worker_loop()
+
+        self.assertFalse(fake.calls)
+
+
+class _OneShotEvent:
+    """A `_sync_wanted` stand-in whose wait() returns a fixed value."""
+
+    def __init__(self, triggered: bool):
+        self.triggered = triggered
+
+    def wait(self, timeout=None):
+        return self.triggered
+
+    def clear(self):
+        pass
+
+    def set(self):
+        pass
+
+    def is_set(self):
+        return self.triggered
+
+
+class _StopAfterOne:
+    """A `_sync_stop` stand-in: clear for the first check of an iteration, set
+    afterwards, so `_sync_worker_loop` runs exactly one pass and exits."""
+
+    def __init__(self):
+        self.checks = 0
+
+    def is_set(self):
+        self.checks += 1
+        return self.checks > 2
+
+    def set(self):
+        self.checks = 99
+
+
+def app_event(*, triggered: bool):
+    return _OneShotEvent(triggered)
+
+
+def app_event_stop():
+    return _StopAfterOne()
 
 
 if __name__ == "__main__":
