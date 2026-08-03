@@ -809,6 +809,8 @@ async def lifespan(app: FastAPI):
         logger.info("Startup pull: %s", msg if ok else f"FAILED: {msg}")
         start_sync_worker()
 
+    assistant.start_config_refresh()
+
     async def _open_browser():
         await asyncio.sleep(0.5)
         webbrowser.open(f"http://127.0.0.1:{PORT}")

@@ -9,9 +9,12 @@ per request and is never stored by the server.
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
 import logging
 import os
+import time
 from pathlib import Path
 
 import httpx
@@ -28,10 +31,21 @@ if os.environ.get("RESOURCEPATH"):
 else:
     CONFIG_FILE = Path(__file__).resolve().parent.parent / "web" / "lib" / "assistant-config.json"
 
-CONFIG = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+BUNDLED_CONFIG_TEXT = CONFIG_FILE.read_text(encoding="utf-8")
+CONFIG = json.loads(BUNDLED_CONFIG_TEXT)
 PRIMARY_MODEL = CONFIG["primary_model"]
 FALLBACK_MODEL = CONFIG["fallback_model"]
 SYSTEM_PROMPT = CONFIG["system_prompt"]
+
+# The desktop app ships a copy of this file inside the .app, so a model or
+# prompt change used to need a new DMG. The web deployment serves the current
+# config publicly, so refresh from there in the background after startup. The
+# URL is a constant on purpose: the system prompt is fetched code, and there
+# must be no runtime way to point the app at a different one.
+CONFIG_URL = "https://everfree.vercel.app/lib/assistant-config.json"
+CONFIG_CACHE_FILE = Path.home() / ".everfree_assistant_config.json"
+CONFIG_FETCH_TIMEOUT = 5.0
+CONFIG_MAX_BYTES = 256 * 1024
 
 NOTE_LIMIT = 60_000
 SELECTION_LIMIT = 20_000
@@ -42,6 +56,127 @@ TIMEOUT = httpx.Timeout(180.0, connect=10.0)
 
 class DailyQuotaExceeded(Exception):
     """The selected model's request-per-day quota has been exhausted."""
+
+
+# ── Assistant config refresh ─────────────────────────────────
+
+def _is_desktop_build() -> bool:
+    """Only the packaged .app has a config frozen at build time."""
+    return bool(os.environ.get("RESOURCEPATH"))
+
+
+def _valid_config(data: object) -> dict | None:
+    """Return the config only if it is complete enough to serve requests.
+
+    A malformed or truncated download must never take the assistant down, so
+    anything short of a full config is discarded and the caller keeps what it
+    already has.
+    """
+    if not isinstance(data, dict):
+        return None
+    for key in ("primary_model", "fallback_model"):
+        model = data.get(key)
+        if not isinstance(model, dict):
+            return None
+        if not all(isinstance(model.get(field), str) and model[field].strip()
+                   for field in ("id", "name")):
+            return None
+    prompt = data.get("system_prompt")
+    if not isinstance(prompt, str) or not prompt.strip():
+        return None
+    return data
+
+
+def _apply_config(config: dict) -> None:
+    global CONFIG, PRIMARY_MODEL, FALLBACK_MODEL, SYSTEM_PROMPT
+    CONFIG = config
+    PRIMARY_MODEL = config["primary_model"]
+    FALLBACK_MODEL = config["fallback_model"]
+    SYSTEM_PROMPT = config["system_prompt"]
+
+
+def _bundled_fingerprint() -> str:
+    return hashlib.sha256(BUNDLED_CONFIG_TEXT.encode("utf-8")).hexdigest()
+
+
+def _read_cached_config() -> dict | None:
+    """The last config fetched successfully, so an offline restart is current.
+
+    The cache records which bundled config it was fetched against. After an app
+    upgrade the fingerprints differ and the cache is dropped, so a newly
+    bundled config is never shadowed by an older download.
+    """
+    try:
+        cached = json.loads(CONFIG_CACHE_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(cached, dict) or cached.get("bundled") != _bundled_fingerprint():
+        return None
+    return _valid_config(cached.get("config"))
+
+
+def _write_cached_config(config: dict) -> None:
+    try:
+        CONFIG_CACHE_FILE.write_text(json.dumps({
+            "bundled": _bundled_fingerprint(),
+            "fetched_at": time.time(),
+            "config": config,
+        }), encoding="utf-8")
+    except OSError as exc:
+        logger.info("Could not cache assistant config: %s", exc)
+
+
+async def _fetch_config() -> dict | None:
+    """Download the deployed config. Offline, slow, or 404 returns None."""
+    async with httpx.AsyncClient(
+        timeout=CONFIG_FETCH_TIMEOUT, follow_redirects=False,
+    ) as client:
+        response = await client.get(CONFIG_URL)
+    if response.status_code != 200:
+        logger.info("Assistant config fetch returned %s", response.status_code)
+        return None
+    if len(response.content) > CONFIG_MAX_BYTES:
+        logger.info("Assistant config fetch was oversized (%d bytes)", len(response.content))
+        return None
+    try:
+        return json.loads(response.content.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        logger.info("Assistant config fetch was not valid JSON")
+        return None
+
+
+async def refresh_config() -> bool:
+    """Swap in the newest valid config. Never raises; returns True on a swap."""
+    applied = False
+    cached = _read_cached_config()
+    if cached is not None:
+        _apply_config(cached)
+        applied = True
+    try:
+        fetched = _valid_config(await _fetch_config())
+    except Exception as exc:  # offline, DNS failure, timeout, TLS error
+        logger.info("Assistant config fetch failed: %s", exc)
+        return applied
+    if fetched is None:
+        return applied
+    _apply_config(fetched)
+    _write_cached_config(fetched)
+    logger.info("Assistant config refreshed from %s", CONFIG_URL)
+    return True
+
+
+def start_config_refresh() -> asyncio.Task | None:
+    """Refresh in the background so startup never waits on the network."""
+    if not _is_desktop_build():
+        return None
+
+    async def _run():
+        try:
+            await refresh_config()
+        except Exception as exc:  # a config refresh must never surface an error
+            logger.info("Assistant config refresh failed: %s", exc)
+
+    return asyncio.create_task(_run())
 
 
 def _text(value: object, limit: int) -> str:
