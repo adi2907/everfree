@@ -1346,9 +1346,12 @@
 
         function limits(pane) {
             const other = pane === panes.sidebar ? panes.noteBrowser : panes.sidebar;
-            const otherWidth = other.element.getBoundingClientRect().width;
+            const otherWidth = other.current;
+            const assistant = $("ef-ai-panel");
+            const assistantWidth = assistant && !assistant.hidden
+                ? assistant.getBoundingClientRect().width : 0;
             const editorMin = 360;
-            const maxAvailable = window.innerWidth - otherWidth - editorMin - 16;
+            const maxAvailable = window.innerWidth - otherWidth - assistantWidth - editorMin - 16;
             return {
                 min: pane.min,
                 max: Math.max(pane.min, Math.min(pane.max, maxAvailable)),
@@ -1359,22 +1362,40 @@
             const bounds = limits(pane);
             const next = Math.round(Math.max(bounds.min, Math.min(bounds.max, width)));
             viewApp.style.setProperty(pane.cssVariable, `${next}px`);
+            pane.current = next;
             pane.handle.setAttribute("aria-valuemin", String(bounds.min));
             pane.handle.setAttribute("aria-valuemax", String(bounds.max));
             pane.handle.setAttribute("aria-valuenow", String(next));
-            if (persist) localStorage.setItem(pane.storageKey, String(next));
+            if (persist) {
+                pane.preferred = next;
+                localStorage.setItem(pane.storageKey, String(next));
+            }
+        }
+
+        // Seed both widths before applying any, since each pane's limit depends
+        // on how much room the other one is taking. Read the stylesheet's value
+        // rather than the rendered box: the shell can still be hidden here, and
+        // a hidden element measures zero.
+        for (const pane of Object.values(panes)) {
+            const declared = parseFloat(
+                getComputedStyle(pane.element).getPropertyValue(pane.cssVariable));
+            pane.current = Number.isFinite(declared) && declared > 0
+                ? declared : pane.element.getBoundingClientRect().width;
+            const saved = Number(localStorage.getItem(pane.storageKey));
+            // With nothing saved, the stylesheet's width is the width to return
+            // to after the assistant stops borrowing space.
+            pane.preferred = Number.isFinite(saved) && saved > 0 ? saved : pane.current;
         }
 
         for (const pane of Object.values(panes)) {
-            const saved = Number(localStorage.getItem(pane.storageKey));
-            if (Number.isFinite(saved) && saved > 0) setPaneWidth(pane, saved);
+            setPaneWidth(pane, pane.preferred);
 
             pane.handle.addEventListener("pointerdown", (event) => {
                 if (!viewportAllowsResize()) return;
                 event.preventDefault();
                 active.pane = pane;
                 active.startX = event.clientX;
-                active.startWidth = pane.element.getBoundingClientRect().width;
+                active.startWidth = pane.current;
                 pane.handle.classList.add("is-active");
                 document.body.classList.add("resizing-panes");
                 pane.handle.setPointerCapture?.(event.pointerId);
@@ -1382,7 +1403,7 @@
 
             pane.handle.addEventListener("keydown", (event) => {
                 if (!viewportAllowsResize()) return;
-                const current = pane.element.getBoundingClientRect().width;
+                const current = pane.current;
                 let next = current;
                 if (event.key === "ArrowLeft") next -= 16;
                 if (event.key === "ArrowRight") next += 16;
@@ -1402,7 +1423,7 @@
         function stopResize() {
             if (!active.pane) return;
             const pane = active.pane;
-            setPaneWidth(pane, pane.element.getBoundingClientRect().width, true);
+            setPaneWidth(pane, pane.current, true);
             pane.handle.classList.remove("is-active");
             document.body.classList.remove("resizing-panes");
             active.pane = null;
@@ -1410,11 +1431,15 @@
 
         window.addEventListener("pointerup", stopResize);
         window.addEventListener("pointercancel", stopResize);
-        window.addEventListener("resize", () => {
+        // Re-clamp when the window (or the assistant panel) changes the space
+        // the three panes have to share.
+        const reclamp = () => {
             for (const pane of Object.values(panes)) {
-                setPaneWidth(pane, pane.element.getBoundingClientRect().width);
+                setPaneWidth(pane, pane.preferred);
             }
-        });
+        };
+        window.addEventListener("resize", reclamp);
+        window.addEventListener("everfree:layout-change", reclamp);
     }
 
     // ── Modal ───────────────────────────────────────────────

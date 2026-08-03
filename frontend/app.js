@@ -1074,6 +1074,137 @@
         }
     });
 
+    // ── Pane resizing ───────────────────────────────────────
+    // The rail, note list and editor are laid out as flex siblings; dragging a
+    // handle just rewrites the width custom property both panes read from.
+    function setupPaneResizers() {
+        const root = document.documentElement;
+        const panes = {
+            sidebar: {
+                element: document.getElementById("sidebar"),
+                handle: document.getElementById("sidebar-resizer"),
+                cssVariable: "--sidebar-width",
+                storageKey: "everfree-sidebar-width",
+                min: 180,
+                max: 420,
+            },
+            noteBrowser: {
+                element: document.getElementById("note-browser"),
+                handle: document.getElementById("note-browser-resizer"),
+                cssVariable: "--note-browser-width",
+                storageKey: "everfree-note-browser-width",
+                min: 240,
+                max: 520,
+            },
+        };
+        const active = { pane: null, startX: 0, startWidth: 0 };
+
+        // Below 821px the panes are pinned to their compact sizes by CSS.
+        function viewportAllowsResize() {
+            return window.matchMedia("(min-width: 821px)").matches;
+        }
+
+        // Never let a drag squeeze the editor below a usable writing width.
+        function limits(pane) {
+            const other = pane === panes.sidebar ? panes.noteBrowser : panes.sidebar;
+            const otherWidth = other.current;
+            const assistant = document.getElementById("ef-ai-panel");
+            const assistantWidth = assistant && !assistant.hidden
+                ? assistant.getBoundingClientRect().width : 0;
+            const editorMin = 360;
+            const maxAvailable = window.innerWidth - otherWidth - assistantWidth - editorMin - 16;
+            return {
+                min: pane.min,
+                max: Math.max(pane.min, Math.min(pane.max, maxAvailable)),
+            };
+        }
+
+        function setPaneWidth(pane, width, persist = false) {
+            const bounds = limits(pane);
+            const next = Math.round(Math.max(bounds.min, Math.min(bounds.max, width)));
+            root.style.setProperty(pane.cssVariable, `${next}px`);
+            pane.current = next;
+            pane.handle.setAttribute("aria-valuemin", String(bounds.min));
+            pane.handle.setAttribute("aria-valuemax", String(bounds.max));
+            pane.handle.setAttribute("aria-valuenow", String(next));
+            if (persist) {
+                pane.preferred = next;
+                localStorage.setItem(pane.storageKey, String(next));
+            }
+        }
+
+        // Seed both widths before applying any, since each pane's limit depends
+        // on how much room the other one is taking. Read the stylesheet's value
+        // rather than the rendered box: the shell can still be hidden here, and
+        // a hidden element measures zero.
+        for (const pane of Object.values(panes)) {
+            const declared = parseFloat(
+                getComputedStyle(pane.element).getPropertyValue(pane.cssVariable));
+            pane.current = Number.isFinite(declared) && declared > 0
+                ? declared : pane.element.getBoundingClientRect().width;
+            const saved = Number(localStorage.getItem(pane.storageKey));
+            // With nothing saved, the stylesheet's width is the width to return
+            // to after the assistant stops borrowing space.
+            pane.preferred = Number.isFinite(saved) && saved > 0 ? saved : pane.current;
+        }
+
+        for (const pane of Object.values(panes)) {
+            setPaneWidth(pane, pane.preferred);
+
+            pane.handle.addEventListener("pointerdown", (event) => {
+                if (!viewportAllowsResize()) return;
+                event.preventDefault();
+                active.pane = pane;
+                active.startX = event.clientX;
+                active.startWidth = pane.current;
+                pane.handle.classList.add("is-active");
+                document.body.classList.add("resizing-panes");
+                pane.handle.setPointerCapture?.(event.pointerId);
+            });
+
+            pane.handle.addEventListener("keydown", (event) => {
+                if (!viewportAllowsResize()) return;
+                const current = pane.current;
+                let next = current;
+                if (event.key === "ArrowLeft") next -= 16;
+                if (event.key === "ArrowRight") next += 16;
+                if (event.key === "Home") next = pane.min;
+                if (event.key === "End") next = pane.max;
+                if (next === current) return;
+                event.preventDefault();
+                setPaneWidth(pane, next, true);
+            });
+        }
+
+        window.addEventListener("pointermove", (event) => {
+            if (!active.pane) return;
+            setPaneWidth(active.pane, active.startWidth + event.clientX - active.startX);
+        });
+
+        function stopResize() {
+            if (!active.pane) return;
+            const pane = active.pane;
+            setPaneWidth(pane, pane.current, true);
+            pane.handle.classList.remove("is-active");
+            document.body.classList.remove("resizing-panes");
+            active.pane = null;
+        }
+
+        window.addEventListener("pointerup", stopResize);
+        window.addEventListener("pointercancel", stopResize);
+
+        // Re-clamp when the window (or the assistant panel) changes the space
+        // the three panes have to share. Aim at the width the user actually
+        // chose so a pane squeezed by the assistant grows back once it closes.
+        const reclamp = () => {
+            for (const pane of Object.values(panes)) {
+                setPaneWidth(pane, pane.preferred);
+            }
+        };
+        window.addEventListener("resize", reclamp);
+        window.addEventListener("everfree:layout-change", reclamp);
+    }
+
     // ── Init ────────────────────────────────────────────────
     window.EverFreeNoteContext = {
         getNote() {
@@ -1095,6 +1226,7 @@
     };
 
     setupEditorDictation();
+    setupPaneResizers();
     loadNotebooks();
     pollSyncStatus();
     // Reflect the background sync worker's state (and remote edits pulled in).
