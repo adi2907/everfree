@@ -13,19 +13,17 @@ function clean(value, limit) {
 
 class DailyQuotaError extends Error {}
 
-function systemParts(note, selection, model) {
+function systemParts(note, selection) {
     const notebook = clean(note.notebook, 500).trim();
     const name = clean(note.note, 500).trim() || "Untitled note";
     const location = notebook ? `${notebook} / ${name}` : name;
     const content = clean(note.content, NOTE_LIMIT) || "(empty note)";
     const selected = clean(selection.text, SELECTION_LIMIT);
-    const parts = [
+    return [
         { text: CONFIG.system_prompt },
         { text: `<current_note name=${JSON.stringify(location)}>\n${content}\n</current_note>` },
         { text: selected.trim() ? `<selected_text>\n${selected}\n</selected_text>` : "<selected_text>(none)</selected_text>" },
     ];
-    if (!model.google_search) parts.push({ text: CONFIG.fallback_prompt });
-    return parts;
 }
 
 function contents(history, prompt) {
@@ -116,14 +114,12 @@ function googleErrorDetail(status, detail) {
         : `Gemini request failed (${status}).`;
 }
 
-function requestPayload(note, selection, history, prompt, model) {
-    const payload = {
-        systemInstruction: { parts: systemParts(note, selection, model) },
+function requestPayload(note, selection, history, prompt) {
+    return {
+        systemInstruction: { parts: systemParts(note, selection) },
         contents: contents(history, prompt),
         generationConfig: { maxOutputTokens: 2048 },
     };
-    if (model.google_search) payload.tools = [{ google_search: {} }];
-    return payload;
 }
 
 async function streamModel(apiKey, payload, model, write) {
@@ -140,7 +136,12 @@ async function streamModel(apiKey, payload, model, write) {
     }
     if (!response.ok) {
         const detail = await response.text();
-        if (["daily", "unknown"].includes(quotaKind(response.status, detail))) throw new DailyQuotaError();
+        if (["daily", "unknown"].includes(quotaKind(response.status, detail))) {
+            // The fallback hides the upstream body from the user, so log it: an
+            // opaque 429 can mean something other than an exhausted daily quota.
+            console.error(`${model.id} ${response.status}, falling back:`, detail.slice(0, 1000));
+            throw new DailyQuotaError();
+        }
         throw new Error(googleErrorDetail(response.status, detail));
     }
 
@@ -195,14 +196,13 @@ module.exports = async (req, res) => {
     res.setHeader("X-Accel-Buffering", "no");
     const write = (event) => res.write(JSON.stringify(event) + "\n");
 
+    const payload = requestPayload(note, selection, history, prompt);
     try {
-        const primary = CONFIG.primary_model;
-        await streamModel(apiKey, requestPayload(note, selection, history, prompt, primary), primary, write);
+        await streamModel(apiKey, payload, CONFIG.primary_model, write);
     } catch (error) {
         if (error instanceof DailyQuotaError) {
-            const fallback = CONFIG.fallback_model;
             try {
-                await streamModel(apiKey, requestPayload(note, selection, history, prompt, fallback), fallback, write);
+                await streamModel(apiKey, payload, CONFIG.fallback_model, write);
             } catch (fallbackError) {
                 write({
                     type: "error",

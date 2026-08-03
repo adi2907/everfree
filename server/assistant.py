@@ -1,13 +1,16 @@
 """Minimal Gemini chat for EverFree.
 
-The assistant has one built-in capability: Google Search grounding. It has no
-custom tools and cannot read any note except the current note supplied by the
-client. The API key is supplied per request and is never stored by the server.
+The assistant has no tools at all: no web search, and it cannot read any note
+except the current note supplied by the client. Google Search grounding was
+dropped because it is rejected with an opaque 429 on a key without billing
+enabled, which made every request fall back to Gemma. The API key is supplied
+per request and is never stored by the server.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 
@@ -15,6 +18,8 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/assistant")
 
@@ -27,7 +32,6 @@ CONFIG = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
 PRIMARY_MODEL = CONFIG["primary_model"]
 FALLBACK_MODEL = CONFIG["fallback_model"]
 SYSTEM_PROMPT = CONFIG["system_prompt"]
-FALLBACK_PROMPT = CONFIG["fallback_prompt"]
 
 NOTE_LIMIT = 60_000
 SELECTION_LIMIT = 20_000
@@ -86,18 +90,12 @@ def _contents(history: list, prompt: str) -> list[dict]:
     return contents
 
 
-def _payload(note: dict, selection: dict, history: list, prompt: str, model: dict) -> dict:
-    parts = _system_parts(note, selection)
-    if not model["google_search"]:
-        parts.append({"text": FALLBACK_PROMPT})
-    payload = {
-        "systemInstruction": {"parts": parts},
+def _payload(note: dict, selection: dict, history: list, prompt: str) -> dict:
+    return {
+        "systemInstruction": {"parts": _system_parts(note, selection)},
         "contents": _contents(history, prompt),
         "generationConfig": {"maxOutputTokens": 2048},
     }
-    if model["google_search"]:
-        payload["tools"] = [{"google_search": {}}]
-    return payload
 
 
 def _sources(metadata: dict) -> list[dict]:
@@ -177,6 +175,12 @@ async def _events(api_key: str, payload: dict, model: dict):
             if response.status_code != 200:
                 raw = (await response.aread()).decode("utf-8", "replace")
                 if _quota_kind(response.status_code, raw) in {"daily", "unknown"}:
+                    # The fallback hides this body from the user, so log it: an
+                    # opaque 429 can mean something other than a spent daily quota.
+                    logger.warning(
+                        "%s returned %s, falling back: %s",
+                        model["id"], response.status_code, raw[:1000],
+                    )
                     raise DailyQuotaExceeded
                 yield {"type": "error", "detail": _google_error_detail(response.status_code, raw)}
                 return
@@ -231,15 +235,14 @@ async def chat(request: Request):
         raise HTTPException(status_code=413, detail="Message is too long.")
 
     async def stream():
+        payload = _payload(note, selection, history, prompt)
         try:
-            primary_payload = _payload(note, selection, history, prompt, PRIMARY_MODEL)
             try:
-                async for event in _events(api_key, primary_payload, PRIMARY_MODEL):
+                async for event in _events(api_key, payload, PRIMARY_MODEL):
                     yield _ndjson(event)
             except DailyQuotaExceeded:
-                fallback_payload = _payload(note, selection, history, prompt, FALLBACK_MODEL)
                 try:
-                    async for event in _events(api_key, fallback_payload, FALLBACK_MODEL):
+                    async for event in _events(api_key, payload, FALLBACK_MODEL):
                         yield _ndjson(event)
                 except DailyQuotaExceeded:
                     yield _ndjson({
