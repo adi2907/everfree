@@ -438,17 +438,11 @@ def _atomic_write_bytes(path: Path, data: bytes) -> None:
 # ══════════════════════════════════════════════════════════════
 #  BACKGROUND SYNC WORKER
 #  Saves write to disk instantly and mark local changes pending. The worker
-#  only commits when the user explicitly requests sync/save, or when the server
-#  shuts down cleanly. It does re-send a commit whose push failed transiently,
-#  on a backoff, so a failed backup does not wait on the user noticing.
+#  only pushes when the user explicitly requests sync/save, when a save follows
+#  a push that failed, or when the server shuts down cleanly.
 # ══════════════════════════════════════════════════════════════
 SYNC_PULL_INTERVAL = float(os.environ.get("EVERFREE_SYNC_PULL_INTERVAL", 45.0))
 SYNC_BRANCH = os.environ.get("EVERFREE_SYNC_BRANCH", "main")
-# A push that fails transiently (offline, throttled, raced) is retried by the
-# background worker, doubling the wait each time so a long outage does not turn
-# into a tight loop against GitHub.
-SYNC_PUSH_RETRY_BASE = float(os.environ.get("EVERFREE_SYNC_PUSH_RETRY_BASE", 30.0))
-SYNC_PUSH_RETRY_MAX = float(os.environ.get("EVERFREE_SYNC_PUSH_RETRY_MAX", 900.0))
 
 _sync_lock = threading.Lock()
 # Guards every working-tree mutation (note writes AND the worker's merge) so a
@@ -500,39 +494,20 @@ def _sync_is_blocked() -> bool:
         return sync_state.get("status") == "blocked"
 
 
-# Tracks an unsent commit so the worker retries it on its own. Without this a
-# transient push failure leaves the commit sitting locally until the user
-# happens to press Sync, which is exactly when they assume it is backed up.
-_push_retry_lock = threading.Lock()
-_push_retry = {"failures": 0, "due": 0.0}
-
-
-def _note_push_failure() -> None:
-    """Schedule the next retry of a push that failed for a transient reason."""
-    with _push_retry_lock:
-        _push_retry["failures"] += 1
-        delay = min(
-            SYNC_PUSH_RETRY_BASE * (2 ** (_push_retry["failures"] - 1)),
-            SYNC_PUSH_RETRY_MAX,
-        )
-        _push_retry["due"] = time.monotonic() + delay
-
-
-def _clear_push_retry() -> None:
-    with _push_retry_lock:
-        _push_retry["failures"] = 0
-        _push_retry["due"] = 0.0
-
-
-def _push_retry_due() -> bool:
-    with _push_retry_lock:
-        return _push_retry["failures"] > 0 and time.monotonic() >= _push_retry["due"]
+# Set when a push fails for a transient reason, so the commit it left behind
+# rides out with the next save instead of waiting for the user to press Sync.
+_push_failed = threading.Event()
 
 
 def request_sync(*, immediate: bool = False) -> None:
-    """Mark local changes pending; wake the worker only for explicit sync."""
+    """Mark local changes pending; wake the worker only for explicit sync.
+
+    A save that follows a failed push is treated as immediate: there is already
+    a commit that did not reach GitHub, so the cheapest honest retry is the next
+    time the user writes anything.
+    """
     _set_sync_state(pending=True)
-    if not immediate:
+    if not immediate and not _push_failed.is_set():
         return
     _sync_now.set()
     _sync_wanted.set()
@@ -651,17 +626,10 @@ def _classify_git_failure(stderr: str) -> tuple[str, str] | None:
     return None
 
 
-def _sync_cycle(push: bool, *, commit: bool | None = None) -> None:
+def _sync_cycle(push: bool) -> None:
     """One pull(+optional commit/push) pass. Updates sync_state; transient
     network errors flip to 'offline' to retry later, while credential and
-    repository faults flip to 'blocked' because retrying cannot clear them.
-
-    `commit` defaults to `push`. The worker's push retry passes
-    `push=True, commit=False` so it re-sends commits that already failed to go
-    out without sweeping up working-tree edits the user has not asked to save.
-    """
-    if commit is None:
-        commit = push
+    repository faults flip to 'blocked' because retrying cannot clear them."""
     if not _is_git_repo():
         _set_sync_state(status="idle", online=True, pending=False,
                         action=None, detail="Local only")
@@ -697,33 +665,29 @@ def _sync_cycle(push: bool, *, commit: bool | None = None) -> None:
         new_conflicts: list[str] = []
         with _repo_lock:
             has_local = bool(_git("status", "--porcelain", check=True).stdout.strip())
-            if has_local and not commit:
-                if not push:
-                    _set_sync_state(
-                        status="idle",
-                        online=True,
-                        pending=True,
-                        detail="Saved locally",
-                    )
-                    return
-                # Retrying a push over a dirty tree: merging here would touch
-                # edits the user has not asked to save, so leave the tree alone
-                # and go straight to re-sending the existing commits.
-            else:
-                _git("add", "-A", check=True)
-                has_local = bool(_git("status", "--porcelain", check=True).stdout.strip())
-                if has_local:
-                    _git("commit", "-m", "EverFree: save notes", check=True)
+            if has_local and not push:
+                _set_sync_state(
+                    status="idle",
+                    online=True,
+                    pending=True,
+                    detail="Saved locally",
+                )
+                return
 
-                # Merge the fetched remote (auto-merges non-overlapping edits).
-                merge = _git("merge", "--no-edit", "FETCH_HEAD", check=False)
-                if merge.returncode != 0:
-                    # Real conflict: keep local, preserve remote copy, then commit.
-                    new_conflicts = _resolve_merge_conflicts()
-                    if new_conflicts:
-                        _git("commit", "--no-edit", check=False)
-                    else:
-                        _git("merge", "--abort", check=False)
+            _git("add", "-A", check=True)
+            has_local = bool(_git("status", "--porcelain", check=True).stdout.strip())
+            if has_local:
+                _git("commit", "-m", "EverFree: save notes", check=True)
+
+            # Merge the fetched remote (auto-merges non-overlapping edits).
+            merge = _git("merge", "--no-edit", "FETCH_HEAD", check=False)
+            if merge.returncode != 0:
+                # Real conflict: keep local, preserve remote copy, then commit.
+                new_conflicts = _resolve_merge_conflicts()
+                if new_conflicts:
+                    _git("commit", "--no-edit", check=False)
+                else:
+                    _git("merge", "--abort", check=False)
 
         # 3. Push if our branch is ahead of the remote (network, no lock).
         ahead_res = _git("rev-list", "--count", f"origin/{SYNC_BRANCH}..HEAD", check=False)
@@ -738,34 +702,29 @@ def _sync_cycle(push: bool, *, commit: bool | None = None) -> None:
                 if terminal:
                     _set_sync_blocked(*terminal)
                     return
-                # Everything below is transient, so the commit is still ours to
-                # deliver: schedule a retry instead of waiting for the user.
-                _note_push_failure()
-                if _is_rate_limit_error(pushed.stderr):
-                    _set_sync_state(status="error", online=True, pending=True,
-                                    detail="GitHub is rate limiting us — will retry shortly")
-                    return
-                if _is_network_error(pushed.stderr):
-                    _set_sync_state(status="offline", online=False, pending=True,
-                                    detail="Offline — will sync when reconnected")
-                    return
-                # Likely the remote moved between fetch and push; retry next cycle.
-                _set_sync_state(status="error", online=True, pending=True,
-                                detail=pushed.stderr.strip()[:200] or "Push failed")
+                # Anything else — throttled, offline, remote moved under us — is
+                # transient, so the commit is still ours to deliver. Remember
+                # that and stay quiet: the next save pushes it (see
+                # `request_sync`), and `pending` already tells the user the note
+                # is not backed up yet.
+                logger.info("Push failed, will retry on next save: %s",
+                            pushed.stderr.strip()[:200])
+                _push_failed.set()
+                _set_sync_state(status="idle", online=True, pending=True,
+                                detail="Saved locally")
                 return
+
+        if push:
+            # Nothing is waiting to go out any more: either we just pushed it,
+            # or the branch was not ahead in the first place.
+            _push_failed.clear()
 
         remote = None
         r = _git("remote", "get-url", "origin", check=False)
         if r.returncode == 0:
             remote = r.stdout.strip()
 
-        # Nothing is waiting to go out any more (either we pushed it, or there
-        # was nothing ahead), so stop the retry backoff.
-        if push:
-            _clear_push_retry()
-
-        # A retry that skipped a dirty tree still leaves unsaved edits behind.
-        pending = (ahead > 0 and not push) or (has_local and not commit)
+        pending = ahead > 0 and not push
 
         with _sync_lock:
             if new_conflicts:
@@ -820,11 +779,7 @@ def _sync_worker_loop() -> None:
             # every interval only rewrites the same message.
             if _sync_is_blocked():
                 continue
-            # A push that failed for a transient reason is re-sent here once its
-            # backoff expires, so a commit never waits on the user noticing that
-            # sync stalled. It never commits new edits — only what already
-            # failed to go out.
-            _sync_cycle(push=_push_retry_due(), commit=False)
+            _sync_cycle(push=False)
 
 
 def start_sync_worker() -> None:

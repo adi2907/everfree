@@ -167,133 +167,6 @@ class RateLimitClassificationTests(unittest.TestCase):
         self.assertEqual(action, "reauth")
 
 
-class SyncStateHarness(unittest.TestCase):
-    def setUp(self):
-        self._original = dict(app.sync_state)
-        app._clear_push_retry()
-        self.addCleanup(app._clear_push_retry)
-
-    def tearDown(self):
-        with app._sync_lock:
-            app.sync_state.clear()
-            app.sync_state.update(self._original)
-
-    def run_cycle(self, fake: "FakeGit", **kwargs):
-        with mock.patch.object(app, "_git", fake), \
-             mock.patch.object(app, "_is_git_repo", return_value=True):
-            app._sync_cycle(**kwargs)
-
-
-class RateLimitedPushTests(SyncStateHarness):
-    def test_rate_limited_push_does_not_block_sync(self):
-        fake = FakeGit(push_stderr=RATE_LIMITED_403)
-        self.run_cycle(fake, push=True)
-
-        self.assertFalse(app._sync_is_blocked())
-        self.assertIsNone(app.sync_state["action"])
-        self.assertIn("rate limiting", app.sync_state["detail"])
-        # The commit is still ours to deliver.
-        self.assertTrue(app.sync_state["pending"])
-
-    def test_rate_limited_push_schedules_a_retry(self):
-        fake = FakeGit(push_stderr=RATE_LIMITED_403)
-        self.run_cycle(fake, push=True)
-        self.assertEqual(app._push_retry["failures"], 1)
-
-    def test_rejected_token_still_blocks(self):
-        fake = FakeGit(push_stderr="fatal: Authentication failed for 'https://github.com/'")
-        self.run_cycle(fake, push=True)
-        self.assertTrue(app._sync_is_blocked())
-        self.assertEqual(app.sync_state["action"], "reauth")
-
-
-class PushRetryTests(SyncStateHarness):
-    def test_backoff_doubles_and_is_capped(self):
-        delays = []
-        with mock.patch.object(app.time, "monotonic", return_value=1000.0):
-            for _ in range(12):
-                app._note_push_failure()
-                delays.append(app._push_retry["due"] - 1000.0)
-
-        self.assertEqual(delays[0], app.SYNC_PUSH_RETRY_BASE)
-        self.assertEqual(delays[1], app.SYNC_PUSH_RETRY_BASE * 2)
-        self.assertEqual(delays[2], app.SYNC_PUSH_RETRY_BASE * 4)
-        # A long outage must not turn into a tight loop, nor grow unbounded.
-        self.assertEqual(delays[-1], app.SYNC_PUSH_RETRY_MAX)
-        self.assertEqual(delays, sorted(delays))
-
-    def test_retry_is_not_due_before_its_backoff_expires(self):
-        with mock.patch.object(app.time, "monotonic", return_value=0.0):
-            app._note_push_failure()
-            self.assertFalse(app._push_retry_due())
-        with mock.patch.object(app.time, "monotonic",
-                               return_value=app.SYNC_PUSH_RETRY_BASE - 1):
-            self.assertFalse(app._push_retry_due())
-        with mock.patch.object(app.time, "monotonic",
-                               return_value=app.SYNC_PUSH_RETRY_BASE):
-            self.assertTrue(app._push_retry_due())
-
-    def test_no_retry_is_due_when_nothing_failed(self):
-        self.assertFalse(app._push_retry_due())
-
-    def test_successful_push_clears_the_backoff(self):
-        self.run_cycle(FakeGit(push_stderr=RATE_LIMITED_403), push=True)
-        self.assertTrue(app._push_retry["failures"])
-
-        self.run_cycle(FakeGit(), push=True)
-        self.assertEqual(app._push_retry["failures"], 0)
-        self.assertFalse(app._push_retry_due())
-        self.assertFalse(app.sync_state["pending"])
-
-    def test_background_cycle_pushes_once_the_retry_comes_due(self):
-        # The bug: background cycles only ever pulled, so a commit left behind
-        # by a failed push sat locally until the user synced by hand.
-        app._note_push_failure()
-        fake = FakeGit()
-        with mock.patch.object(app, "_git", fake), \
-             mock.patch.object(app, "_is_git_repo", return_value=True), \
-             mock.patch.object(app, "_push_retry_due", return_value=True), \
-             mock.patch.object(app, "_sync_wanted", app_event(triggered=False)), \
-             mock.patch.object(app, "_sync_stop", app_event_stop()):
-            app._sync_worker_loop()
-
-        self.assertTrue(fake.ran("push"))
-
-    def test_background_cycle_does_not_push_with_no_pending_failure(self):
-        fake = FakeGit()
-        with mock.patch.object(app, "_git", fake), \
-             mock.patch.object(app, "_is_git_repo", return_value=True), \
-             mock.patch.object(app, "_sync_wanted", app_event(triggered=False)), \
-             mock.patch.object(app, "_sync_stop", app_event_stop()):
-            app._sync_worker_loop()
-
-        self.assertFalse(fake.ran("push"))
-
-    def test_retry_never_commits_unsaved_edits(self):
-        # The retry re-sends what already failed; edits the user has not asked
-        # to save stay dirty in the working tree.
-        fake = FakeGit(dirty=True)
-        self.run_cycle(fake, push=True, commit=False)
-
-        self.assertFalse(fake.ran("commit"))
-        self.assertFalse(fake.ran("add"))
-        self.assertTrue(fake.ran("push"))
-        self.assertTrue(app.sync_state["pending"])
-
-    def test_blocked_sync_does_not_retry_in_the_background(self):
-        app._set_sync_blocked("reauth", "GitHub rejected the saved sign-in.")
-        app._note_push_failure()
-        fake = FakeGit()
-        with mock.patch.object(app, "_git", fake), \
-             mock.patch.object(app, "_is_git_repo", return_value=True), \
-             mock.patch.object(app, "_push_retry_due", return_value=True), \
-             mock.patch.object(app, "_sync_wanted", app_event(triggered=False)), \
-             mock.patch.object(app, "_sync_stop", app_event_stop()):
-            app._sync_worker_loop()
-
-        self.assertFalse(fake.calls)
-
-
 class _OneShotEvent:
     """A `_sync_wanted` stand-in whose wait() returns a fixed value."""
 
@@ -313,27 +186,114 @@ class _OneShotEvent:
         return self.triggered
 
 
-class _StopAfterOne:
-    """A `_sync_stop` stand-in: clear for the first check of an iteration, set
-    afterwards, so `_sync_worker_loop` runs exactly one pass and exits."""
+class _StopAfterFirstCycle:
+    """A `_sync_stop` stand-in that reads as set once the fake git has been
+    touched, so `_sync_worker_loop` runs one cycle and exits. The check counter
+    is a backstop against hanging the suite if no cycle ever runs."""
 
-    def __init__(self):
+    def __init__(self, fake: "FakeGit"):
+        self.fake = fake
         self.checks = 0
 
     def is_set(self):
         self.checks += 1
-        return self.checks > 2
+        return bool(self.fake.calls) or self.checks > 10
 
     def set(self):
         self.checks = 99
 
 
-def app_event(*, triggered: bool):
-    return _OneShotEvent(triggered)
+class SyncStateHarness(unittest.TestCase):
+    def setUp(self):
+        self._original = dict(app.sync_state)
+        for event in (app._push_failed, app._sync_wanted, app._sync_now):
+            event.clear()
+            self.addCleanup(event.clear)
+
+    def tearDown(self):
+        with app._sync_lock:
+            app.sync_state.clear()
+            app.sync_state.update(self._original)
+
+    def run_cycle(self, fake: "FakeGit", **kwargs):
+        with mock.patch.object(app, "_git", fake), \
+             mock.patch.object(app, "_is_git_repo", return_value=True):
+            app._sync_cycle(**kwargs)
+
+    def run_worker_pass(self, fake: "FakeGit", *, triggered: bool):
+        """One iteration of `_sync_worker_loop`: `triggered` picks the explicit
+        sync branch over the periodic background pull."""
+        with mock.patch.object(app, "_git", fake), \
+             mock.patch.object(app, "_is_git_repo", return_value=True), \
+             mock.patch.object(app, "_sync_wanted", _OneShotEvent(triggered)), \
+             mock.patch.object(app, "_sync_stop", _StopAfterFirstCycle(fake)):
+            app._sync_worker_loop()
 
 
-def app_event_stop():
-    return _StopAfterOne()
+class RateLimitedPushTests(SyncStateHarness):
+    def test_rate_limited_push_does_not_block_sync(self):
+        self.run_cycle(FakeGit(push_stderr=RATE_LIMITED_403), push=True)
+
+        self.assertFalse(app._sync_is_blocked())
+        self.assertIsNone(app.sync_state["action"])
+        # The commit is still ours to deliver, and the UI says so.
+        self.assertTrue(app.sync_state["pending"])
+
+    def test_rejected_token_still_blocks(self):
+        fake = FakeGit(push_stderr="fatal: Authentication failed for 'https://github.com/'")
+        self.run_cycle(fake, push=True)
+        self.assertTrue(app._sync_is_blocked())
+        self.assertEqual(app.sync_state["action"], "reauth")
+
+
+class PushRetryOnNextSaveTests(SyncStateHarness):
+    """The bug: only an explicit user sync ever pushed, so a commit left behind
+    by a failed push sat locally until someone noticed."""
+
+    def test_a_save_after_a_failed_push_triggers_a_push(self):
+        self.run_cycle(FakeGit(push_stderr=RATE_LIMITED_403), push=True)
+        self.assertTrue(app._push_failed.is_set())
+
+        # An ordinary save — not an explicit sync — now wakes the worker.
+        app.request_sync()
+        self.assertTrue(app._sync_wanted.is_set())
+        self.assertTrue(app._sync_now.is_set())
+
+        # And that wake-up lands on the branch that pushes.
+        fake = FakeGit()
+        self.run_worker_pass(fake, triggered=True)
+        self.assertTrue(fake.ran("push"))
+        self.assertFalse(app._push_failed.is_set())
+        self.assertFalse(app.sync_state["pending"])
+
+    def test_a_failed_push_reports_no_error_only_pending(self):
+        # A save that failed to reach GitHub is not worth an error banner; the
+        # pending marker already says the note is not backed up.
+        self.run_cycle(FakeGit(push_stderr=RATE_LIMITED_403), push=True)
+        self.assertEqual(app.sync_state["status"], "idle")
+        self.assertTrue(app.sync_state["online"])
+        self.assertTrue(app.sync_state["pending"])
+
+    def test_an_ordinary_save_stays_local_when_nothing_failed(self):
+        app.request_sync()
+        self.assertTrue(app.sync_state["pending"])
+        self.assertFalse(app._sync_wanted.is_set())
+        self.assertFalse(app._sync_now.is_set())
+
+    def test_background_cycles_still_never_push_or_commit_local_edits(self):
+        # The periodic pull is unchanged: edits the user has not asked to save
+        # stay dirty in the working tree, and nothing goes out.
+        fake = FakeGit(dirty=True)
+        self.run_worker_pass(fake, triggered=False)
+        self.assertFalse(fake.ran("push"))
+        self.assertFalse(fake.ran("commit"))
+        self.assertTrue(app.sync_state["pending"])
+
+    def test_a_successful_push_clears_the_flag(self):
+        self.run_cycle(FakeGit(push_stderr=RATE_LIMITED_403), push=True)
+        self.run_cycle(FakeGit(), push=True)
+        self.assertFalse(app._push_failed.is_set())
+        self.assertFalse(app.sync_state["pending"])
 
 
 if __name__ == "__main__":
