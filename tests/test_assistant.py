@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import os
+import tempfile
+import threading
+import time
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
+import httpx
 from fastapi.testclient import TestClient
 
 from server import assistant
@@ -136,6 +143,160 @@ class AssistantTests(unittest.TestCase):
         self.assertIn("EverFreeNoteContext", response.text)
         self.assertIn("Using Gemini 3.5 Flash-Lite", response.text)
         self.assertIn("14,400 Gemma 4 31B requests per day", response.text)
+
+
+class ConfigRefreshTests(unittest.TestCase):
+    """The desktop app's bundled config is frozen at build time, so it refreshes
+    from the web deployment in the background. A bad or missing fetch must leave
+    the bundled config in place."""
+
+    def setUp(self):
+        self.bundled = {
+            "primary_model": assistant.PRIMARY_MODEL,
+            "fallback_model": assistant.FALLBACK_MODEL,
+            "system_prompt": assistant.SYSTEM_PROMPT,
+            "config": assistant.CONFIG,
+        }
+        cache = Path(tempfile.mkdtemp()) / "cache.json"
+        patcher = patch.object(assistant, "CONFIG_CACHE_FILE", cache)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.cache = cache
+        self.addCleanup(self._restore_bundled)
+
+    def _restore_bundled(self):
+        assistant.PRIMARY_MODEL = self.bundled["primary_model"]
+        assistant.FALLBACK_MODEL = self.bundled["fallback_model"]
+        assistant.SYSTEM_PROMPT = self.bundled["system_prompt"]
+        assistant.CONFIG = self.bundled["config"]
+
+    def _assert_bundled_config_in_use(self):
+        self.assertEqual(assistant.SYSTEM_PROMPT, self.bundled["system_prompt"])
+        self.assertEqual(assistant.PRIMARY_MODEL, self.bundled["primary_model"])
+        self.assertEqual(assistant.FALLBACK_MODEL, self.bundled["fallback_model"])
+
+    @staticmethod
+    def _deployed_config():
+        return {
+            "primary_model": {"id": "gemini-next", "name": "Gemini Next", "daily_requests": 500},
+            "fallback_model": {"id": "gemma-next", "name": "Gemma Next", "daily_requests": 14400},
+            "system_prompt": "You are the deployed assistant.",
+        }
+
+    def _refresh_with(self, fetch):
+        with patch.object(assistant, "_fetch_config", fetch):
+            return asyncio.run(assistant.refresh_config())
+
+    def test_bundled_config_is_kept_when_the_fetch_fails(self):
+        async def offline(*_args):
+            raise httpx.ConnectError("offline")
+
+        self.assertFalse(self._refresh_with(offline))
+        self._assert_bundled_config_in_use()
+
+    def test_valid_fetched_config_replaces_the_bundled_one(self):
+        deployed = self._deployed_config()
+
+        async def fetch(*_args):
+            return deployed
+
+        self.assertTrue(self._refresh_with(fetch))
+        self.assertEqual(assistant.SYSTEM_PROMPT, "You are the deployed assistant.")
+        self.assertEqual(assistant.PRIMARY_MODEL["id"], "gemini-next")
+        self.assertEqual(assistant.FALLBACK_MODEL["name"], "Gemma Next")
+
+    def test_malformed_or_incomplete_fetched_configs_are_rejected(self):
+        deployed = self._deployed_config()
+        rejected = [
+            None,
+            "not a config",
+            {},
+            {k: v for k, v in deployed.items() if k != "fallback_model"},
+            {**deployed, "system_prompt": "   "},
+            {**deployed, "primary_model": {"id": "gemini-next"}},          # no name
+            {**deployed, "fallback_model": {"name": "Gemma Next"}},        # no id
+            {**deployed, "primary_model": "gemini-next"},
+        ]
+        for bad in rejected:
+            with self.subTest(config=bad):
+                async def fetch(*_args, _bad=bad):
+                    return _bad
+
+                self.assertFalse(self._refresh_with(fetch))
+                self._assert_bundled_config_in_use()
+
+    def test_oversized_or_unparseable_downloads_are_discarded(self):
+        oversized = httpx.Response(200, content=b"x" * (assistant.CONFIG_MAX_BYTES + 1))
+        not_json = httpx.Response(200, content=b"<!doctype html>")
+        missing = httpx.Response(404, content=b"")
+        for response in (oversized, not_json, missing):
+            with self.subTest(status=response.status_code):
+                async def get(*_args, _response=response, **_kwargs):
+                    return _response
+
+                with patch.object(httpx.AsyncClient, "get", get):
+                    self.assertIsNone(asyncio.run(assistant._fetch_config()))
+
+    def test_last_good_config_is_reused_when_an_offline_restart_cannot_fetch(self):
+        deployed = self._deployed_config()
+
+        async def fetch(*_args):
+            return deployed
+
+        self._refresh_with(fetch)
+        self._restore_bundled()
+
+        async def offline(*_args):
+            raise httpx.ConnectError("offline")
+
+        self.assertTrue(self._refresh_with(offline))
+        self.assertEqual(assistant.SYSTEM_PROMPT, "You are the deployed assistant.")
+
+    def test_cache_is_dropped_when_the_app_ships_a_new_bundled_config(self):
+        deployed = self._deployed_config()
+
+        async def fetch(*_args):
+            return deployed
+
+        self._refresh_with(fetch)
+        self._restore_bundled()
+
+        async def offline(*_args):
+            raise httpx.ConnectError("offline")
+
+        with patch.object(assistant, "BUNDLED_CONFIG_TEXT", '{"rebuilt": true}'):
+            self.assertFalse(self._refresh_with(offline))
+        self._assert_bundled_config_in_use()
+
+    def test_config_url_is_a_fixed_https_constant(self):
+        self.assertTrue(assistant.CONFIG_URL.startswith("https://"))
+        source = Path(assistant.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("EVERFREE_ASSISTANT_CONFIG_URL", source)
+        self.assertNotIn("os.environ.get(\"EVERFREE_CONFIG", source)
+
+    def test_startup_is_not_blocked_by_a_slow_fetch(self):
+        started = threading.Event()
+
+        async def slow(*_args):
+            started.set()
+            await asyncio.sleep(30)
+            raise AssertionError("startup waited for the fetch")
+
+        with patch.object(assistant, "_is_desktop_build", lambda: True), \
+                patch.object(assistant, "_fetch_config", slow):
+            begin = time.monotonic()
+            with TestClient(app):
+                elapsed = time.monotonic() - begin
+                # The refresh is running, but startup did not wait for it.
+                self.assertTrue(started.wait(5))
+        self.assertLess(elapsed, 5)
+        self._assert_bundled_config_in_use()
+
+    def test_refresh_is_skipped_outside_the_packaged_app(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("RESOURCEPATH", None)
+            self.assertFalse(assistant._is_desktop_build())
+            self.assertIsNone(assistant.start_config_refresh())
 
 
 if __name__ == "__main__":
