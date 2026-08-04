@@ -6,8 +6,14 @@
 const CONFIG = require("../../lib/assistant-config.json");
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
-const DEFAULT_CHAT_NOTE = "You have no web access in this turn.";
-const DEFAULT_SEARCH_NOTE = "Web search is available in this turn.";
+// These stand in when a config omits them, so they have to carry the whole
+// instruction rather than gesture at it: a search turn that is not told to cite
+// stops citing, and the sources the client renders no longer match the prose.
+const DEFAULT_CHAT_NOTE = "You have no web access in this turn: you cannot search the web or open links, "
+    + "so never claim to have done either.";
+const DEFAULT_SEARCH_NOTE = "You have web search in this turn, and search results are supplied to you. "
+    + "Ground every factual claim in those results and cite its source as a Markdown link. Where the "
+    + "results do not cover something, say so plainly instead of filling the gap from memory.";
 
 const NOTE_LIMIT = 60000;
 const SELECTION_LIMIT = 20000;

@@ -354,6 +354,53 @@ class ConfigRefreshTests(unittest.TestCase):
                 self.assertFalse(self._refresh_with(fetch))
                 self._assert_bundled_config_in_use()
 
+    def test_a_deployed_config_predating_search_cannot_disable_search(self):
+        """The deployment can lag the app, and the refresh must survive the gap.
+
+        A config served before /search existed carries no `search_models`. Taking
+        it would leave the running code with nothing to route a search to, so it
+        is rejected outright and the bundled config stays. This is the shape that
+        was live at the time /search was built.
+        """
+        predates_search = {
+            "chat_models": [{"id": "gemini-3.5-flash", "name": "Gemini 3.5 Flash", "daily_requests": 500}],
+            "system_prompt": "You are the deployed assistant.",
+        }
+
+        async def fetch(*_args):
+            return predates_search
+
+        self.assertFalse(self._refresh_with(fetch))
+        self._assert_bundled_config_in_use()
+        # Nothing was cached either, so the next start does not resurrect it.
+        self.assertFalse(self.cache.exists())
+        # And a search turn still builds against the bundled models.
+        payload = assistant._search_payload(
+            {"content": "note"}, {}, [], "find things", assistant.SEARCH_MODELS[0],
+        )
+        self.assertEqual(payload["model"], assistant.SEARCH_MODELS[0]["id"])
+
+    def test_omitted_turn_notes_still_instruct_the_model_to_cite(self):
+        """The notes are optional, so their defaults carry the whole instruction.
+
+        A config with search models but no `search_note` is legitimate. Falling
+        back to a note that merely announces search would quietly stop the answer
+        citing anything, leaving the sources the client renders unmatched by the
+        prose.
+        """
+        deployed = self._deployed_config()
+        no_notes = {k: v for k, v in deployed.items() if k not in {"chat_note", "search_note"}}
+
+        async def fetch(*_args):
+            return no_notes
+
+        self.assertTrue(self._refresh_with(fetch))
+        self.assertIn("cite", assistant.SEARCH_NOTE.lower())
+        self.assertIn("never claim", assistant.CHAT_NOTE.lower())
+        self.assertEqual(assistant.SEARCH_MAX_RESULTS, 8)
+        blocks = assistant._context_blocks({"content": "note"}, {}, True)
+        self.assertIn("cite", blocks[-1].lower())
+
     def test_oversized_or_unparseable_downloads_are_discarded(self):
         oversized = httpx.Response(200, content=b"x" * (assistant.CONFIG_MAX_BYTES + 1))
         not_json = httpx.Response(200, content=b"<!doctype html>")
