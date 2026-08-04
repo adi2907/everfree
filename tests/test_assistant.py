@@ -60,9 +60,10 @@ class AssistantTests(unittest.TestCase):
         self.assertIn("<current_note name=\"Work / Draft.md\">", parts[1]["text"])
         self.assertIn("# Current note\n\nThe draft.\n", parts[1]["text"])
         self.assertIn("<selected_text>\nselected words", parts[2]["text"])
+        self.assertEqual(parts[3]["text"], assistant.CHAT_NOTE)
         self.assertEqual(payload["contents"][-1]["parts"][0]["text"], prompt)
-        # The assistant has no tools at all: nothing it can call reaches beyond
-        # the note, the selection, and the conversation.
+        # An ordinary turn has no tools at all: nothing it can call reaches
+        # beyond the note, the selection, and the conversation.
         self.assertNotIn("tools", payload)
         self.assertNotIn("api_key", payload)
         self.assertEqual(captured["model"]["id"], "gemini-3.5-flash")
@@ -140,6 +141,100 @@ class AssistantTests(unittest.TestCase):
             "Gemini is temporarily rate-limited. Wait a moment and try again.",
         )
 
+    def test_search_goes_to_openrouter_with_the_note_as_context(self):
+        captured = {}
+
+        async def fake_search(api_key, payload, model):
+            captured["api_key"] = api_key
+            captured["payload"] = payload
+            yield {"type": "sources", "sources": [{"url": "https://example.com", "title": "Example"}]}
+            yield {"type": "delta", "text": "Answer"}
+            yield {"type": "done"}
+
+        with patch.object(assistant, "_search_events", fake_search):
+            response = self.client.post(
+                "/api/assistant/chat",
+                json={
+                    "api_key": "gemini-key",
+                    "search_key": "openrouter-key",
+                    "search": True,
+                    "note": {"note": "Draft.md", "content": "Automation reshapes the workforce."},
+                    "selection": {"text": ""},
+                    "prompt": "find vanished professions",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        # The search key is the only one that travels to OpenRouter; the Gemini
+        # key must not leak across providers.
+        self.assertEqual(captured["api_key"], "openrouter-key")
+        payload = captured["payload"]
+        self.assertNotIn("gemini-key", json.dumps(payload))
+        self.assertEqual(payload["model"], "nvidia/nemotron-3-ultra-550b-a55b:free")
+        self.assertEqual(payload["plugins"], [{"id": "web", "max_results": 8}])
+        self.assertTrue(payload["stream"])
+        system = payload["messages"][0]
+        self.assertEqual(system["role"], "system")
+        # The note rides along as context and the turn is told it can search.
+        self.assertIn("Automation reshapes the workforce.", system["content"])
+        self.assertIn(assistant.SEARCH_NOTE, system["content"])
+        self.assertNotIn(assistant.CHAT_NOTE, system["content"])
+        self.assertEqual(payload["messages"][-1], {"role": "user", "content": "find vanished professions"})
+        events = [json.loads(line) for line in response.text.splitlines()]
+        self.assertEqual(events[0]["type"], "sources")
+        self.assertEqual(events[0]["sources"][0]["url"], "https://example.com")
+
+    def test_search_without_an_openrouter_key_is_refused_before_any_request(self):
+        called = []
+
+        async def fake_search(api_key, payload, model):
+            called.append(model)
+            yield {"type": "done"}
+
+        with patch.object(assistant, "_search_events", fake_search):
+            response = self.client.post(
+                "/api/assistant/chat",
+                json={"api_key": "gemini-key", "search": True, "prompt": "find things"},
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("OpenRouter", response.json()["detail"])
+        # A Gemini key must not silently stand in for the missing one.
+        self.assertEqual(called, [])
+
+    def test_search_falls_through_a_rate_limited_model_then_reports_it(self):
+        calls = []
+
+        async def fake_search(api_key, payload, model):
+            calls.append(model)
+            raise assistant.SearchUnavailable
+            yield  # pragma: no cover - generator marker
+
+        with patch.object(assistant, "_search_events", fake_search):
+            response = self.client.post(
+                "/api/assistant/chat",
+                json={"search_key": "openrouter-key", "search": True, "prompt": "find things"},
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual([model["id"] for model in calls], [
+            "nvidia/nemotron-3-ultra-550b-a55b:free",
+            "nvidia/nemotron-3-super-120b-a12b:free",
+        ])
+        events = [json.loads(line) for line in response.text.splitlines()]
+        self.assertEqual(events[-1]["type"], "error")
+        # A rate-limited search is temporary, so it must not be recorded as a
+        # spent daily budget the way an exhausted Gemini chain is.
+        self.assertNotIn("quota_spent", events[-1])
+
+    def test_openrouter_errors_name_the_cause(self):
+        self.assertIn("rejected the key", assistant._openrouter_error_detail(401, "{}"))
+        self.assertIn("out of credit", assistant._openrouter_error_detail(402, "{}"))
+        detail = assistant._openrouter_error_detail(
+            500, '{"error":{"message":"upstream exploded"}}'
+        )
+        self.assertIn("upstream exploded", detail)
+
     def test_chat_requires_a_key_and_message(self):
         missing_key = self.client.post(
             "/api/assistant/chat", json={"prompt": "hello"}
@@ -157,9 +252,18 @@ class AssistantTests(unittest.TestCase):
         self.assertIn("EverFreeNoteContext", response.text)
         self.assertIn("Using Gemini 3.5 Flash", response.text)
         self.assertIn("500 Gemini 3.5 Flash-Lite requests per day", response.text)
-        # Search is gone: no slash command, no grounding UI.
-        self.assertNotIn("/search", response.text)
-        self.assertNotIn("ef-ai-sources", response.text)
+        # /search is offered in the UI and gated on its own stored key.
+        self.assertIn("/search", response.text)
+        self.assertIn("everfree-openrouter-key", response.text)
+        self.assertIn("ef-ai-sources", response.text)
+
+    def test_sign_out_clears_the_search_key_with_the_chat_key(self):
+        """A key left behind after sign-out would outlive the session. ADR 0001."""
+        web = Path(assistant.__file__).resolve().parent.parent / "web"
+        for client in ("app.js", Path("mobile") / "app.js"):
+            with self.subTest(client=str(client)):
+                source = (web / client).read_text(encoding="utf-8")
+                self.assertIn("everfree-openrouter-key", source)
 
 
 class ConfigRefreshTests(unittest.TestCase):
@@ -170,6 +274,7 @@ class ConfigRefreshTests(unittest.TestCase):
     def setUp(self):
         self.bundled = {
             "chat_models": assistant.CHAT_MODELS,
+            "search_models": assistant.SEARCH_MODELS,
             "system_prompt": assistant.SYSTEM_PROMPT,
             "config": assistant.CONFIG,
         }
@@ -182,12 +287,14 @@ class ConfigRefreshTests(unittest.TestCase):
 
     def _restore_bundled(self):
         assistant.CHAT_MODELS = self.bundled["chat_models"]
+        assistant.SEARCH_MODELS = self.bundled["search_models"]
         assistant.SYSTEM_PROMPT = self.bundled["system_prompt"]
         assistant.CONFIG = self.bundled["config"]
 
     def _assert_bundled_config_in_use(self):
         self.assertEqual(assistant.SYSTEM_PROMPT, self.bundled["system_prompt"])
         self.assertEqual(assistant.CHAT_MODELS, self.bundled["chat_models"])
+        self.assertEqual(assistant.SEARCH_MODELS, self.bundled["search_models"])
 
     @staticmethod
     def _deployed_config():
@@ -196,6 +303,7 @@ class ConfigRefreshTests(unittest.TestCase):
                 {"id": "gemini-next", "name": "Gemini Next", "daily_requests": 500},
                 {"id": "gemini-next-lite", "name": "Gemini Next Lite", "daily_requests": 500},
             ],
+            "search_models": [{"id": "vendor/search-next:free", "name": "Search Next"}],
             "system_prompt": "You are the deployed assistant.",
         }
 
@@ -234,6 +342,9 @@ class ConfigRefreshTests(unittest.TestCase):
             {**deployed, "chat_models": "gemini-next"},                      # not a list
             {**deployed, "chat_models": []},                                 # nothing to call
             {**deployed, "chat_models": ["gemini-next"]},                    # not model dicts
+            {k: v for k, v in deployed.items() if k != "search_models"},      # /search unroutable
+            {**deployed, "search_models": []},                               # nothing to call
+            {**deployed, "search_models": [{"id": "vendor/search-next:free"}]},  # no name
         ]
         for bad in rejected:
             with self.subTest(config=bad):

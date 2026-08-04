@@ -1,10 +1,15 @@
-"""Minimal Gemini chat for EverFree.
+"""Minimal chat and web search for EverFree.
 
 The assistant cannot read any note except the current note supplied by the
-client, and it has no tools: it answers from the note, the selection, and the
-conversation alone. Requests walk the configured list of models, falling
-through to the next on a daily-quota 429. The API key is supplied per request
-and is never stored by the server.
+client. An ordinary turn has no tools at all: it answers from the note, the
+selection, and the conversation alone, and walks the configured Gemini models,
+falling through to the next on a daily-quota 429.
+
+An explicit /search turn goes somewhere else entirely — OpenRouter, which runs
+the web search and hands the results to a model that reads them. That path
+needs its own key, so /search stays unavailable until one is stored; the two
+providers never share a key. Both keys are supplied per request and neither is
+ever stored by the server.
 """
 
 from __future__ import annotations
@@ -31,10 +36,17 @@ if os.environ.get("RESOURCEPATH"):
 else:
     CONFIG_FILE = Path(__file__).resolve().parent.parent / "web" / "lib" / "assistant-config.json"
 
+DEFAULT_CHAT_NOTE = "You have no web access in this turn."
+DEFAULT_SEARCH_NOTE = "Web search is available in this turn."
+
 BUNDLED_CONFIG_TEXT = CONFIG_FILE.read_text(encoding="utf-8")
 CONFIG = json.loads(BUNDLED_CONFIG_TEXT)
 CHAT_MODELS = CONFIG["chat_models"]
+SEARCH_MODELS = CONFIG["search_models"]
 SYSTEM_PROMPT = CONFIG["system_prompt"]
+CHAT_NOTE = CONFIG.get("chat_note") or DEFAULT_CHAT_NOTE
+SEARCH_NOTE = CONFIG.get("search_note") or DEFAULT_SEARCH_NOTE
+SEARCH_MAX_RESULTS = CONFIG.get("search_max_results") or 8
 
 # The desktop app ships a copy of this file inside the .app, so a model or
 # prompt change used to need a new DMG. The web deployment serves the current
@@ -46,11 +58,17 @@ CONFIG_CACHE_FILE = Path.home() / ".everfree_assistant_config.json"
 CONFIG_FETCH_TIMEOUT = 5.0
 CONFIG_MAX_BYTES = 256 * 1024
 
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+
 NOTE_LIMIT = 60_000
 SELECTION_LIMIT = 20_000
 MESSAGE_LIMIT = 20_000
 HISTORY_LIMIT = 20
 TIMEOUT = httpx.Timeout(180.0, connect=10.0)
+# A search turn runs a web search and then reads the results, so it is slow by
+# construction: the free model measured near 90 seconds. Give it room rather
+# than cutting off an answer that is still coming.
+SEARCH_TIMEOUT = httpx.Timeout(300.0, connect=10.0)
 
 
 class DailyQuotaExceeded(Exception):
@@ -59,6 +77,10 @@ class DailyQuotaExceeded(Exception):
 
 class ChainExhausted(Exception):
     """Every configured model is out of daily quota."""
+
+
+class SearchUnavailable(Exception):
+    """An OpenRouter search model was rate-limited or refused the request."""
 
 
 # ── Assistant config refresh ─────────────────────────────────
@@ -77,15 +99,16 @@ def _valid_config(data: object) -> dict | None:
     """
     if not isinstance(data, dict):
         return None
-    models = data.get("chat_models")
-    if not isinstance(models, list) or not models:
-        return None
-    for model in models:
-        if not isinstance(model, dict):
+    for key in ("chat_models", "search_models"):
+        models = data.get(key)
+        if not isinstance(models, list) or not models:
             return None
-        if not all(isinstance(model.get(field), str) and model[field].strip()
-                   for field in ("id", "name")):
-            return None
+        for model in models:
+            if not isinstance(model, dict):
+                return None
+            if not all(isinstance(model.get(field), str) and model[field].strip()
+                       for field in ("id", "name")):
+                return None
     prompt = data.get("system_prompt")
     if not isinstance(prompt, str) or not prompt.strip():
         return None
@@ -93,10 +116,15 @@ def _valid_config(data: object) -> dict | None:
 
 
 def _apply_config(config: dict) -> None:
-    global CONFIG, CHAT_MODELS, SYSTEM_PROMPT
+    global CONFIG, CHAT_MODELS, SEARCH_MODELS, SYSTEM_PROMPT
+    global CHAT_NOTE, SEARCH_NOTE, SEARCH_MAX_RESULTS
     CONFIG = config
     CHAT_MODELS = config["chat_models"]
+    SEARCH_MODELS = config["search_models"]
     SYSTEM_PROMPT = config["system_prompt"]
+    CHAT_NOTE = config.get("chat_note") or DEFAULT_CHAT_NOTE
+    SEARCH_NOTE = config.get("search_note") or DEFAULT_SEARCH_NOTE
+    SEARCH_MAX_RESULTS = config.get("search_max_results") or 8
 
 
 def _bundled_fingerprint() -> str:
@@ -187,7 +215,12 @@ def _text(value: object, limit: int) -> str:
     return value[:limit] if isinstance(value, str) else ""
 
 
-def _system_parts(note: dict, selection: dict) -> list[dict]:
+def _context_blocks(note: dict, selection: dict, search: bool) -> list[str]:
+    """The system text both providers share, in the same order.
+
+    Whether this turn can search changes what the model may claim about the
+    web, so that claim belongs to the turn rather than to the standing prompt.
+    """
     notebook = _text(note.get("notebook"), 500).strip()
     name = _text(note.get("note"), 500).strip() or "Untitled note"
     content = _text(note.get("content"), NOTE_LIMIT)
@@ -203,10 +236,15 @@ def _system_parts(note: dict, selection: dict) -> list[dict]:
     else:
         selection_context = "<selected_text>(none)</selected_text>"
     return [
-        {"text": SYSTEM_PROMPT},
-        {"text": note_context},
-        {"text": selection_context},
+        SYSTEM_PROMPT,
+        note_context,
+        selection_context,
+        SEARCH_NOTE if search else CHAT_NOTE,
     ]
+
+
+def _system_parts(note: dict, selection: dict) -> list[dict]:
+    return [{"text": block} for block in _context_blocks(note, selection, False)]
 
 
 def _contents(history: list, prompt: str) -> list[dict]:
@@ -235,6 +273,127 @@ def _payload(note: dict, selection: dict, history: list, prompt: str) -> dict:
         "contents": _contents(history, prompt),
         "generationConfig": {"maxOutputTokens": 2048},
     }
+
+
+def _search_payload(note: dict, selection: dict, history: list, prompt: str, model: dict) -> dict:
+    """OpenRouter speaks the OpenAI shape, so the same context is re-laid-out.
+
+    The `web` plugin runs the search before the model sees the turn and pastes
+    the results into it, so there is no tool call to orchestrate here.
+    """
+    messages = [{"role": "system", "content": "\n\n".join(_context_blocks(note, selection, True))}]
+    for message in history[-HISTORY_LIMIT:]:
+        if not isinstance(message, dict):
+            continue
+        role = message.get("role")
+        text = _text(message.get("content"), MESSAGE_LIMIT)
+        if role not in {"user", "assistant"} or not text:
+            continue
+        prior_selection = _text(message.get("selection"), SELECTION_LIMIT)
+        if role == "user" and prior_selection:
+            text = f"Selected text for this earlier request:\n{prior_selection}\n\nRequest:\n{text}"
+        messages.append({"role": role, "content": text})
+    messages.append({"role": "user", "content": prompt})
+    return {
+        "model": model["id"],
+        "messages": messages,
+        "plugins": [{"id": "web", "max_results": SEARCH_MAX_RESULTS}],
+        "stream": True,
+    }
+
+
+def _openrouter_error_detail(status_code: int, raw: str) -> str:
+    try:
+        message = json.loads(raw).get("error", {}).get("message")
+    except (ValueError, AttributeError):
+        message = None
+    if status_code in {401, 403}:
+        return "OpenRouter rejected the key. Check it in the assistant's key settings."
+    if status_code == 402:
+        # Inference on the free model costs nothing, but the web plugin bills
+        # the key's owner per search, so an empty balance stops /search alone.
+        return "OpenRouter is out of credit. Web search bills about half a cent per search."
+    if isinstance(message, str) and message.strip():
+        return f"Search request failed ({status_code}): {message.strip()}"
+    return f"Search request failed ({status_code})."
+
+
+async def _search_events(api_key: str, payload: dict, model: dict):
+    """Stream one OpenRouter search turn.
+
+    Citations arrive in the first chunk, ahead of any prose, so they are emitted
+    as their own event and the client can show sources while the answer is still
+    being written. The model's reasoning is streamed alongside the answer in
+    separate fields; only the answer is forwarded.
+    """
+    answered = False
+    seen_sources = set()
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "X-Title": "EverFree",
+        "HTTP-Referer": "https://everfree.vercel.app",
+    }
+    async with httpx.AsyncClient(timeout=SEARCH_TIMEOUT, headers=headers) as client:
+        async with client.stream("POST", OPENROUTER_URL, json=payload) as response:
+            if response.status_code != 200:
+                raw = (await response.aread()).decode("utf-8", "replace")
+                if response.status_code == 429:
+                    logger.warning(
+                        "%s was rate-limited, falling back: %s", model["id"], raw[:1000],
+                    )
+                    raise SearchUnavailable
+                yield {"type": "error", "detail": _openrouter_error_detail(response.status_code, raw)}
+                return
+            yield {"type": "model", "id": model["id"], "name": model["name"], "search": True}
+            async for line in response.aiter_lines():
+                line = line.strip()
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if not data or data == "[DONE]":
+                    continue
+                try:
+                    chunk = json.loads(data)
+                except ValueError:
+                    continue
+                delta = ((chunk.get("choices") or [{}])[0] or {}).get("delta") or {}
+                sources = []
+                for annotation in delta.get("annotations") or []:
+                    citation = (annotation or {}).get("url_citation") or {}
+                    url = citation.get("url")
+                    if not isinstance(url, str) or url in seen_sources:
+                        continue
+                    seen_sources.add(url)
+                    sources.append({"url": url, "title": citation.get("title") or url})
+                if sources:
+                    yield {"type": "sources", "sources": sources}
+                text = delta.get("content")
+                if isinstance(text, str) and text:
+                    answered = True
+                    yield {"type": "delta", "text": text}
+    if answered:
+        yield {"type": "done"}
+    else:
+        yield {"type": "error", "detail": "The search returned no answer. Please try again."}
+
+
+async def _search_chain(api_key: str, payload_for, models: list):
+    """Fall through to the next search model while one is rate-limited.
+
+    Each model needs its own payload because the model id is part of the body,
+    so the caller passes a builder rather than a finished payload.
+    """
+    for model in models:
+        started = False
+        try:
+            async for event in _search_events(api_key, payload_for(model), model):
+                started = True
+                yield event
+            return
+        except SearchUnavailable:
+            if started:
+                raise
+    raise ChainExhausted
 
 
 def _ndjson(event: dict) -> str:
@@ -358,21 +517,47 @@ async def _stream_chain(api_key: str, payload: dict, models: list):
 async def chat(request: Request):
     body = await request.json()
     api_key = _text(body.get("api_key"), 500).strip()
+    search_key = _text(body.get("search_key"), 500).strip()
+    search = bool(body.get("search"))
     prompt_value = body.get("prompt")
     prompt = prompt_value if isinstance(prompt_value, str) else ""
     note = body.get("note") if isinstance(body.get("note"), dict) else {}
     selection = body.get("selection") if isinstance(body.get("selection"), dict) else {}
     history = body.get("history") if isinstance(body.get("history"), list) else []
-    if not api_key:
+    # A search turn never reaches Gemini, so it asks for the OpenRouter key
+    # instead: the two providers are independent and neither key implies the
+    # other.
+    if search and not search_key:
+        raise HTTPException(
+            status_code=400,
+            detail="Add an OpenRouter key to use /search.",
+        )
+    if not search and not api_key:
         raise HTTPException(status_code=400, detail="Add your Gemini API key first.")
     if not prompt.strip():
-        raise HTTPException(status_code=400, detail="Write a message first.")
+        raise HTTPException(
+            status_code=400,
+            detail="Add a question after /search." if search else "Write a message first.",
+        )
     if len(prompt) > MESSAGE_LIMIT:
         raise HTTPException(status_code=413, detail="Message is too long.")
 
     async def stream():
-        payload = _payload(note, selection, history, prompt)
         try:
+            if search:
+                def payload_for(model):
+                    return _search_payload(note, selection, history, prompt, model)
+
+                try:
+                    async for event in _search_chain(search_key, payload_for, SEARCH_MODELS):
+                        yield _ndjson(event)
+                except ChainExhausted:
+                    yield _ndjson({
+                        "type": "error",
+                        "detail": "Every search model is rate-limited right now. Try again shortly.",
+                    })
+                return
+            payload = _payload(note, selection, history, prompt)
             try:
                 async for event in _stream_chain(api_key, payload, CHAT_MODELS):
                     yield _ndjson(event)
@@ -385,7 +570,11 @@ async def chat(request: Request):
                     "detail": "Today's Gemini quota is used up. Try again after it resets.",
                 })
         except httpx.ConnectError:
-            yield _ndjson({"type": "error", "detail": "Could not reach Gemini. Check your connection."})
+            yield _ndjson({
+                "type": "error",
+                "detail": "Could not reach OpenRouter. Check your connection." if search
+                else "Could not reach Gemini. Check your connection.",
+            })
         except Exception as exc:
             yield _ndjson({"type": "error", "detail": str(exc)})
 

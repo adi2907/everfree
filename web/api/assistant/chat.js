@@ -1,14 +1,19 @@
-// Minimal EverFree chat proxy. The Gemini key is used only for this request.
-// Mirrors server/assistant.py: the assistant has no tools, and a request walks
-// the configured model list, falling through on a daily-quota 429. Keep the two
-// in step.
+// Minimal EverFree chat and search proxy. Each key is used only for the request
+// it arrives on. Mirrors server/assistant.py: an ordinary turn has no tools and
+// walks the configured Gemini models, falling through on a daily-quota 429; a
+// /search turn goes to OpenRouter instead, on its own key. Keep the two in step.
 
 const CONFIG = require("../../lib/assistant-config.json");
+
+const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
+const DEFAULT_CHAT_NOTE = "You have no web access in this turn.";
+const DEFAULT_SEARCH_NOTE = "Web search is available in this turn.";
 
 const NOTE_LIMIT = 60000;
 const SELECTION_LIMIT = 20000;
 const MESSAGE_LIMIT = 20000;
 const HISTORY_LIMIT = 20;
+const SEARCH_MAX_RESULTS = CONFIG.search_max_results || 8;
 
 function clean(value, limit) {
     return typeof value === "string" ? value.slice(0, limit) : "";
@@ -16,18 +21,29 @@ function clean(value, limit) {
 
 class DailyQuotaError extends Error {}
 class ChainExhaustedError extends Error {}
+class SearchUnavailableError extends Error {}
 
-function systemParts(note, selection) {
+// The system text both providers share, in the same order. Whether this turn
+// can search changes what the model may claim about the web, so that claim
+// belongs to the turn rather than to the standing prompt.
+function contextBlocks(note, selection, search) {
     const notebook = clean(note.notebook, 500).trim();
     const name = clean(note.note, 500).trim() || "Untitled note";
     const location = notebook ? `${notebook} / ${name}` : name;
     const content = clean(note.content, NOTE_LIMIT) || "(empty note)";
     const selected = clean(selection.text, SELECTION_LIMIT);
     return [
-        { text: CONFIG.system_prompt },
-        { text: `<current_note name=${JSON.stringify(location)}>\n${content}\n</current_note>` },
-        { text: selected.trim() ? `<selected_text>\n${selected}\n</selected_text>` : "<selected_text>(none)</selected_text>" },
+        CONFIG.system_prompt,
+        `<current_note name=${JSON.stringify(location)}>\n${content}\n</current_note>`,
+        selected.trim() ? `<selected_text>\n${selected}\n</selected_text>` : "<selected_text>(none)</selected_text>",
+        search
+            ? (CONFIG.search_note || DEFAULT_SEARCH_NOTE)
+            : (CONFIG.chat_note || DEFAULT_CHAT_NOTE),
     ];
+}
+
+function systemParts(note, selection) {
+    return contextBlocks(note, selection, false).map((text) => ({ text }));
 }
 
 function contents(history, prompt) {
@@ -106,6 +122,115 @@ function googleErrorDetail(status, detail) {
         : `Gemini request failed (${status}).`;
 }
 
+// OpenRouter speaks the OpenAI shape, so the same context is re-laid-out. The
+// `web` plugin runs the search before the model sees the turn and pastes the
+// results into it, so there is no tool call to orchestrate here.
+function searchPayload(note, selection, history, prompt, model) {
+    const messages = [{ role: "system", content: contextBlocks(note, selection, true).join("\n\n") }];
+    for (const message of history.slice(-HISTORY_LIMIT)) {
+        if (!message || (message.role !== "user" && message.role !== "assistant")) continue;
+        let text = clean(message.content, MESSAGE_LIMIT);
+        if (!text) continue;
+        const priorSelection = clean(message.selection, SELECTION_LIMIT);
+        if (message.role === "user" && priorSelection) {
+            text = `Selected text for this earlier request:\n${priorSelection}\n\nRequest:\n${text}`;
+        }
+        messages.push({ role: message.role, content: text });
+    }
+    messages.push({ role: "user", content: prompt });
+    return {
+        model: model.id,
+        messages,
+        plugins: [{ id: "web", max_results: SEARCH_MAX_RESULTS }],
+        stream: true,
+    };
+}
+
+function openRouterErrorDetail(status, detail) {
+    let message = "";
+    try { message = JSON.parse(detail).error.message || ""; } catch { /* use status below */ }
+    if (status === 401 || status === 403) {
+        return "OpenRouter rejected the key. Check it in the assistant's key settings.";
+    }
+    // Inference on the free model costs nothing, but the web plugin bills the
+    // key's owner per search, so an empty balance stops /search alone.
+    if (status === 402) {
+        return "OpenRouter is out of credit. Web search bills about half a cent per search.";
+    }
+    return message.trim()
+        ? `Search request failed (${status}): ${message.trim()}`
+        : `Search request failed (${status}).`;
+}
+
+// Citations arrive in the first chunk, ahead of any prose, so they are written
+// as their own event and the client can show sources while the answer is still
+// being written. The model's reasoning streams in separate delta fields; only
+// the answer is forwarded.
+async function streamSearchModel(apiKey, payload, model, write) {
+    let response;
+    try {
+        response = await fetch(OPENROUTER_URL, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${apiKey}`,
+                "X-Title": "EverFree",
+                "HTTP-Referer": "https://everfree.vercel.app",
+            },
+            body: JSON.stringify(payload),
+        });
+    } catch (error) {
+        throw new Error(`Could not reach OpenRouter: ${error.message || error}`);
+    }
+    if (!response.ok) {
+        const detail = await response.text();
+        if (response.status === 429) {
+            console.error(`${model.id} rate-limited, falling back:`, detail.slice(0, 1000));
+            throw new SearchUnavailableError();
+        }
+        throw new Error(openRouterErrorDetail(response.status, detail));
+    }
+
+    write({ type: "model", id: model.id, name: model.name, search: true });
+    let answered = false;
+    const seen = new Set();
+    for await (const raw of sse(response.body)) {
+        if (!raw || raw === "[DONE]") continue;
+        let chunk;
+        try { chunk = JSON.parse(raw); } catch { continue; }
+        const delta = ((chunk.choices || [])[0] || {}).delta || {};
+        const sources = [];
+        for (const annotation of delta.annotations || []) {
+            const citation = (annotation || {}).url_citation || {};
+            if (typeof citation.url !== "string" || seen.has(citation.url)) continue;
+            seen.add(citation.url);
+            sources.push({ url: citation.url, title: citation.title || citation.url });
+        }
+        if (sources.length) write({ type: "sources", sources });
+        if (typeof delta.content === "string" && delta.content) {
+            answered = true;
+            write({ type: "delta", text: delta.content });
+        }
+    }
+    write(answered ? { type: "done" } : { type: "error", detail: "The search returned no answer. Please try again." });
+}
+
+// Fall through to the next search model while one is rate-limited. Each model
+// needs its own payload because the model id is part of the body.
+async function searchChain(apiKey, payloadFor, models, write) {
+    for (const model of models) {
+        let started = false;
+        const once = (event) => { started = true; write(event); };
+        try {
+            await streamSearchModel(apiKey, payloadFor(model), model, once);
+            return;
+        } catch (error) {
+            if (started || !(error instanceof SearchUnavailableError)) throw error;
+        }
+    }
+    throw new ChainExhaustedError();
+}
+
 function requestPayload(note, selection, history, prompt) {
     return {
         systemInstruction: { parts: systemParts(note, selection) },
@@ -178,12 +303,24 @@ module.exports = async (req, res) => {
     }
     const body = req.body || {};
     const apiKey = clean(body.api_key, 500).trim();
+    const searchKey = clean(body.search_key, 500).trim();
+    const search = Boolean(body.search);
     const prompt = typeof body.prompt === "string" ? body.prompt : "";
     const note = body.note && typeof body.note === "object" ? body.note : {};
     const selection = body.selection && typeof body.selection === "object" ? body.selection : {};
     const history = Array.isArray(body.history) ? body.history : [];
-    if (!apiKey || !prompt.trim()) {
-        res.status(400).json({ detail: !apiKey ? "Add your Gemini API key first." : "Write a message first." });
+    // A search turn never reaches Gemini, so it asks for the OpenRouter key
+    // instead: the two providers are independent and neither key implies the
+    // other.
+    const missingKey = search
+        ? (!searchKey && "Add an OpenRouter key to use /search.")
+        : (!apiKey && "Add your Gemini API key first.");
+    if (missingKey) {
+        res.status(400).json({ detail: missingKey });
+        return;
+    }
+    if (!prompt.trim()) {
+        res.status(400).json({ detail: search ? "Add a question after /search." : "Write a message first." });
         return;
     }
     if (prompt.length > MESSAGE_LIMIT) {
@@ -196,11 +333,20 @@ module.exports = async (req, res) => {
     res.setHeader("X-Accel-Buffering", "no");
     const write = (event) => res.write(JSON.stringify(event) + "\n");
 
-    const payload = requestPayload(note, selection, history, prompt);
     try {
-        await streamChain(apiKey, payload, CONFIG.chat_models, write);
+        if (search) {
+            const payloadFor = (model) => searchPayload(note, selection, history, prompt, model);
+            await searchChain(searchKey, payloadFor, CONFIG.search_models, write);
+        } else {
+            await streamChain(apiKey, requestPayload(note, selection, history, prompt), CONFIG.chat_models, write);
+        }
     } catch (error) {
-        if (error instanceof ChainExhaustedError) {
+        if (search && error instanceof ChainExhaustedError) {
+            write({
+                type: "error",
+                detail: "Every search model is rate-limited right now. Try again shortly.",
+            });
+        } else if (error instanceof ChainExhaustedError) {
             // The client remembers a spent quota for the rest of the day, so say
             // so explicitly rather than in prose it would have to parse.
             write({

@@ -74,25 +74,34 @@ and per-request latency, and has not been built.
 
 ### Assistant API keys
 
-The embedded assistant stores one third-party key, entered by the user in its
+The embedded assistant stores two third-party keys, entered by the user in its
 settings pane and held in `localStorage` on **all** clients — desktop, web, and
-mobile — under `everfree-gemini-key`. `web/assistant.js` is shared by the three,
-so there is one code path and one behaviour.
+mobile — under `everfree-gemini-key` and `everfree-openrouter-key`.
+`web/assistant.js` is shared by the three, so there is one code path and one
+behaviour.
 
-A second key, `everfree-serper-key`, was stored for web search until 2026-08-03.
-Nothing ever consumed it: Gemini's own Google Search grounding covered the same
-need with the key already present, so the field was removed and `assistant.js`
-purges any leftover value on load. Web search was removed from the assistant
-entirely on 2026-08-04, to be rebuilt; the purge stays, since only that line can
-still clear a value left in a browser.
+The OpenRouter key is optional and powers `/search` alone: web search was rebuilt
+on 2026-08-04 against OpenRouter, whose `web` plugin runs the lookup and hands the
+results to the model that answers. Chat and search are separate providers with
+separate keys, and neither key is ever sent to the other's provider — a search
+turn carries no Gemini key, and an ordinary turn carries no OpenRouter key. Absent
+the OpenRouter key, `/search` is refused before any request leaves the client, and
+the rest of the assistant works unchanged.
+
+A third key, `everfree-serper-key`, was stored for web search until 2026-08-03.
+Nothing ever consumed it, so the field was removed and `assistant.js` purges any
+leftover value on load. The purge stays, since only that line can still clear a
+value left in a browser.
 
 These were tab-scoped in `sessionStorage` until 2026-08-03. That was reversed for
 the same reason as the OAuth token, and more easily justified:
 
 - **The trade is strictly better here than for the token.** The OAuth token
   carries the `repo` scope — read/write on every repository the user owns. A
-  Gemini key is rate-limited, revocable from the issuing console, and grants
-  nothing in the user's GitHub account. Guarding the weaker secret more strictly
+  Gemini or OpenRouter key is rate-limited, revocable from the issuing console,
+  and grants nothing in the user's GitHub account. An OpenRouter key can be spent
+  against, so it is not costless to leak, but the exposure is billing rather than
+  data. Guarding the weaker secret more strictly
   than the stronger one on the same origin buys nothing and costs a re-paste on
   every browser start.
 - **The same XSS argument applies.** The keys are sent from the page to the model

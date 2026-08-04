@@ -11,9 +11,12 @@
     // ADR 0001: this is the same trade already made for the GitHub token, which
     // carries the far broader `repo` scope.
     const API_KEY = "everfree-gemini-key";
-    // The settings pane once stored a Serper key for web search, which nothing
-    // consumed after Gemini grounding replaced it, and search is gone entirely
-    // now. Purge the leftover: no field remains that could clear it.
+    // /search runs on OpenRouter, a different provider from the one that
+    // answers ordinary chat, so it carries its own key and stays unavailable
+    // until that key is stored.
+    const SEARCH_KEY = "everfree-openrouter-key";
+    // The settings pane once stored a Serper key, which nothing ever consumed.
+    // Purge the leftover: no field remains that could clear it.
     localStorage.removeItem("everfree-serper-key");
     const MAX_CHATS = 30;
     const MAX_MESSAGES = 40;
@@ -51,6 +54,14 @@
         .ef-ai-compose{padding:8px 12px max(12px,env(safe-area-inset-bottom));background:var(--bg-surface,#fff)}
         .ef-ai-model{margin:0 2px 7px;color:var(--text-muted,#777);font-size:11px;line-height:1.35}
         .ef-ai-model[data-spent="true"]{color:var(--danger,#b3261e)}
+        .ef-ai-model[data-search="true"]{color:var(--accent,#47735a)}
+        /* Sources land before the first token of the answer, so they sit above
+           it and fill in while the model is still writing. */
+        .ef-ai-sources{align-self:stretch;margin:0 4px;padding:8px 10px;border:1px solid var(--border,#ddd);border-radius:9px;background:var(--bg-input,#f4f4f4);font-size:11px;line-height:1.5}
+        .ef-ai-sources strong{display:block;margin-bottom:5px;color:var(--text-secondary,#666);font-weight:600}
+        .ef-ai-sources ol{margin:0;padding-left:18px}
+        .ef-ai-sources li{margin-bottom:3px;overflow-wrap:anywhere}
+        .ef-ai-sources a{color:var(--accent,#47735a)}
         .ef-ai-selection{display:flex;align-items:center;gap:8px;margin-bottom:7px;padding:7px 9px;border:1px solid var(--border,#ddd);border-radius:8px;background:var(--bg-input,#f4f4f4);font-size:11px}
         .ef-ai-selection strong{white-space:nowrap;color:var(--accent,#47735a)}
         .ef-ai-selection span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-secondary,#666)}
@@ -83,6 +94,7 @@
         .ef-ai-help-text p:last-child{margin-bottom:0}
         .ef-ai-help-text strong{color:var(--text-primary,#222)}
         .ef-ai-field-label{display:block;margin:0 0 6px;font-size:12px;font-weight:600}
+        .ef-ai-field-second{margin-top:14px}
         .ef-ai-settings-actions{display:flex;align-items:center;gap:8px;margin-top:12px}
         .ef-ai-settings-spacer{flex:1}
         .ef-ai-button-danger{border-color:var(--danger,#b64f4f);background:transparent;color:var(--danger,#b64f4f)}
@@ -133,9 +145,15 @@
                     <p><strong>Gemini</strong> answers your questions. Get a key from
                         <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">Google AI Studio</a>.
                         The free tier currently includes 500 Gemini 3.5 Flash and 500 Gemini 3.5 Flash-Lite requests per day.</p>
+                    <p><strong>OpenRouter</strong> is optional and powers <strong>/search</strong> only. Get a key from
+                        <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer">OpenRouter</a>.
+                        The model that reads the results is free, but each search bills about half a cent for the web
+                        lookup itself.</p>
                 </div>
                 <label class="ef-ai-field-label" for="ef-ai-key">Gemini key</label>
                 <input type="password" id="ef-ai-key" aria-label="Gemini API key" autocomplete="off" placeholder="Paste your Gemini API key">
+                <label class="ef-ai-field-label ef-ai-field-second" for="ef-ai-search-key">OpenRouter key — for /search</label>
+                <input type="password" id="ef-ai-search-key" aria-label="OpenRouter API key" autocomplete="off" placeholder="Optional, enables /search">
                 <p class="ef-ai-storage-note">Keys stay in this browser until you clear them or sign out.</p>
                 <div class="ef-ai-settings-actions">
                     <button class="ef-ai-button ef-ai-button-danger" id="ef-ai-settings-clear" hidden>Clear keys</button>
@@ -232,6 +250,39 @@
         return { bubble, text };
     }
 
+    // A cited URL is chosen by whatever page the search turned up, so a scheme
+    // that executes rather than navigates must never reach an href.
+    function safeUrl(value) {
+        try {
+            const url = new URL(value);
+            return url.protocol === "https:" || url.protocol === "http:" ? url.href : "";
+        } catch { return ""; }
+    }
+
+    // Built with the DOM rather than innerHTML: every field here is attacker-
+    // controlled page text that arrived from a search result.
+    function sourcesBlock(sources) {
+        const block = document.createElement("div");
+        block.className = "ef-ai-sources";
+        const safe = sources.map((source) => ({ ...source, url: safeUrl(source.url) })).filter((s) => s.url);
+        const heading = document.createElement("strong");
+        heading.textContent = safe.length === 1 ? "1 source" : `${safe.length} sources`;
+        const list = document.createElement("ol");
+        for (const source of safe) {
+            const item = document.createElement("li");
+            const link = document.createElement("a");
+            link.href = source.url;
+            link.target = "_blank";
+            link.rel = "noopener noreferrer";
+            link.textContent = source.title || source.url;
+            item.appendChild(link);
+            list.appendChild(item);
+        }
+        block.append(heading, list);
+        block.hidden = !safe.length;
+        return block;
+    }
+
     function scrollBottom() {
         const messages = $("ef-ai-messages");
         messages.scrollTop = messages.scrollHeight;
@@ -263,14 +314,21 @@
         setActiveModel(null);
     }
 
+    function searchEnabled() {
+        return Boolean(localStorage.getItem(SEARCH_KEY));
+    }
+
     function setActiveModel(model) {
         const indicator = $("ef-ai-model");
         const spent = quotaSpent();
+        const searching = Boolean(model && model.search);
         const name = model && model.name ? model.name : "Gemini 3.5 Flash";
         indicator.dataset.spent = String(spent);
-        indicator.textContent = spent
-            ? "Daily Gemini quota used up — resets at midnight Pacific"
-            : `Using ${name}`;
+        indicator.dataset.search = String(searching);
+        if (searching) indicator.textContent = `Using ${name} — searching the web`;
+        else if (spent) indicator.textContent = "Daily Gemini quota used up — resets at midnight Pacific";
+        else if (searchEnabled()) indicator.textContent = `Using ${name} — /search for the web`;
+        else indicator.textContent = `Using ${name}`;
     }
 
     function renderMessages() {
@@ -280,11 +338,18 @@
             setActiveModel(null);
             const empty = document.createElement("div");
             empty.className = "ef-ai-empty";
-            empty.textContent = "Ask anything about the note you have open.";
+            empty.textContent = searchEnabled()
+                ? "Ask anything about the note you have open. Start with /search to search the web."
+                : "Ask anything about the note you have open.";
             messages.appendChild(empty);
             return;
         }
-        for (const message of currentChat.messages) messages.appendChild(messageBubble(message).bubble);
+        for (const message of currentChat.messages) {
+            if (message.sources && message.sources.length) {
+                messages.appendChild(sourcesBlock(message.sources));
+            }
+            messages.appendChild(messageBubble(message).bubble);
+        }
         const lastModel = [...currentChat.messages].reverse().find((message) => message.modelName);
         setActiveModel(lastModel ? { name: lastModel.modelName } : null);
         scrollBottom();
@@ -418,13 +483,16 @@
     // that needs to be reachable.
     function renderSettings() {
         const stored = localStorage.getItem(API_KEY);
+        const storedSearch = localStorage.getItem(SEARCH_KEY);
         $("ef-ai-key").value = stored || "";
-        setHelpOpen(!stored);
-        $("ef-ai-settings-clear").hidden = !stored;
+        $("ef-ai-search-key").value = storedSearch || "";
+        setHelpOpen(!stored && !storedSearch);
+        $("ef-ai-settings-clear").hidden = !stored && !storedSearch;
     }
 
     function clearStoredKeys() {
         localStorage.removeItem(API_KEY);
+        localStorage.removeItem(SEARCH_KEY);
         renderSettings();
         $("ef-ai-key").focus();
     }
@@ -483,7 +551,11 @@
 
         const thinking = document.createElement("div");
         thinking.className = "ef-ai-thinking";
-        thinking.textContent = "Thinking";
+        // A search runs the lookup and then reads the results, so it is slow by
+        // construction — around a minute and a half is normal, not stuck. Say
+        // which of the two is happening so the wait is legible.
+        const label = body.search ? "Searching the web" : "Thinking";
+        thinking.textContent = label;
         $("ef-ai-messages").appendChild(thinking);
         // Gemini's time to first token swings from under a second to about half
         // a minute. Past a few seconds, count up so a slow answer still reads as
@@ -493,7 +565,7 @@
             const seconds = Math.round((Date.now() - startedAt) / 1000);
             if (seconds < 4) return;
             thinking.dataset.slow = "true";
-            thinking.textContent = `Thinking ${seconds}s`;
+            thinking.textContent = `${label} ${seconds}s`;
         }, 1000);
         const stopThinking = () => {
             clearInterval(ticker);
@@ -503,6 +575,7 @@
 
         const answer = { role: "assistant", content: "" };
         let rendered = null;
+        let renderedSources = null;
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
@@ -511,6 +584,18 @@
                 answer.model = event.id || "";
                 answer.modelName = event.name || "";
                 setActiveModel(event);
+            } else if (event.type === "sources") {
+                // Citations arrive ahead of the first token, so they render
+                // immediately and give the wait something to show.
+                answer.sources = (answer.sources || []).concat(event.sources || []);
+                if (renderedSources) renderedSources.remove();
+                renderedSources = sourcesBlock(answer.sources);
+                // A later batch can arrive once the answer has started, by which
+                // point the thinking line is gone and the block goes before the
+                // text instead.
+                const anchor = thinking.isConnected ? thinking : (rendered && rendered.bubble);
+                if (anchor) $("ef-ai-messages").insertBefore(renderedSources, anchor);
+                else $("ef-ai-messages").appendChild(renderedSources);
             } else if (event.type === "delta") {
                 stopThinking();
                 if (!rendered) {
@@ -546,15 +631,35 @@
         return answer;
     }
 
+    const SEARCH_COMMAND = /^\/search\b[ \t]*/i;
+
+    function parseSearch(raw) {
+        const trimmed = raw.trimStart();
+        const search = SEARCH_COMMAND.test(trimmed);
+        return { search, prompt: search ? trimmed.replace(SEARCH_COMMAND, "") : raw };
+    }
+
     async function send() {
-        const prompt = $("ef-ai-input").value;
-        if (!prompt.trim() || busy) return;
+        const typed = $("ef-ai-input").value;
+        if (!typed.trim() || busy) return;
+        const { search, prompt } = parseSearch(typed);
+        if (search && !prompt.trim()) {
+            // /search with nothing after it is a typo, not an empty message.
+            addError("Add a question after /search.");
+            return;
+        }
         stopPromptDictation();
         const context = bridge();
         const note = context && context.getNote ? context.getNote() : null;
         if (!note) { addError("Open a note first."); return; }
         const apiKey = localStorage.getItem(API_KEY) || "";
-        if (!apiKey) { openSettings(); return; }
+        const searchKey = localStorage.getItem(SEARCH_KEY) || "";
+        if (search && !searchKey) {
+            addError("Add an OpenRouter key to use /search.");
+            openSettings();
+            return;
+        }
+        if (!search && !apiKey) { openSettings(); return; }
         if (!currentChat || currentChat.noteKey !== noteKey(note)) currentChat = blankChat();
 
         const history = currentChat.messages.map((message) => ({
@@ -563,8 +668,10 @@
             selection: message.selection || "",
         }));
         const selection = pendingSelection;
-        const userMessage = { role: "user", content: prompt, selection };
-        if (!currentChat.messages.length) currentChat.title = prompt.slice(0, 60);
+        // The transcript keeps what was typed, so a resumed chat still shows
+        // which turns were searches.
+        const userMessage = { role: "user", content: typed.trim(), selection };
+        if (!currentChat.messages.length) currentChat.title = typed.trim().slice(0, 60);
         currentChat.messages.push(userMessage);
         $("ef-ai-input").value = "";
         setSelection("");
@@ -574,6 +681,8 @@
         try {
             const answer = await streamReply({
                 api_key: apiKey,
+                search_key: searchKey,
+                search,
                 note,
                 selection: { text: selection },
                 history,
@@ -709,8 +818,14 @@
     $("ef-ai-settings-clear").addEventListener("click", clearStoredKeys);
     $("ef-ai-settings-save").addEventListener("click", () => {
         const key = $("ef-ai-key").value.trim();
-        if (!key) return;
-        localStorage.setItem(API_KEY, key);
+        const searchKey = $("ef-ai-search-key").value.trim();
+        if (!key && !searchKey) return;
+        if (key) localStorage.setItem(API_KEY, key);
+        // Emptying the optional field is how a search key is removed without
+        // clearing the Gemini one alongside it.
+        if (searchKey) localStorage.setItem(SEARCH_KEY, searchKey);
+        else localStorage.removeItem(SEARCH_KEY);
+        setActiveModel(null);
         closeViews();
         $("ef-ai-input").focus();
     });
