@@ -6,14 +6,17 @@
 const CONFIG = require("../../lib/assistant-config.json");
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
-// These stand in when a config omits them, so they have to carry the whole
-// instruction rather than gesture at it: a search turn that is not told to cite
-// stops citing, and the sources the client renders no longer match the prose.
-const DEFAULT_CHAT_NOTE = "You have no web access in this turn: you cannot search the web or open links, "
-    + "so never claim to have done either.";
-const DEFAULT_SEARCH_NOTE = "You have web search in this turn, and search results are supplied to you. "
-    + "Ground every factual claim in those results and cite its source as a Markdown link. Where the "
-    + "results do not cover something, say so plainly instead of filling the gap from memory.";
+// The standing prompt keeps its own "no web access" line, and a search turn
+// appends this to lift it. That direction matters: a build that predates /search
+// reads only `system_prompt`, so leaving the restriction there keeps such a build
+// correct when it fetches a config written for this one. The default has to carry
+// the whole instruction — a search turn not told to cite stops citing, and the
+// sources the client renders no longer match the prose.
+const DEFAULT_SEARCH_NOTE = "This turn is the exception to the no-web-access rule stated above: you have "
+    + "web search, and search results are supplied to you. Disregard only that restriction — every other "
+    + "instruction above still applies. Ground every factual claim in the search results and cite its "
+    + "source as a Markdown link. Where the results do not cover something, say so plainly instead of "
+    + "filling the gap from memory.";
 
 const NOTE_LIMIT = 60000;
 const SELECTION_LIMIT = 20000;
@@ -29,23 +32,22 @@ class DailyQuotaError extends Error {}
 class ChainExhaustedError extends Error {}
 class SearchUnavailableError extends Error {}
 
-// The system text both providers share, in the same order. Whether this turn
-// can search changes what the model may claim about the web, so that claim
-// belongs to the turn rather than to the standing prompt.
+// The system text both providers share, in the same order. A chat turn adds
+// nothing: the standing prompt already forbids claiming web access. Only a
+// search turn appends, lifting that one restriction.
 function contextBlocks(note, selection, search) {
     const notebook = clean(note.notebook, 500).trim();
     const name = clean(note.note, 500).trim() || "Untitled note";
     const location = notebook ? `${notebook} / ${name}` : name;
     const content = clean(note.content, NOTE_LIMIT) || "(empty note)";
     const selected = clean(selection.text, SELECTION_LIMIT);
-    return [
+    const blocks = [
         CONFIG.system_prompt,
         `<current_note name=${JSON.stringify(location)}>\n${content}\n</current_note>`,
         selected.trim() ? `<selected_text>\n${selected}\n</selected_text>` : "<selected_text>(none)</selected_text>",
-        search
-            ? (CONFIG.search_note || DEFAULT_SEARCH_NOTE)
-            : (CONFIG.chat_note || DEFAULT_CHAT_NOTE),
     ];
+    if (search) blocks.push(CONFIG.search_note || DEFAULT_SEARCH_NOTE);
+    return blocks;
 }
 
 function systemParts(note, selection) {

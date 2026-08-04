@@ -36,18 +36,18 @@ if os.environ.get("RESOURCEPATH"):
 else:
     CONFIG_FILE = Path(__file__).resolve().parent.parent / "web" / "lib" / "assistant-config.json"
 
-# These stand in when a config omits them, so they have to carry the whole
-# instruction rather than gesture at it: a search turn that is not told to cite
-# stops citing, and the sources the client renders no longer match the prose.
-DEFAULT_CHAT_NOTE = (
-    "You have no web access in this turn: you cannot search the web or open links, "
-    "so never claim to have done either."
-)
+# The standing prompt keeps its own "no web access" line, and a search turn
+# appends this to lift it. That direction matters: a build that predates /search
+# reads only `system_prompt`, so leaving the restriction there keeps such a build
+# correct when it fetches a config written for this one. The default has to carry
+# the whole instruction — a search turn not told to cite stops citing, and the
+# sources the client renders no longer match the prose.
 DEFAULT_SEARCH_NOTE = (
-    "You have web search in this turn, and search results are supplied to you. "
-    "Ground every factual claim in those results and cite its source as a Markdown "
-    "link. Where the results do not cover something, say so plainly instead of "
-    "filling the gap from memory."
+    "This turn is the exception to the no-web-access rule stated above: you have web "
+    "search, and search results are supplied to you. Disregard only that restriction — "
+    "every other instruction above still applies. Ground every factual claim in the "
+    "search results and cite its source as a Markdown link. Where the results do not "
+    "cover something, say so plainly instead of filling the gap from memory."
 )
 
 BUNDLED_CONFIG_TEXT = CONFIG_FILE.read_text(encoding="utf-8")
@@ -55,7 +55,6 @@ CONFIG = json.loads(BUNDLED_CONFIG_TEXT)
 CHAT_MODELS = CONFIG["chat_models"]
 SEARCH_MODELS = CONFIG["search_models"]
 SYSTEM_PROMPT = CONFIG["system_prompt"]
-CHAT_NOTE = CONFIG.get("chat_note") or DEFAULT_CHAT_NOTE
 SEARCH_NOTE = CONFIG.get("search_note") or DEFAULT_SEARCH_NOTE
 SEARCH_MAX_RESULTS = CONFIG.get("search_max_results") or 8
 
@@ -128,12 +127,11 @@ def _valid_config(data: object) -> dict | None:
 
 def _apply_config(config: dict) -> None:
     global CONFIG, CHAT_MODELS, SEARCH_MODELS, SYSTEM_PROMPT
-    global CHAT_NOTE, SEARCH_NOTE, SEARCH_MAX_RESULTS
+    global SEARCH_NOTE, SEARCH_MAX_RESULTS
     CONFIG = config
     CHAT_MODELS = config["chat_models"]
     SEARCH_MODELS = config["search_models"]
     SYSTEM_PROMPT = config["system_prompt"]
-    CHAT_NOTE = config.get("chat_note") or DEFAULT_CHAT_NOTE
     SEARCH_NOTE = config.get("search_note") or DEFAULT_SEARCH_NOTE
     SEARCH_MAX_RESULTS = config.get("search_max_results") or 8
 
@@ -229,8 +227,8 @@ def _text(value: object, limit: int) -> str:
 def _context_blocks(note: dict, selection: dict, search: bool) -> list[str]:
     """The system text both providers share, in the same order.
 
-    Whether this turn can search changes what the model may claim about the
-    web, so that claim belongs to the turn rather than to the standing prompt.
+    A chat turn adds nothing: the standing prompt already forbids claiming web
+    access. Only a search turn appends, lifting that one restriction.
     """
     notebook = _text(note.get("notebook"), 500).strip()
     name = _text(note.get("note"), 500).strip() or "Untitled note"
@@ -246,12 +244,10 @@ def _context_blocks(note: dict, selection: dict, search: bool) -> list[str]:
         selection_context = "\n".join(["<selected_text>", selected, "</selected_text>"])
     else:
         selection_context = "<selected_text>(none)</selected_text>"
-    return [
-        SYSTEM_PROMPT,
-        note_context,
-        selection_context,
-        SEARCH_NOTE if search else CHAT_NOTE,
-    ]
+    blocks = [SYSTEM_PROMPT, note_context, selection_context]
+    if search:
+        blocks.append(SEARCH_NOTE)
+    return blocks
 
 
 def _system_parts(note: dict, selection: dict) -> list[dict]:

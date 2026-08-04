@@ -60,7 +60,10 @@ class AssistantTests(unittest.TestCase):
         self.assertIn("<current_note name=\"Work / Draft.md\">", parts[1]["text"])
         self.assertIn("# Current note\n\nThe draft.\n", parts[1]["text"])
         self.assertIn("<selected_text>\nselected words", parts[2]["text"])
-        self.assertEqual(parts[3]["text"], assistant.CHAT_NOTE)
+        # A chat turn appends nothing; the standing prompt already carries the
+        # web-access restriction, so there is no fourth block to add.
+        self.assertEqual(len(parts), 3)
+        self.assertIn("no web access", parts[0]["text"].lower())
         self.assertEqual(payload["contents"][-1]["parts"][0]["text"], prompt)
         # An ordinary turn has no tools at all: nothing it can call reaches
         # beyond the note, the selection, and the conversation.
@@ -178,7 +181,8 @@ class AssistantTests(unittest.TestCase):
         # The note rides along as context and the turn is told it can search.
         self.assertIn("Automation reshapes the workforce.", system["content"])
         self.assertIn(assistant.SEARCH_NOTE, system["content"])
-        self.assertNotIn(assistant.CHAT_NOTE, system["content"])
+        # The restriction is still stated, and the search note lifts it.
+        self.assertIn("no web access", system["content"].lower())
         self.assertEqual(payload["messages"][-1], {"role": "user", "content": "find vanished professions"})
         events = [json.loads(line) for line in response.text.splitlines()]
         self.assertEqual(events[0]["type"], "sources")
@@ -380,23 +384,55 @@ class ConfigRefreshTests(unittest.TestCase):
         )
         self.assertEqual(payload["model"], assistant.SEARCH_MODELS[0]["id"])
 
-    def test_omitted_turn_notes_still_instruct_the_model_to_cite(self):
-        """The notes are optional, so their defaults carry the whole instruction.
+    def test_a_build_predating_search_still_gets_the_web_access_instruction(self):
+        """A shipped desktop build reads the config this repo deploys.
+
+        Such a build knows only `system_prompt`: it has no search note to append
+        and no notion of a per-turn override. If the web-access restriction were
+        moved out of `system_prompt` into a note, that build would fetch this
+        config and silently lose the instruction — left with no web access and
+        nothing telling it to stop claiming otherwise. So the restriction stays
+        in `system_prompt`, and the search note lifts it for turns that can.
+        """
+        deployed = json.loads(
+            (Path(assistant.__file__).resolve().parent.parent
+             / "web" / "lib" / "assistant-config.json").read_text(encoding="utf-8")
+        )
+        # What an old build would run on, reading only this key.
+        self.assertIn("no web access", deployed["system_prompt"].lower())
+        self.assertIn("never claim to have done either", deployed["system_prompt"].lower())
+        # It has no chat-side note to depend on, so none may exist.
+        self.assertNotIn("chat_note", deployed)
+        # And the override is confined to the search note, which such a build
+        # never reads.
+        self.assertNotIn("no web access", deployed["search_note"].lower().replace("no-web-access", ""))
+
+        # The same holds for the turn this code actually builds.
+        chat_blocks = assistant._context_blocks({"content": "note"}, {}, False)
+        self.assertEqual(len(chat_blocks), 3)
+        self.assertIn("no web access", chat_blocks[0].lower())
+        search_blocks = assistant._context_blocks({"content": "note"}, {}, True)
+        self.assertEqual(len(search_blocks), 4)
+        self.assertIn("no web access", search_blocks[0].lower())
+        self.assertIn("exception", search_blocks[3].lower())
+
+    def test_an_omitted_search_note_still_instructs_the_model_to_cite(self):
+        """The note is optional, so its default carries the whole instruction.
 
         A config with search models but no `search_note` is legitimate. Falling
-        back to a note that merely announces search would quietly stop the answer
+        back to a note that merely announced search would quietly stop the answer
         citing anything, leaving the sources the client renders unmatched by the
-        prose.
+        prose — and would leave the standing no-web-access line un-lifted.
         """
         deployed = self._deployed_config()
-        no_notes = {k: v for k, v in deployed.items() if k not in {"chat_note", "search_note"}}
+        no_note = {k: v for k, v in deployed.items() if k != "search_note"}
 
         async def fetch(*_args):
-            return no_notes
+            return no_note
 
         self.assertTrue(self._refresh_with(fetch))
         self.assertIn("cite", assistant.SEARCH_NOTE.lower())
-        self.assertIn("never claim", assistant.CHAT_NOTE.lower())
+        self.assertIn("exception", assistant.SEARCH_NOTE.lower())
         self.assertEqual(assistant.SEARCH_MAX_RESULTS, 8)
         blocks = assistant._context_blocks({"content": "note"}, {}, True)
         self.assertIn("cite", blocks[-1].lower())
