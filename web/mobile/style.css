@@ -66,7 +66,7 @@ button { cursor: pointer; font-family: var(--font); background: none; border: no
     padding-bottom: calc(28px + env(safe-area-inset-bottom));
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
-    background: #f7f8fb;
+    background: #fbfaf7;
 }
 
 .signin-box {
@@ -105,17 +105,20 @@ button { cursor: pointer; font-family: var(--font); background: none; border: no
     color: var(--text-primary);
 }
 .brand-tagline {
-    font-size: 15px;
-    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    color: var(--accent);
+    text-transform: uppercase;
     text-align: center;
 }
 
 .mobile-landing-title {
     margin-top: 8px;
     color: var(--text-primary);
-    font-size: 46px;
-    line-height: 1.03;
-    letter-spacing: 0;
+    font-size: clamp(38px, 11.5vw, 54px);
+    line-height: 1.01;
+    letter-spacing: -0.04em;
     text-align: center;
 }
 
@@ -133,7 +136,7 @@ button { cursor: pointer; font-family: var(--font); background: none; border: no
     padding: 16px;
     border: 1px solid var(--border);
     border-radius: 8px;
-    background: var(--bg-surface);
+    background: #fff;
     box-shadow: 0 14px 40px rgba(38, 39, 34, 0.08);
 }
 
