@@ -11,9 +11,9 @@
     // ADR 0001: this is the same trade already made for the GitHub token, which
     // carries the far broader `repo` scope.
     const API_KEY = "everfree-gemini-key";
-    // Web search used to want a Serper key, which the settings pane stored but
-    // nothing ever consumed. Gemini's own search grounding replaced it, so purge
-    // the leftover: the pane no longer has a field that could clear it.
+    // The settings pane once stored a Serper key for web search, which nothing
+    // consumed after Gemini grounding replaced it, and search is gone entirely
+    // now. Purge the leftover: no field remains that could clear it.
     localStorage.removeItem("everfree-serper-key");
     const MAX_CHATS = 30;
     const MAX_MESSAGES = 40;
@@ -48,15 +48,9 @@
         .ef-ai-thinking[data-slow="true"]{animation:ef-ai-pulse 1.6s infinite}
         .ef-ai-thinking[data-slow="true"]::after{content:''}
         @keyframes ef-ai-pulse{50%{opacity:.25}}
-        .ef-ai-sources{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
-        .ef-ai-sources a{max-width:100%;padding:3px 7px;border:1px solid var(--border,#ddd);border-radius:999px;color:var(--text-secondary,#666);font-size:10px;text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
         .ef-ai-compose{padding:8px 12px max(12px,env(safe-area-inset-bottom));background:var(--bg-surface,#fff)}
         .ef-ai-model{margin:0 2px 7px;color:var(--text-muted,#777);font-size:11px;line-height:1.35}
-        .ef-ai-model[data-search="true"]{color:var(--accent,#47735a)}
         .ef-ai-model[data-spent="true"]{color:var(--danger,#b3261e)}
-        /* Google's Terms require the search-suggestion markup to be shown as
-           served, so it is injected verbatim and only boxed in. */
-        .ef-ai-suggestions{margin-top:8px;overflow-x:auto}
         .ef-ai-selection{display:flex;align-items:center;gap:8px;margin-bottom:7px;padding:7px 9px;border:1px solid var(--border,#ddd);border-radius:8px;background:var(--bg-input,#f4f4f4);font-size:11px}
         .ef-ai-selection strong{white-space:nowrap;color:var(--accent,#47735a)}
         .ef-ai-selection span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-secondary,#666)}
@@ -139,9 +133,6 @@
                     <p><strong>Gemini</strong> answers your questions. Get a key from
                         <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">Google AI Studio</a>.
                         The free tier currently includes 500 Gemini 3.5 Flash and 500 Gemini 3.5 Flash-Lite requests per day.</p>
-                    <p>Start a message with <strong>/search</strong> to let Gemini search the web. Search runs on
-                        Gemini 2.5, which the free tier limits to about 40 requests per day, so it is off unless you ask.</p>
-                    <p>Web search comes from Gemini's own search grounding, so no second key is needed.</p>
                 </div>
                 <label class="ef-ai-field-label" for="ef-ai-key">Gemini key</label>
                 <input type="password" id="ef-ai-key" aria-label="Gemini API key" autocomplete="off" placeholder="Paste your Gemini API key">
@@ -226,34 +217,6 @@
         $("ef-ai-history").hidden = true;
     }
 
-    // Google's Terms require this markup to appear with any grounded answer, so
-    // it is rendered as served rather than reformatted. It arrives from Google
-    // by way of our own proxy and is not user-authored.
-    function searchSuggestions(container, markup) {
-        if (typeof markup !== "string" || !markup.trim()) return;
-        const holder = document.createElement("div");
-        holder.className = "ef-ai-suggestions";
-        holder.innerHTML = markup;
-        container.appendChild(holder);
-    }
-
-    function sourceLinks(container, sources, suggestions) {
-        searchSuggestions(container, suggestions);
-        if (!Array.isArray(sources) || !sources.length) return;
-        const row = document.createElement("div");
-        row.className = "ef-ai-sources";
-        for (const source of sources) {
-            if (!source || typeof source.url !== "string" || !/^https?:\/\//.test(source.url)) continue;
-            const link = document.createElement("a");
-            link.href = source.url;
-            link.target = "_blank";
-            link.rel = "noopener noreferrer";
-            link.textContent = source.title || "Source";
-            row.appendChild(link);
-        }
-        if (row.childNodes.length) container.appendChild(row);
-    }
-
     function messageBubble(message) {
         const bubble = document.createElement("div");
         bubble.className = `ef-ai-message ef-ai-${message.role}`;
@@ -266,7 +229,6 @@
         const text = document.createElement("div");
         text.textContent = message.content || "";
         bubble.appendChild(text);
-        sourceLinks(bubble, message.sources, message.suggestions);
         return { bubble, text };
     }
 
@@ -289,37 +251,26 @@
         } catch { return new Date().toISOString().slice(0, 10); }
     }
 
-    function spentScopes() {
+    function quotaSpent() {
         try {
             const stored = JSON.parse(localStorage.getItem(SPENT_KEY) || "{}");
-            return stored && stored.date === today() && Array.isArray(stored.scopes) ? stored.scopes : [];
-        } catch { return []; }
+            return Boolean(stored && stored.date === today());
+        } catch { return false; }
     }
 
-    function markSpent(scope) {
-        if (scope !== "search" && scope !== "chat") return;
-        const scopes = spentScopes();
-        if (!scopes.includes(scope)) scopes.push(scope);
-        localStorage.setItem(SPENT_KEY, JSON.stringify({ date: today(), scopes }));
+    function markSpent() {
+        localStorage.setItem(SPENT_KEY, JSON.stringify({ date: today() }));
         setActiveModel(null);
     }
 
     function setActiveModel(model) {
         const indicator = $("ef-ai-model");
-        const spent = spentScopes();
-        const searching = Boolean(model && model.search);
+        const spent = quotaSpent();
         const name = model && model.name ? model.name : "Gemini 3.5 Flash";
-        indicator.dataset.search = String(searching);
-        indicator.dataset.spent = String(spent.length > 0);
-        if (spent.includes("chat")) {
-            indicator.textContent = "Daily Gemini quota used up — resets at midnight Pacific";
-        } else if (spent.includes("search")) {
-            indicator.textContent = `Using ${name} — /search quota used up for today`;
-        } else if (searching) {
-            indicator.textContent = `Searching with ${name}`;
-        } else {
-            indicator.textContent = `Using ${name}`;
-        }
+        indicator.dataset.spent = String(spent);
+        indicator.textContent = spent
+            ? "Daily Gemini quota used up — resets at midnight Pacific"
+            : `Using ${name}`;
     }
 
     function renderMessages() {
@@ -329,13 +280,13 @@
             setActiveModel(null);
             const empty = document.createElement("div");
             empty.className = "ef-ai-empty";
-            empty.textContent = "Ask anything about the note you have open. Start with /search to search the web.";
+            empty.textContent = "Ask anything about the note you have open.";
             messages.appendChild(empty);
             return;
         }
         for (const message of currentChat.messages) messages.appendChild(messageBubble(message).bubble);
         const lastModel = [...currentChat.messages].reverse().find((message) => message.modelName);
-        setActiveModel(lastModel ? { name: lastModel.modelName, search: lastModel.search } : null);
+        setActiveModel(lastModel ? { name: lastModel.modelName } : null);
         scrollBottom();
     }
 
@@ -550,7 +501,7 @@
         };
         scrollBottom();
 
-        const answer = { role: "assistant", content: "", sources: [] };
+        const answer = { role: "assistant", content: "" };
         let rendered = null;
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
@@ -559,7 +510,6 @@
             if (event.type === "model") {
                 answer.model = event.id || "";
                 answer.modelName = event.name || "";
-                answer.search = Boolean(event.search);
                 setActiveModel(event);
             } else if (event.type === "delta") {
                 stopThinking();
@@ -569,11 +519,8 @@
                 }
                 answer.content += event.text || "";
                 rendered.text.append(event.text || "");
-            } else if (event.type === "sources") {
-                answer.sources = Array.isArray(event.sources) ? event.sources : [];
-                answer.suggestions = typeof event.suggestions === "string" ? event.suggestions : "";
             } else if (event.type === "error") {
-                if (event.scope) markSpent(event.scope);
+                if (event.quota_spent) markSpent();
                 throw new Error(event.detail || "The assistant could not answer.");
             }
             scrollBottom();
@@ -596,27 +543,12 @@
             stopThinking();
         }
         if (!answer.content) throw new Error("The assistant returned an empty response.");
-        if (rendered) sourceLinks(rendered.bubble, answer.sources, answer.suggestions);
         return answer;
     }
 
-    // Search is opt-in per turn because its budget is roughly 40 requests a day
-    // against 1,000 for ordinary chat, so it must never be spent by accident.
-    const SEARCH_COMMAND = /^\/search\b[ \t]*/i;
-
-    function parseSearch(raw) {
-        const search = SEARCH_COMMAND.test(raw.trimStart());
-        return { search, prompt: search ? raw.trimStart().replace(SEARCH_COMMAND, "") : raw };
-    }
-
     async function send() {
-        const typed = $("ef-ai-input").value;
-        const { search, prompt } = parseSearch(typed);
-        if (!prompt.trim() || busy) {
-            // /search with nothing after it is a typo, not an empty message.
-            if (search && !prompt.trim() && !busy) addError("Add a question after /search.");
-            return;
-        }
+        const prompt = $("ef-ai-input").value;
+        if (!prompt.trim() || busy) return;
         stopPromptDictation();
         const context = bridge();
         const note = context && context.getNote ? context.getNote() : null;
@@ -646,7 +578,6 @@
                 selection: { text: selection },
                 history,
                 prompt,
-                search,
             });
             currentChat.messages.push(answer);
             persistChat();

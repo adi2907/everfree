@@ -1,13 +1,10 @@
 """Minimal Gemini chat for EverFree.
 
 The assistant cannot read any note except the current note supplied by the
-client. Its one tool is Google Search grounding, and only on an explicit
-/search: the free tier meters grounding per model family, and the Gemini 3
-family that answers ordinary chat has a zero grounding allowance. So a search
-turn is routed to the Gemini 2.5 family instead, which carries its own small
-per-day budget. Each mode walks its own list of models, falling through to the
-next on a daily-quota 429. The API key is supplied per request and is never
-stored by the server.
+client, and it has no tools: it answers from the note, the selection, and the
+conversation alone. Requests walk the configured list of models, falling
+through to the next on a daily-quota 429. The API key is supplied per request
+and is never stored by the server.
 """
 
 from __future__ import annotations
@@ -34,16 +31,10 @@ if os.environ.get("RESOURCEPATH"):
 else:
     CONFIG_FILE = Path(__file__).resolve().parent.parent / "web" / "lib" / "assistant-config.json"
 
-DEFAULT_CHAT_NOTE = "You have no web access in this turn."
-DEFAULT_SEARCH_NOTE = "Google Search is available in this turn."
-
 BUNDLED_CONFIG_TEXT = CONFIG_FILE.read_text(encoding="utf-8")
 CONFIG = json.loads(BUNDLED_CONFIG_TEXT)
 CHAT_MODELS = CONFIG["chat_models"]
-SEARCH_MODELS = CONFIG["search_models"]
 SYSTEM_PROMPT = CONFIG["system_prompt"]
-CHAT_NOTE = CONFIG.get("chat_note") or DEFAULT_CHAT_NOTE
-SEARCH_NOTE = CONFIG.get("search_note") or DEFAULT_SEARCH_NOTE
 
 # The desktop app ships a copy of this file inside the .app, so a model or
 # prompt change used to need a new DMG. The web deployment serves the current
@@ -66,8 +57,18 @@ class DailyQuotaExceeded(Exception):
     """The selected model's request-per-day quota has been exhausted."""
 
 
+class ModelUnavailable(Exception):
+    """This key cannot call the model at all, whatever its quota says.
+
+    Google retires model ids for new projects while leaving them listed in the
+    AI Studio quota dashboard, so an id can show a full daily allowance and
+    still 404. That is a fact about the id, not the budget, and the next model
+    in the chain may well work.
+    """
+
+
 class ChainExhausted(Exception):
-    """Every model for the requested mode is out of daily quota."""
+    """No configured model could serve the request."""
 
 
 # ── Assistant config refresh ─────────────────────────────────
@@ -86,16 +87,15 @@ def _valid_config(data: object) -> dict | None:
     """
     if not isinstance(data, dict):
         return None
-    for key in ("chat_models", "search_models"):
-        models = data.get(key)
-        if not isinstance(models, list) or not models:
+    models = data.get("chat_models")
+    if not isinstance(models, list) or not models:
+        return None
+    for model in models:
+        if not isinstance(model, dict):
             return None
-        for model in models:
-            if not isinstance(model, dict):
-                return None
-            if not all(isinstance(model.get(field), str) and model[field].strip()
-                       for field in ("id", "name")):
-                return None
+        if not all(isinstance(model.get(field), str) and model[field].strip()
+                   for field in ("id", "name")):
+            return None
     prompt = data.get("system_prompt")
     if not isinstance(prompt, str) or not prompt.strip():
         return None
@@ -103,13 +103,10 @@ def _valid_config(data: object) -> dict | None:
 
 
 def _apply_config(config: dict) -> None:
-    global CONFIG, CHAT_MODELS, SEARCH_MODELS, SYSTEM_PROMPT, CHAT_NOTE, SEARCH_NOTE
+    global CONFIG, CHAT_MODELS, SYSTEM_PROMPT
     CONFIG = config
     CHAT_MODELS = config["chat_models"]
-    SEARCH_MODELS = config["search_models"]
     SYSTEM_PROMPT = config["system_prompt"]
-    CHAT_NOTE = config.get("chat_note") or DEFAULT_CHAT_NOTE
-    SEARCH_NOTE = config.get("search_note") or DEFAULT_SEARCH_NOTE
 
 
 def _bundled_fingerprint() -> str:
@@ -200,7 +197,7 @@ def _text(value: object, limit: int) -> str:
     return value[:limit] if isinstance(value, str) else ""
 
 
-def _system_parts(note: dict, selection: dict, search: bool) -> list[dict]:
+def _system_parts(note: dict, selection: dict) -> list[dict]:
     notebook = _text(note.get("notebook"), 500).strip()
     name = _text(note.get("note"), 500).strip() or "Untitled note"
     content = _text(note.get("content"), NOTE_LIMIT)
@@ -217,9 +214,6 @@ def _system_parts(note: dict, selection: dict, search: bool) -> list[dict]:
         selection_context = "<selected_text>(none)</selected_text>"
     return [
         {"text": SYSTEM_PROMPT},
-        # Whether the model may search changes per turn, so the claim it is
-        # allowed to make about searching has to be part of the same turn.
-        {"text": SEARCH_NOTE if search else CHAT_NOTE},
         {"text": note_context},
         {"text": selection_context},
     ]
@@ -245,35 +239,12 @@ def _contents(history: list, prompt: str) -> list[dict]:
     return contents
 
 
-def _payload(note: dict, selection: dict, history: list, prompt: str, search: bool) -> dict:
-    payload = {
-        "systemInstruction": {"parts": _system_parts(note, selection, search)},
+def _payload(note: dict, selection: dict, history: list, prompt: str) -> dict:
+    return {
+        "systemInstruction": {"parts": _system_parts(note, selection)},
         "contents": _contents(history, prompt),
         "generationConfig": {"maxOutputTokens": 2048},
     }
-    if search:
-        payload["tools"] = [{"google_search": {}}]
-    return payload
-
-
-def _sources(metadata: dict) -> list[dict]:
-    found = []
-    seen = set()
-    for chunk in metadata.get("groundingChunks") or []:
-        web = chunk.get("web") or {}
-        uri = web.get("uri")
-        if not isinstance(uri, str) or not uri.startswith(("https://", "http://")) or uri in seen:
-            continue
-        seen.add(uri)
-        found.append({"title": web.get("title") or uri, "url": uri})
-    return found[:8]
-
-
-def _search_suggestions(metadata: dict) -> str:
-    """Google's Terms require showing this markup alongside a grounded answer."""
-    entry = metadata.get("searchEntryPoint")
-    rendered = entry.get("renderedContent") if isinstance(entry, dict) else None
-    return rendered if isinstance(rendered, str) and rendered.strip() else ""
 
 
 def _ndjson(event: dict) -> str:
@@ -328,13 +299,12 @@ def _google_error_detail(status_code: int, raw: str) -> str:
     return f"Gemini request failed ({status_code})."
 
 
-async def _events(api_key: str, payload: dict, model: dict, search: bool = False):
+async def _events(api_key: str, payload: dict, model: dict):
     url = (
         "https://generativelanguage.googleapis.com/v1beta/models/"
         f"{model['id']}:streamGenerateContent?alt=sse"
     )
     answered = False
-    grounding = {}
     async with httpx.AsyncClient(timeout=TIMEOUT, headers={"x-goog-api-key": api_key}) as client:
         async with client.stream("POST", url, json=payload) as response:
             if response.status_code != 200:
@@ -347,14 +317,15 @@ async def _events(api_key: str, payload: dict, model: dict, search: bool = False
                         model["id"], response.status_code, raw[:1000],
                     )
                     raise DailyQuotaExceeded
+                if response.status_code == 404:
+                    logger.warning(
+                        "%s is not available to this key, falling back: %s",
+                        model["id"], raw[:1000],
+                    )
+                    raise ModelUnavailable
                 yield {"type": "error", "detail": _google_error_detail(response.status_code, raw)}
                 return
-            yield {
-                "type": "model",
-                "id": model["id"],
-                "name": model["name"],
-                "search": search,
-            }
+            yield {"type": "model", "id": model["id"], "name": model["name"]}
             async for line in response.aiter_lines():
                 line = line.strip()
                 if not line.startswith("data:"):
@@ -367,27 +338,18 @@ async def _events(api_key: str, payload: dict, model: dict, search: bool = False
                 except ValueError:
                     continue
                 candidate = (chunk.get("candidates") or [{}])[0]
-                if candidate.get("groundingMetadata"):
-                    grounding = candidate["groundingMetadata"]
                 for part in (candidate.get("content") or {}).get("parts") or []:
                     text = part.get("text")
                     if isinstance(text, str) and text and not part.get("thought"):
                         answered = True
                         yield {"type": "delta", "text": text}
-    sources = _sources(grounding)
-    if sources:
-        yield {
-            "type": "sources",
-            "sources": sources,
-            "suggestions": _search_suggestions(grounding),
-        }
     if answered:
         yield {"type": "done"}
     else:
         yield {"type": "error", "detail": "Gemini returned no text. Please try again."}
 
 
-async def _stream_chain(api_key: str, payload: dict, models: list, search: bool):
+async def _stream_chain(api_key: str, payload: dict, models: list):
     """Try each model in turn, moving on only when its daily quota is spent.
 
     A model that has already emitted events cannot be retried on the next model
@@ -395,17 +357,21 @@ async def _stream_chain(api_key: str, payload: dict, models: list, search: bool)
     once anything has been written. In practice the daily-quota 429 is raised
     before the first event; the guard keeps that a fact rather than a hope.
     """
+    spent = False
     for model in models:
         started = False
         try:
-            async for event in _events(api_key, payload, model, search):
+            async for event in _events(api_key, payload, model):
                 started = True
                 yield event
             return
-        except DailyQuotaExceeded:
+        except (DailyQuotaExceeded, ModelUnavailable) as exc:
             if started:
                 raise
-    raise ChainExhausted
+            # A retired model id says nothing about the budget, so only a real
+            # 429 may claim the quota is spent.
+            spent = spent or isinstance(exc, DailyQuotaExceeded)
+    raise ChainExhausted(spent)
 
 
 @router.post("/chat")
@@ -417,7 +383,6 @@ async def chat(request: Request):
     note = body.get("note") if isinstance(body.get("note"), dict) else {}
     selection = body.get("selection") if isinstance(body.get("selection"), dict) else {}
     history = body.get("history") if isinstance(body.get("history"), list) else []
-    search = bool(body.get("search"))
     if not api_key:
         raise HTTPException(status_code=400, detail="Add your Gemini API key first.")
     if not prompt.strip():
@@ -426,24 +391,31 @@ async def chat(request: Request):
         raise HTTPException(status_code=413, detail="Message is too long.")
 
     async def stream():
-        payload = _payload(note, selection, history, prompt, search)
-        models = SEARCH_MODELS if search else CHAT_MODELS
+        payload = _payload(note, selection, history, prompt)
         try:
             try:
-                async for event in _stream_chain(api_key, payload, models, search):
+                async for event in _stream_chain(api_key, payload, CHAT_MODELS):
                     yield _ndjson(event)
-            except ChainExhausted:
-                # The client hides /search once it sees this, so name the mode:
-                # a spent search budget leaves ordinary chat perfectly usable.
-                yield _ndjson({
-                    "type": "error",
-                    "scope": "search" if search else "chat",
-                    "detail": (
-                        "Today's search quota is used up. Ask without /search to keep chatting."
-                        if search else
-                        "Today's Gemini quota is used up. Try again after it resets."
-                    ),
-                })
+            except ChainExhausted as exhausted:
+                if exhausted.args and exhausted.args[0]:
+                    # The client remembers a spent quota for the rest of the
+                    # day, so say so explicitly rather than in prose it would
+                    # have to parse.
+                    yield _ndjson({
+                        "type": "error",
+                        "quota_spent": True,
+                        "detail": "Today's Gemini quota is used up. Try again after it resets.",
+                    })
+                else:
+                    # Nothing to wait for: no configured model can be called at
+                    # all, so telling the user to try later would be wrong.
+                    yield _ndjson({
+                        "type": "error",
+                        "detail": (
+                            "No available Gemini model could answer. The configured "
+                            "models may have been retired for this API key."
+                        ),
+                    })
         except httpx.ConnectError:
             yield _ndjson({"type": "error", "detail": "Could not reach Gemini. Check your connection."})
         except Exception as exc:

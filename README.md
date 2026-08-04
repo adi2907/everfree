@@ -25,9 +25,9 @@ repo as files you can open anywhere.
 
 Open a note and use the sparkle button to start a chat. The assistant receives
 the current note, any text selected in the editor, the current conversation,
-and your message as separate context. There are no slash commands: ask in
-natural language, including when you want it to search the public web. It
-cannot search your other notes.
+and your message as separate context. There are no slash commands and no tools:
+it answers from that context and its own knowledge. It cannot search the web or
+read your other notes.
 
 The only chat actions are **New chat** and **Resume chat**. A Google Gemini API
 key is required and is kept in the current browser tab; EverFree does not save

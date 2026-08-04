@@ -26,11 +26,10 @@ class AssistantTests(unittest.TestCase):
     def test_request_keeps_contexts_separate_and_prompt_exact(self):
         captured = {}
 
-        async def fake_events(api_key, payload, model, search=False):
+        async def fake_events(api_key, payload, model):
             captured["api_key"] = api_key
             captured["payload"] = payload
             captured["model"] = model
-            captured["search"] = search
             yield {"type": "delta", "text": "Done"}
             yield {"type": "done"}
 
@@ -58,86 +57,92 @@ class AssistantTests(unittest.TestCase):
         payload = captured["payload"]
         parts = payload["systemInstruction"]["parts"]
         self.assertEqual(parts[0]["text"], assistant.SYSTEM_PROMPT)
-        self.assertEqual(parts[1]["text"], assistant.CHAT_NOTE)
-        self.assertIn("<current_note name=\"Work / Draft.md\">", parts[2]["text"])
-        self.assertIn("# Current note\n\nThe draft.\n", parts[2]["text"])
-        self.assertIn("<selected_text>\nselected words", parts[3]["text"])
+        self.assertIn("<current_note name=\"Work / Draft.md\">", parts[1]["text"])
+        self.assertIn("# Current note\n\nThe draft.\n", parts[1]["text"])
+        self.assertIn("<selected_text>\nselected words", parts[2]["text"])
         self.assertEqual(payload["contents"][-1]["parts"][0]["text"], prompt)
-        # An ordinary turn carries no tools: the Gemini 3 family that answers
-        # chat has a zero search-grounding allowance on the free tier.
+        # The assistant has no tools at all: nothing it can call reaches beyond
+        # the note, the selection, and the conversation.
         self.assertNotIn("tools", payload)
         self.assertNotIn("api_key", payload)
-        self.assertFalse(captured["search"])
         self.assertEqual(captured["model"]["id"], "gemini-3.5-flash")
 
-    def test_search_turns_ground_on_the_gemini_2_5_chain(self):
-        captured = {}
+    def test_daily_quota_walks_the_chain_then_reports_a_spent_budget(self):
+        calls = []
 
-        async def fake_events(api_key, payload, model, search=False):
-            captured["payload"] = payload
-            captured["model"] = model
-            captured["search"] = search
-            yield {"type": "delta", "text": "Grounded"}
+        async def fake_events(api_key, payload, model):
+            calls.append(model)
+            raise assistant.DailyQuotaExceeded
+            yield  # pragma: no cover - generator marker
+
+        with patch.object(assistant, "_events", fake_events):
+            response = self.client.post(
+                "/api/assistant/chat",
+                json={"api_key": "test-key", "prompt": "help", "note": {"content": "A note"}},
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual([model["id"] for model in calls], [
+            "gemini-3.5-flash",
+            "gemini-3.5-flash-lite",
+        ])
+        events = [json.loads(line) for line in response.text.splitlines()]
+        self.assertEqual(events[-1]["type"], "error")
+        # The client remembers this for the rest of the day rather than letting
+        # the user spend another turn rediscovering it.
+        self.assertTrue(events[-1]["quota_spent"])
+
+    def test_a_retired_model_id_falls_through_to_the_next_model(self):
+        """Google 404s ids retired for new projects, while AI Studio still lists
+        their full daily quota. That must not read as an exhausted budget."""
+        calls = []
+
+        async def fake_events(api_key, payload, model):
+            calls.append(model)
+            if model["id"] == "gemini-3.5-flash":
+                raise assistant.ModelUnavailable
+            yield {"type": "delta", "text": "Answered"}
             yield {"type": "done"}
 
         with patch.object(assistant, "_events", fake_events):
             response = self.client.post(
                 "/api/assistant/chat",
-                json={
-                    "api_key": "test-key",
-                    "prompt": "who won today",
-                    "note": {"content": "A note"},
-                    "search": True,
-                },
+                json={"api_key": "test-key", "prompt": "help", "note": {"content": "A note"}},
             )
 
         self.assertEqual(response.status_code, 200, response.text)
-        self.assertTrue(captured["search"])
-        self.assertEqual(captured["payload"]["tools"], [{"google_search": {}}])
-        # Search must not run on the chat models, whose grounding quota is zero.
-        self.assertEqual(captured["model"]["id"], "gemini-2.5-flash")
-        self.assertEqual(
-            captured["payload"]["systemInstruction"]["parts"][1]["text"],
-            assistant.SEARCH_NOTE,
-        )
+        self.assertEqual([model["id"] for model in calls], [
+            "gemini-3.5-flash",
+            "gemini-3.5-flash-lite",
+        ])
+        events = [json.loads(line) for line in response.text.splitlines()]
+        self.assertEqual(events[0], {"type": "delta", "text": "Answered"})
 
-    def test_daily_quota_walks_the_chain_then_reports_the_spent_mode(self):
-        for search, expected_ids, scope in (
-            (False, ["gemini-3.5-flash", "gemini-3.5-flash-lite"], "chat"),
-            (True, ["gemini-2.5-flash", "gemini-2.5-flash-lite"], "search"),
-        ):
-            calls = []
+    def test_only_a_real_429_may_claim_the_quota_is_spent(self):
+        """A chain that 404s everywhere is broken, not rate-limited: telling the
+        user to wait for a reset would send them away for nothing."""
+        async def fake_events(api_key, payload, model):
+            raise assistant.ModelUnavailable
+            yield  # pragma: no cover - generator marker
 
-            async def fake_events(api_key, payload, model, search=False):
-                calls.append(model)
-                raise assistant.DailyQuotaExceeded
-                yield  # pragma: no cover - generator marker
+        with patch.object(assistant, "_events", fake_events):
+            response = self.client.post(
+                "/api/assistant/chat",
+                json={"api_key": "test-key", "prompt": "help", "note": {"content": "A note"}},
+            )
 
-            with self.subTest(search=search):
-                with patch.object(assistant, "_events", fake_events):
-                    response = self.client.post(
-                        "/api/assistant/chat",
-                        json={
-                            "api_key": "test-key",
-                            "prompt": "help",
-                            "note": {"content": "A note"},
-                            "search": search,
-                        },
-                    )
-
-                self.assertEqual(response.status_code, 200, response.text)
-                self.assertEqual([model["id"] for model in calls], expected_ids)
-                events = [json.loads(line) for line in response.text.splitlines()]
-                self.assertEqual(events[-1]["type"], "error")
-                # The client needs the mode: a spent search budget still leaves
-                # ordinary chat usable, and the two must not be conflated.
-                self.assertEqual(events[-1]["scope"], scope)
+        self.assertEqual(response.status_code, 200, response.text)
+        error = [json.loads(line) for line in response.text.splitlines()][-1]
+        self.assertEqual(error["type"], "error")
+        self.assertNotIn("quota_spent", error)    # nothing for the client to remember
+        self.assertNotIn("quota", error["detail"].lower())
+        self.assertIn("retired", error["detail"])
 
     def test_a_model_that_starts_answering_is_never_retried(self):
         """Falling through mid-stream would duplicate text already shown."""
         calls = []
 
-        async def fake_events(api_key, payload, model, search=False):
+        async def fake_events(api_key, payload, model):
             calls.append(model)
             yield {"type": "delta", "text": "Partial"}
             raise assistant.DailyQuotaExceeded
@@ -198,7 +203,9 @@ class AssistantTests(unittest.TestCase):
         self.assertIn("EverFreeNoteContext", response.text)
         self.assertIn("Using Gemini 3.5 Flash", response.text)
         self.assertIn("500 Gemini 3.5 Flash-Lite requests per day", response.text)
-        self.assertIn("/search", response.text)
+        # Search is gone: no slash command, no grounding UI.
+        self.assertNotIn("/search", response.text)
+        self.assertNotIn("ef-ai-sources", response.text)
 
 
 class ConfigRefreshTests(unittest.TestCase):
@@ -209,7 +216,6 @@ class ConfigRefreshTests(unittest.TestCase):
     def setUp(self):
         self.bundled = {
             "chat_models": assistant.CHAT_MODELS,
-            "search_models": assistant.SEARCH_MODELS,
             "system_prompt": assistant.SYSTEM_PROMPT,
             "config": assistant.CONFIG,
         }
@@ -222,20 +228,20 @@ class ConfigRefreshTests(unittest.TestCase):
 
     def _restore_bundled(self):
         assistant.CHAT_MODELS = self.bundled["chat_models"]
-        assistant.SEARCH_MODELS = self.bundled["search_models"]
         assistant.SYSTEM_PROMPT = self.bundled["system_prompt"]
         assistant.CONFIG = self.bundled["config"]
 
     def _assert_bundled_config_in_use(self):
         self.assertEqual(assistant.SYSTEM_PROMPT, self.bundled["system_prompt"])
         self.assertEqual(assistant.CHAT_MODELS, self.bundled["chat_models"])
-        self.assertEqual(assistant.SEARCH_MODELS, self.bundled["search_models"])
 
     @staticmethod
     def _deployed_config():
         return {
-            "chat_models": [{"id": "gemini-next", "name": "Gemini Next", "daily_requests": 500}],
-            "search_models": [{"id": "gemini-next-search", "name": "Gemini Next Search", "daily_requests": 20}],
+            "chat_models": [
+                {"id": "gemini-next", "name": "Gemini Next", "daily_requests": 500},
+                {"id": "gemini-next-lite", "name": "Gemini Next Lite", "daily_requests": 500},
+            ],
             "system_prompt": "You are the deployed assistant.",
         }
 
@@ -259,7 +265,7 @@ class ConfigRefreshTests(unittest.TestCase):
         self.assertTrue(self._refresh_with(fetch))
         self.assertEqual(assistant.SYSTEM_PROMPT, "You are the deployed assistant.")
         self.assertEqual(assistant.CHAT_MODELS[0]["id"], "gemini-next")
-        self.assertEqual(assistant.SEARCH_MODELS[0]["name"], "Gemini Next Search")
+        self.assertEqual(assistant.CHAT_MODELS[1]["name"], "Gemini Next Lite")
 
     def test_malformed_or_incomplete_fetched_configs_are_rejected(self):
         deployed = self._deployed_config()
@@ -267,13 +273,13 @@ class ConfigRefreshTests(unittest.TestCase):
             None,
             "not a config",
             {},
-            {k: v for k, v in deployed.items() if k != "search_models"},
+            {k: v for k, v in deployed.items() if k != "chat_models"},
             {**deployed, "system_prompt": "   "},
             {**deployed, "chat_models": [{"id": "gemini-next"}]},            # no name
-            {**deployed, "search_models": [{"name": "Gemini Next"}]},        # no id
+            {**deployed, "chat_models": [{"name": "Gemini Next"}]},          # no id
             {**deployed, "chat_models": "gemini-next"},                      # not a list
             {**deployed, "chat_models": []},                                 # nothing to call
-            {**deployed, "search_models": ["gemini-next"]},                  # not model dicts
+            {**deployed, "chat_models": ["gemini-next"]},                    # not model dicts
         ]
         for bad in rejected:
             with self.subTest(config=bad):
