@@ -92,52 +92,6 @@ class AssistantTests(unittest.TestCase):
         # the user spend another turn rediscovering it.
         self.assertTrue(events[-1]["quota_spent"])
 
-    def test_a_retired_model_id_falls_through_to_the_next_model(self):
-        """Google 404s ids retired for new projects, while AI Studio still lists
-        their full daily quota. That must not read as an exhausted budget."""
-        calls = []
-
-        async def fake_events(api_key, payload, model):
-            calls.append(model)
-            if model["id"] == "gemini-3.5-flash":
-                raise assistant.ModelUnavailable
-            yield {"type": "delta", "text": "Answered"}
-            yield {"type": "done"}
-
-        with patch.object(assistant, "_events", fake_events):
-            response = self.client.post(
-                "/api/assistant/chat",
-                json={"api_key": "test-key", "prompt": "help", "note": {"content": "A note"}},
-            )
-
-        self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual([model["id"] for model in calls], [
-            "gemini-3.5-flash",
-            "gemini-3.5-flash-lite",
-        ])
-        events = [json.loads(line) for line in response.text.splitlines()]
-        self.assertEqual(events[0], {"type": "delta", "text": "Answered"})
-
-    def test_only_a_real_429_may_claim_the_quota_is_spent(self):
-        """A chain that 404s everywhere is broken, not rate-limited: telling the
-        user to wait for a reset would send them away for nothing."""
-        async def fake_events(api_key, payload, model):
-            raise assistant.ModelUnavailable
-            yield  # pragma: no cover - generator marker
-
-        with patch.object(assistant, "_events", fake_events):
-            response = self.client.post(
-                "/api/assistant/chat",
-                json={"api_key": "test-key", "prompt": "help", "note": {"content": "A note"}},
-            )
-
-        self.assertEqual(response.status_code, 200, response.text)
-        error = [json.loads(line) for line in response.text.splitlines()][-1]
-        self.assertEqual(error["type"], "error")
-        self.assertNotIn("quota_spent", error)    # nothing for the client to remember
-        self.assertNotIn("quota", error["detail"].lower())
-        self.assertIn("retired", error["detail"])
-
     def test_a_model_that_starts_answering_is_never_retried(self):
         """Falling through mid-stream would duplicate text already shown."""
         calls = []

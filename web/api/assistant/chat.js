@@ -15,15 +15,7 @@ function clean(value, limit) {
 }
 
 class DailyQuotaError extends Error {}
-
-// Google retires model ids for new projects while leaving them listed in the AI
-// Studio quota dashboard, so an id can show a full daily allowance and still
-// 404. That is a fact about the id, not the budget: the next model may work.
-class ModelUnavailableError extends Error {}
-
-class ChainExhaustedError extends Error {
-    constructor(spent) { super(); this.spent = spent; }
-}
+class ChainExhaustedError extends Error {}
 
 function systemParts(note, selection) {
     const notebook = clean(note.notebook, 500).trim();
@@ -142,10 +134,6 @@ async function streamModel(apiKey, payload, model, write) {
             console.error(`${model.id} ${response.status}, falling back:`, detail.slice(0, 1000));
             throw new DailyQuotaError();
         }
-        if (response.status === 404) {
-            console.error(`${model.id} is not available to this key, falling back:`, detail.slice(0, 1000));
-            throw new ModelUnavailableError();
-        }
         throw new Error(googleErrorDetail(response.status, detail));
     }
 
@@ -170,7 +158,6 @@ async function streamModel(apiKey, payload, model, write) {
 // that has already written events cannot be retried without the user seeing the
 // answer restart, so the fall-through is refused once anything has been written.
 async function streamChain(apiKey, payload, models, write) {
-    let spent = false;
     for (const model of models) {
         let started = false;
         const once = (event) => { started = true; write(event); };
@@ -178,14 +165,10 @@ async function streamChain(apiKey, payload, models, write) {
             await streamModel(apiKey, payload, model, once);
             return;
         } catch (error) {
-            const skippable = error instanceof DailyQuotaError || error instanceof ModelUnavailableError;
-            if (started || !skippable) throw error;
-            // A retired model id says nothing about the budget, so only a real
-            // 429 may claim the quota is spent.
-            spent = spent || error instanceof DailyQuotaError;
+            if (started || !(error instanceof DailyQuotaError)) throw error;
         }
     }
-    throw new ChainExhaustedError(spent);
+    throw new ChainExhaustedError();
 }
 
 module.exports = async (req, res) => {
@@ -217,20 +200,13 @@ module.exports = async (req, res) => {
     try {
         await streamChain(apiKey, payload, CONFIG.chat_models, write);
     } catch (error) {
-        if (error instanceof ChainExhaustedError && error.spent) {
+        if (error instanceof ChainExhaustedError) {
             // The client remembers a spent quota for the rest of the day, so say
             // so explicitly rather than in prose it would have to parse.
             write({
                 type: "error",
                 quota_spent: true,
                 detail: "Today's Gemini quota is used up. Try again after it resets.",
-            });
-        } else if (error instanceof ChainExhaustedError) {
-            // Nothing to wait for: no configured model can be called at all, so
-            // telling the user to try later would be wrong.
-            write({
-                type: "error",
-                detail: "No available Gemini model could answer. The configured models may have been retired for this API key.",
             });
         } else {
             write({ type: "error", detail: error.message || String(error) });

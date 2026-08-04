@@ -57,18 +57,8 @@ class DailyQuotaExceeded(Exception):
     """The selected model's request-per-day quota has been exhausted."""
 
 
-class ModelUnavailable(Exception):
-    """This key cannot call the model at all, whatever its quota says.
-
-    Google retires model ids for new projects while leaving them listed in the
-    AI Studio quota dashboard, so an id can show a full daily allowance and
-    still 404. That is a fact about the id, not the budget, and the next model
-    in the chain may well work.
-    """
-
-
 class ChainExhausted(Exception):
-    """No configured model could serve the request."""
+    """Every configured model is out of daily quota."""
 
 
 # ── Assistant config refresh ─────────────────────────────────
@@ -317,12 +307,6 @@ async def _events(api_key: str, payload: dict, model: dict):
                         model["id"], response.status_code, raw[:1000],
                     )
                     raise DailyQuotaExceeded
-                if response.status_code == 404:
-                    logger.warning(
-                        "%s is not available to this key, falling back: %s",
-                        model["id"], raw[:1000],
-                    )
-                    raise ModelUnavailable
                 yield {"type": "error", "detail": _google_error_detail(response.status_code, raw)}
                 return
             yield {"type": "model", "id": model["id"], "name": model["name"]}
@@ -357,7 +341,6 @@ async def _stream_chain(api_key: str, payload: dict, models: list):
     once anything has been written. In practice the daily-quota 429 is raised
     before the first event; the guard keeps that a fact rather than a hope.
     """
-    spent = False
     for model in models:
         started = False
         try:
@@ -365,13 +348,10 @@ async def _stream_chain(api_key: str, payload: dict, models: list):
                 started = True
                 yield event
             return
-        except (DailyQuotaExceeded, ModelUnavailable) as exc:
+        except DailyQuotaExceeded:
             if started:
                 raise
-            # A retired model id says nothing about the budget, so only a real
-            # 429 may claim the quota is spent.
-            spent = spent or isinstance(exc, DailyQuotaExceeded)
-    raise ChainExhausted(spent)
+    raise ChainExhausted
 
 
 @router.post("/chat")
@@ -396,26 +376,14 @@ async def chat(request: Request):
             try:
                 async for event in _stream_chain(api_key, payload, CHAT_MODELS):
                     yield _ndjson(event)
-            except ChainExhausted as exhausted:
-                if exhausted.args and exhausted.args[0]:
-                    # The client remembers a spent quota for the rest of the
-                    # day, so say so explicitly rather than in prose it would
-                    # have to parse.
-                    yield _ndjson({
-                        "type": "error",
-                        "quota_spent": True,
-                        "detail": "Today's Gemini quota is used up. Try again after it resets.",
-                    })
-                else:
-                    # Nothing to wait for: no configured model can be called at
-                    # all, so telling the user to try later would be wrong.
-                    yield _ndjson({
-                        "type": "error",
-                        "detail": (
-                            "No available Gemini model could answer. The configured "
-                            "models may have been retired for this API key."
-                        ),
-                    })
+            except ChainExhausted:
+                # The client remembers a spent quota for the rest of the day, so
+                # say so explicitly rather than in prose it would have to parse.
+                yield _ndjson({
+                    "type": "error",
+                    "quota_spent": True,
+                    "detail": "Today's Gemini quota is used up. Try again after it resets.",
+                })
         except httpx.ConnectError:
             yield _ndjson({"type": "error", "detail": "Could not reach Gemini. Check your connection."})
         except Exception as exc:
