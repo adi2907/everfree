@@ -1340,6 +1340,321 @@ body.resizing-panes .note-browser {
     line-height: 1.65;
 }
 
+/* ── Feature scroller ── */
+.feature-scroller {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: 340px;
+    gap: 20px;
+    margin-top: 38px;
+    padding-bottom: 14px;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    scrollbar-width: thin;
+    scrollbar-color: #cbd2de transparent;
+    /* bleed to the viewport edge so cards scroll off-page, not off-container */
+    margin-right: calc(50% - 50vw);
+    padding-right: calc(50vw - 50%);
+}
+
+.feature-scroller::-webkit-scrollbar {
+    height: 6px;
+}
+
+.feature-scroller::-webkit-scrollbar-thumb {
+    border-radius: 3px;
+    background: #cbd2de;
+}
+
+.fs-card {
+    scroll-snap-align: start;
+    padding: 18px 18px 24px;
+    border: 1px solid #dfe3e8;
+    border-radius: 12px;
+    background: #fff;
+}
+
+.fs-card h4 {
+    margin-top: 20px;
+    color: #17201f;
+    font-size: 18px;
+    line-height: 1.25;
+    letter-spacing: -0.015em;
+}
+
+.fs-card > p {
+    margin-top: 8px;
+    color: #596272;
+    font-size: 14px;
+    line-height: 1.6;
+}
+
+/* the mock app window inside each card */
+.fs-shot {
+    overflow: hidden;
+    border: 1px solid #e2e6ee;
+    border-radius: 9px;
+    background: #fff;
+    box-shadow: 0 6px 18px rgba(20, 26, 40, 0.06);
+}
+
+.fs-bar {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-height: 27px;
+    padding: 0 10px;
+    border-bottom: 1px solid #eaeef5;
+    background: #f6f8fb;
+}
+
+.fs-bar > span {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #d8dee8;
+}
+
+.fs-bar small {
+    margin-left: 7px;
+    overflow: hidden;
+    color: #8b94a3;
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    white-space: nowrap;
+}
+
+.fs-body {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    height: 190px;
+    padding: 14px 15px;
+    overflow: hidden;
+    font-size: 11.5px;
+    line-height: 1.5;
+}
+
+.fs-line {
+    color: #4b5462;
+}
+
+.fs-line-h {
+    margin-bottom: 3px;
+    color: #17201f;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+}
+
+/* blinking insertion point — sells "this is live" */
+.fs-caret {
+    display: inline-block;
+    width: 1.5px;
+    height: 11px;
+    margin-left: 1px;
+    background: var(--accent);
+    vertical-align: -2px;
+    animation: fs-blink 1.1s steps(1, end) infinite;
+}
+
+@keyframes fs-blink {
+    50% { opacity: 0; }
+}
+
+/* 1 · voice */
+.fs-mic {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-top: auto;
+    padding: 7px 11px;
+    border: 1px solid #b9dcd4;
+    border-radius: 999px;
+    background: #edf8f5;
+    color: #0d6b5f;
+    font-size: 10.5px;
+    font-weight: 600;
+}
+
+.fs-mic-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #dc2626;
+    animation: fs-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes fs-pulse {
+    50% { opacity: 0.25; }
+}
+
+.fs-wave {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    margin-left: auto;
+    height: 13px;
+}
+
+.fs-wave i {
+    width: 2px;
+    border-radius: 1px;
+    background: #6aa99e;
+    animation: fs-bar 0.9s ease-in-out infinite;
+}
+
+.fs-wave i:nth-child(1) { height: 40%; animation-delay: 0s; }
+.fs-wave i:nth-child(2) { height: 75%; animation-delay: 0.12s; }
+.fs-wave i:nth-child(3) { height: 100%; animation-delay: 0.24s; }
+.fs-wave i:nth-child(4) { height: 55%; animation-delay: 0.36s; }
+.fs-wave i:nth-child(5) { height: 85%; animation-delay: 0.48s; }
+.fs-wave i:nth-child(6) { height: 45%; animation-delay: 0.6s; }
+.fs-wave i:nth-child(7) { height: 65%; animation-delay: 0.72s; }
+
+@keyframes fs-bar {
+    50% { transform: scaleY(0.35); }
+}
+
+/* 2 · sync */
+.fs-body-sync {
+    gap: 0;
+}
+
+.fs-device {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 9px 0;
+    border-bottom: 1px solid #eef1f6;
+}
+
+.fs-device b {
+    color: #2b3341;
+    font-weight: 600;
+}
+
+.fs-device em {
+    color: #6f7889;
+    font-size: 10.5px;
+    font-style: normal;
+}
+
+.fs-device em.fs-live {
+    color: #0d6b5f;
+}
+
+.fs-commit {
+    display: flex;
+    gap: 7px;
+    margin-top: auto;
+    color: #7b8496;
+    font-size: 10px;
+}
+
+.fs-commit code {
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: #f0f2f7;
+    color: #0d6b5f;
+    font-family: var(--font-mono);
+}
+
+/* 3 · paste anything */
+.fs-img {
+    display: grid;
+    place-items: center;
+    height: 46px;
+    border: 1px solid #e4e8f0;
+    border-radius: 6px;
+    background: linear-gradient(115deg, #e8eef7 0%, #f4f1ea 55%, #e6efeb 100%);
+}
+
+.fs-img span {
+    width: 17px;
+    height: 13px;
+    border: 1.5px solid #9aa6ba;
+    border-radius: 2px;
+    box-shadow: inset 0 -4px 0 -1px #9aa6ba;
+}
+
+.fs-code {
+    margin: 0;
+    padding: 8px 10px;
+    border-radius: 6px;
+    background: #f5f7fb;
+    color: #46506a;
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    line-height: 1.5;
+    white-space: pre;
+}
+
+.fs-line-md {
+    margin-top: auto;
+    color: #6f7889;
+    font-size: 10.5px;
+}
+
+.fs-line-md s {
+    text-decoration: none;
+}
+
+.fs-line-md s::before {
+    content: "\2022\00a0";
+}
+
+/* 4 · search */
+.fs-search {
+    padding: 7px 10px;
+    border: 1px solid #d7dde8;
+    border-radius: 6px;
+    background: #f7f9fc;
+    color: #2b3341;
+}
+
+.fs-res-label {
+    margin-top: 3px;
+    color: #9ba3b3;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.fs-res b {
+    display: block;
+    color: #2b3341;
+    font-weight: 600;
+}
+
+.fs-res em {
+    color: #7b8496;
+    font-size: 10.5px;
+    font-style: normal;
+}
+
+.fs-res mark {
+    padding: 0 1px;
+    border-radius: 2px;
+    background: #d8f0ea;
+    color: #0d6b5f;
+}
+
+.feature-scroll-hint {
+    margin-top: 4px;
+    color: #9ba3b3;
+    font-size: 12px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .fs-caret,
+    .fs-mic-dot,
+    .fs-wave i {
+        animation: none;
+    }
+}
+
 /* ── Storage section ── */
 .landing-storage {
     display: grid;
@@ -1611,6 +1926,11 @@ body.resizing-panes .note-browser {
 
     .feature-card {
         min-height: 0;
+    }
+
+    .feature-scroller {
+        grid-auto-columns: 80vw;
+        gap: 14px;
     }
 
     .landing-storage {
