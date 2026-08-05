@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EverFree AI editor demo</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { margin: 0; width: 1600px; height: 900px; overflow: hidden; background: #edf1ef; color: #202621; font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  .app { width: 1600px; height: 900px; display: grid; grid-template-columns: 145px 430px 1fr; background: #fff; }
+  .rail { padding: 25px 14px; background: #f4f8f5; border-right: 1px solid #dbe4dd; }
+  .brand { display:flex; align-items:center; gap:7px; font-size:16px; font-weight:720; letter-spacing:-.5px; }
+  .brand-mark { width:23px; height:23px; border-radius:7px; background: conic-gradient(from 210deg, #1e4b3b, #63a780, #dce7a9, #1e4b3b); box-shadow: inset 0 0 0 4px #f7fbf8; }
+  .rail-label { margin: 42px 0 10px; color:#909c95; font-size:8px; letter-spacing:1px; font-weight:700; }
+  .nav-row { padding: 9px 7px; margin: 3px -7px; color:#66716b; border-radius:7px; font-size:11px; }
+  .nav-row.active { background:#dfece3; color:#2c483b; font-weight:650; }
+  .nav-row span { float:right; color:#91a097; font-size:12px; }
+  .rail-foot { position:absolute; bottom:27px; color:#6e8076; font-size:10px; }
+  .rail-foot i { display:inline-block; width:8px; height:8px; margin-right:7px; border-radius:50%; background:#4b9a6c; }
+  .note { min-width:0; padding: 25px 32px; position:relative; }
+  .crumb { color:#88928c; font-size:11px; }
+  .status { position:absolute; right:29px; top:26px; color:#71907c; font-size:10px; }
+  .note h1 { margin:68px 0 21px; font-family: Georgia, serif; font-size:35px; font-weight:500; letter-spacing:-1px; }
+  .note p { max-width:350px; color:#434b46; font-size:14px; line-height:1.65; }
+  .selection { background:#d7eadc; border-radius:3px; padding:2px 3px; }
+  .cursor { display:inline-block; width:2px; height:22px; margin-left:3px; vertical-align:-3px; background:#397657; }
+  .note-result { display:none; padding:11px 12px; border-radius:8px; background:#eff7f1; color:#31533e; }
+  body[data-scene="write"][data-done="true"] .note-draft { display:none; }
+  body[data-scene="write"][data-done="true"] .note-result { display:block; }
+  .image-block { width:340px; height:155px; margin-top:20px; border-radius:10px; overflow:hidden; display:none; position:relative; background:linear-gradient(140deg,#d6edf0 0%,#99c6c9 37%,#5a8a88 38%,#2f5f5d 70%,#1c3e46 100%); }
+  .image-block:before { content:""; position:absolute; width:220px; height:220px; border-radius:50%; right:48px; top:-67px; background:#f7dfad; opacity:.92; }
+  .image-block:after { content:""; position:absolute; left:-30px; bottom:-82px; width:580px; height:210px; background:linear-gradient(150deg,transparent 43%,#376e68 44%,#376e68 58%,transparent 59%),linear-gradient(32deg,transparent 44%,#1f5154 45%,#1f5154 64%,transparent 65%); opacity:.87; }
+  .image-caption { position:absolute; z-index:1; bottom:17px; left:19px; color:#fff; font-size:12px; font-weight:600; text-shadow:0 1px 5px #1d3435; }
+  .ai { background:#fbfcfb; border-left:1px solid #dbe4dd; display:flex; flex-direction:column; }
+  .ai-head { height:82px; display:flex; align-items:center; padding:0 42px; border-bottom:1px solid #e4eae5; }
+  .spark { color:#4e946b; font-size:28px; margin-right:12px; }
+  .ai-title { font-size:20px; font-weight:700; }
+  .ai-title small { display:block; margin-top:3px; color:#829088; font-size:11px; font-weight:500; }
+  .mode { margin-left:auto; padding:7px 10px; border-radius:99px; color:#397657; background:#e5f1e8; font-size:11px; font-weight:700; letter-spacing:.5px; }
+  .thread { flex:1; padding:48px 48px 20px; }
+  .eyebrow { color:#4c9369; font-size:12px; font-weight:800; letter-spacing:1.7px; }
+  .bubble { max-width:720px; margin:14px 0 26px; padding:19px 21px; border-radius:16px 16px 5px 16px; background:#e5f1e8; color:#294638; font-size:20px; line-height:1.5; }
+  .answer { max-width:730px; padding:0 5px; color:#303a34; font-size:18px; line-height:1.62; }
+  .answer strong { font-weight:720; }
+  .sources { display:none; max-width:720px; margin:20px 0; padding:16px 17px; border:1px solid #d9e5dc; border-radius:12px; background:#fff; color:#57625b; font-size:14px; line-height:1.7; }
+  .sources b { color:#397657; font-size:10px; letter-spacing:1px; }
+  .sources em { color:#7b8b81; font-style:normal; }
+  .image-answer { display:none; margin-top:12px; color:#303a34; font-size:18px; line-height:1.62; }
+  .compose { padding:22px 37px 26px; border-top:1px solid #e4eae5; }
+  .compose-box { min-height:78px; display:flex; align-items:center; padding:16px 19px; border:1px solid #cfdcd2; border-radius:16px; background:#fff; color:#8b9690; font-size:16px; box-shadow:0 4px 14px rgba(42,68,52,.05); }
+  .send { margin-left:auto; width:30px; height:30px; display:grid; place-items:center; border-radius:50%; background:#4d8b66; color:#fff; font-size:17px; }
+  .hint { margin:9px 3px 0; color:#94a098; font-size:10px; }
+  body[data-scene="write"] .search-only, body[data-scene="write"] .image-only { display:none; }
+  body[data-scene="search"] .write-only, body[data-scene="search"] .image-only { display:none; }
+  body[data-scene="image"] .write-only, body[data-scene="image"] .search-only { display:none; }
+  body[data-scene="search"] .sources, body[data-scene="image"] .image-answer, body[data-scene="image"] .image-block { display:block; }
+  body[data-scene="search"] .note h1 { margin-top:76px; }
+  body[data-scene="image"] .note p { margin-bottom:12px; }
+</style>
+</head>
+<body>
+<main class="app">
+  <aside class="rail"><div class="brand"><i class="brand-mark"></i>EverFree</div><div class="rail-label">YOUR NOTES</div><div class="nav-row">All notes <span>24</span></div><div class="nav-row active">Drafts <span>6</span></div><div class="nav-row">Research <span>12</span></div><div class="nav-row">Ideas <span>6</span></div><div class="rail-foot"><i></i>Synced</div></aside>
+  <section class="note"><div class="crumb">Drafts&nbsp; / &nbsp;A calmer week</div><div class="status">Saved just now</div><h1>A calmer week</h1><p class="write-only"><span class="note-draft">I want the week to feel less reactive. <span class="selection">I need a plan that leaves room for real thinking, not just a longer task list.</span><span class="cursor"></span></span><span class="note-result">I want a week with enough room to notice what matters — a plan that supports my attention instead of consuming it.</span></p><p class="search-only">The best routines make room for attention. I’m collecting a few grounded ideas to shape the week around.</p><p class="image-only">Start with a little more space. A plan can be useful without filling every quiet moment.</p><div class="image-block"><span class="image-caption">A quieter kind of Monday</span></div></section>
+  <aside class="ai"><header class="ai-head"><span class="spark">✦</span><div class="ai-title">EverFree AI<small>Working with this note</small></div><span class="mode" id="mode">WRITE</span></header><div class="thread" id="thread"></div><div class="compose"><div class="compose-box" id="compose"><span id="compose-text">Ask anything about this note</span><b class="send">↑</b></div><div class="hint">Your key. Your notes. Your context.</div></div></aside>
+</main>
+<script>
+  const frame = Math.max(0, Math.min(29, Number(new URLSearchParams(location.search).get('frame')) || 0));
+  const scene = frame < 10 ? 'write' : frame < 20 ? 'search' : 'image';
+  document.body.dataset.scene = scene;
+  const data = {
+    write: { mode:'WRITE', prompt:'Turn the selected thought into a gentle opening.', answer:'<strong>Try this:</strong><br>“I want a week with enough room to notice what matters — a plan that supports my attention instead of consuming it.”', compose:'Ask anything about this note' },
+    search: { mode:'SEARCH', prompt:'/search What does research say about protecting focused time?', answer:'<strong>Three useful ideas:</strong><br>• Protect one uninterrupted block each day.<br>• Decide tomorrow’s first task before you stop today.', compose:'Search the web with /search' },
+    image: { mode:'CREATE', prompt:'Create a quiet editorial image for this note.', answer:'', compose:'Describe an image for this note' }
+  }[scene];
+  document.getElementById('mode').textContent = data.mode;
+  document.getElementById('compose-text').textContent = data.compose;
+  const local = scene === 'write' ? frame : scene === 'search' ? frame - 10 : frame - 20;
+  document.body.dataset.done = String(local >= 5);
+  const typed = local < 5 ? data.prompt.slice(0, Math.ceil(data.prompt.length * local / 5)) : data.prompt;
+  let thread = `<div class="eyebrow">${scene === 'write' ? 'AI WRITING' : scene === 'search' ? 'WEB SEARCH' : 'IMAGE CREATION'}</div><div class="bubble">${typed}${local < 3 ? '<span class="cursor"></span>' : ''}</div>`;
+  if (local >= 5 && scene !== 'image') thread += `<div class="answer">${data.answer}</div>`;
+  if (scene === 'search' && local >= 4) thread += `<div class="sources"><b>SOURCES</b><br>Harvard Business Review <em>— attention and productivity</em><br>American Psychological Association <em>— focus and task switching</em></div>`;
+  if (scene === 'image' && local >= 3) thread += `<div class="image-answer"><strong>Created for your note.</strong><br>Added a calm editorial image and caption to the draft.</div>`;
+  document.getElementById('thread').innerHTML = thread;
+</script>
+</body>
+</html>
