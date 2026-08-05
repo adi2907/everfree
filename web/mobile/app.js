@@ -864,6 +864,9 @@
 
     // ── Event Bindings ────────────────────────────────────────
     $('btn-signin').addEventListener('click', startDeviceFlow);
+    // The closing CTA repeats the sign-in button at the bottom of the landing copy.
+    const btnSigninFinal = $('btn-signin-final');
+    if (btnSigninFinal) btnSigninFinal.addEventListener('click', startDeviceFlow);
     $('btn-retry').addEventListener('click', () => {
         $('si-error').classList.add('hidden');
         $('si-idle').classList.remove('hidden');
