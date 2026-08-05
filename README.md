@@ -1,10 +1,14 @@
 # EverFree
 
-I had to pay $100 for an Evernote renewal. For my notes. No way.
-
 EverFree started as a script to get my notes out of Evernote, and grew into
-the writing tool I actually wanted: a focused editor where notes stay plain
-Markdown files in a repository I own.
+the writing tool I actually wanted: a focused editor where notes stay in Github in a repo I own
+
+With an in-built AI assistant using free models like Gemini 3.5 (500 requests per day) to help me in my daily writing
+The AI has a search and image generation feature as well, for which you will need paid licenses from Gemini or OpenRouter. Bring your own key
+
+It is fully featured, syncs across devices and your backend stays the same. Your github repo.
+
+I am a compulsive note taker. When Bending Spoons (the owner of Evernote) hiked my annual renewal to $100 for a tiny bit of cloud storage, I needed to get out.
 
 It's free, MIT-licensed, and the Mac app ships as a signed and notarized DMG.
 
@@ -12,27 +16,6 @@ It's free, MIT-licensed, and the Mac app ships as a signed and notarized DMG.
 - Mobile: [everfree.vercel.app/mobile](https://everfree.vercel.app/mobile/)
 - Mac DMG: [EverFree.dmg](https://github.com/adi2907/everfree/releases/download/v1.0.1/EverFree.dmg)
 
-## What it is
-
-EverFree is a three-pane Markdown note editor. The same workspace is available
-on Mac, in the browser, and on mobile — all
-three edit the same notes, synced through a private GitHub repository you
-own. Under the hood everything is plain Markdown in ordinary folders, so if
-this project disappeared tomorrow, your notes would still be sitting in your
-repo as files you can open anywhere.
-
-## Assistant
-
-Open a note and use the sparkle button to start a chat. The assistant receives
-the current note, any text selected in the editor, the current conversation,
-and your message as separate context. There are no slash commands and no tools:
-it answers from that context and its own knowledge. It cannot search the web or
-read your other notes.
-
-The only chat actions are **New chat** and **Resume chat**. A Google Gemini API
-key is required and is kept in the current browser tab; EverFree does not save
-it on the server. Previous chats are saved locally in the browser so they can
-be resumed from the same note.
 
 ## Getting started
 
