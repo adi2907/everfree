@@ -1528,7 +1528,6 @@
     // ── Event Bindings ──────────────────────────────────────
     $("btn-github-signin").addEventListener("click", startDeviceFlow);
     $("btn-github-signin-hero").addEventListener("click", startDeviceFlow);
-    $("btn-github-signin-final").addEventListener("click", startDeviceFlow);
     $("btn-signin-retry").addEventListener("click", () => {
         signinError.classList.add("hidden");
         signinIdle.classList.remove("hidden");
