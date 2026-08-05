@@ -1655,6 +1655,19 @@ body.resizing-panes .note-browser {
     }
 }
 
+/* ── AI assistant demo ── */
+.ai-demo-lede {
+    max-width: 620px;
+    margin-top: 16px;
+    color: #4a5262;
+    font-size: 15.5px;
+    line-height: 1.68;
+}
+
+.landing-ai-demo .demo-frame {
+    margin-top: 34px;
+}
+
 /* ── Storage section ── */
 .landing-storage {
     display: grid;
