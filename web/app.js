@@ -521,12 +521,20 @@
         notebooks.sort((a, b) => {
             const newestA = (notesByNotebook[a] || [])[0];
             const newestB = (notesByNotebook[b] || [])[0];
-            const timeA = newestA ? (metaFor(`${a}/${newestA}`) || {}).t || 0 : 0;
-            const timeB = newestB ? (metaFor(`${b}/${newestB}`) || {}).t || 0 : 0;
+
+            // An empty notebook has just been created — nothing else produces
+            // one — so it belongs at the top, not below every notebook that has
+            // a dated note. The desktop server orders them the same way, by the
+            // folder's own mtime.
+            if (!newestA !== !newestB) return newestA ? 1 : -1;
+            if (!newestA && !newestB) return a.localeCompare(b);
+
+            const timeA = (metaFor(`${a}/${newestA}`) || {}).t || 0;
+            const timeB = (metaFor(`${b}/${newestB}`) || {}).t || 0;
             if (timeA !== timeB) return timeB - timeA;
 
-            const dateA = newestA ? parseNoteNameDate(newestA) : null;
-            const dateB = newestB ? parseNoteNameDate(newestB) : null;
+            const dateA = parseNoteNameDate(newestA);
+            const dateB = parseNoteNameDate(newestB);
             if (dateA !== null && dateB !== null) return dateB - dateA;
             if (dateA !== null) return -1;
             if (dateB !== null) return 1;
@@ -1559,11 +1567,33 @@
     });
 
     function newNotebook() {
-        showModal("New Notebook", "Notebook name…", async (name) => {
+        showModal("New Notebook", "Notebook name…", async (raw) => {
+            const name = raw.trim().replace(/\/+$/, "");
+            // A leading dot would create a notebook that loadNotebooks() filters
+            // straight back out, so the user would see nothing at all.
+            if (!name || name.startsWith(".")) throw new Error("Notebook names cannot start with a dot.");
+            if (/[\/\\]/.test(name)) throw new Error("Notebook names cannot contain slashes.");
+            if (notebooks.some(nb => nb.toLowerCase() === name.toLowerCase())) {
+                throw new Error(`A notebook called "${name}" already exists.`);
+            }
+
             setSyncStatus("syncing", "Creating notebook…");
             // Create a .gitkeep file in the new folder
             await putFile(`${name}/.gitkeep`, "", `Create notebook ${name}`);
-            await loadNotebooks();
+
+            // Insert locally rather than re-listing the whole repo: a reload
+            // costs one request per notebook, and the sidebar would sit
+            // unchanged for seconds — which reads as "nothing happened".
+            notebooks.unshift(name);
+            notesByNotebook[name] = [];
+            selectedNotebook = name;
+            $("search-input").value = "";
+            renderSidebar();
+            // The rail may be scrolled away from the top, where the new
+            // notebook lands.
+            const $row = $("notebook-list").querySelector(".notebook-header.active");
+            if ($row) $row.scrollIntoView({ block: "nearest" });
+            setSyncStatus("ok", repoFull);
         });
     }
     $("btn-new-notebook").addEventListener("click", newNotebook);
