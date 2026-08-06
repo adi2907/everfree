@@ -1399,6 +1399,55 @@ button { cursor: pointer; font-family: var(--font); background: none; border: no
     font-weight: 600;
 }
 
+.m-star {
+    margin-top: 24px;
+    padding: 26px 22px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: var(--bg-surface);
+    text-align: center;
+}
+
+.m-star h2 {
+    margin-top: 8px;
+    color: var(--text-primary);
+    font-size: 22px;
+    font-weight: 700;
+    line-height: 1.18;
+    letter-spacing: -0.028em;
+}
+
+/* Scoped to its own class: a bare `.m-star p` also matches the eyebrow and
+   would repaint it from the accent colour to body grey. */
+.m-star-lede {
+    margin-top: 10px;
+    color: var(--text-secondary);
+    font-size: 15px;
+    line-height: 1.55;
+}
+
+.m-star-cta {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+    min-height: 46px;
+    margin-top: 18px;
+    border-radius: var(--radius);
+    background: var(--text-primary);
+    color: #fff;
+    font-size: 15px;
+    font-weight: 700;
+}
+
+.mobile-star {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+}
+
 .m-footer {
     margin: 34px 0 8px;
     padding-top: 20px;
