@@ -151,6 +151,19 @@ async function testWeb(browser, mock, port, pageErrors) {
     (mock.state()["Field Notes"] || []).includes("First entry.md"),
     JSON.stringify(mock.state()["Field Notes"] || null));
 
+  // Committing it is not enough: the note has to be reachable afterwards. A
+  // client that re-lists the repo here gets a listing that can still predate
+  // the write, and rebuilding from it drops both the note and the notebook that
+  // was created moments earlier — the note saves and then vanishes.
+  const visible = await page.evaluate(() => ({
+    note: [...document.querySelectorAll("#note-browser-list .note-card-title")]
+      .some((t) => t.textContent === "First entry"),
+    notebook: [...document.querySelectorAll(".notebook-name")]
+      .some((n) => n.textContent === "Field Notes"),
+  }));
+  check("web: new note is listed in the sidebar", visible.note && visible.notebook,
+    JSON.stringify(visible));
+
   // ── Delete a note from the browser's context menu ──
   await page.waitForSelector("#note-browser-list .note-card");
   await page.click("#note-browser-list .note-card", { button: "right" });

@@ -25,6 +25,14 @@ write-aware model in `tests/perf/mock-github.js`, and asserts against the repo
 the model holds afterwards, not against what the page renders. A client that
 paints an optimistic row it never committed fails there.
 
+The model lags directory listings behind writes, because GitHub does: a
+contents listing is served from a cache, and an authenticated response also
+carries `cache-control: private, max-age=60`, so a listing fetched right after a
+write can come back without it. A client that rebuilds its state from that
+listing throws away what it just created — which is why the web checks assert
+the new note is *in the sidebar*, not only in the repo. Committing it is the
+easy half.
+
 Deleting a notebook is the case worth a harness. The Contents API has no
 recursive delete, so both browser clients build a single tree through the Git
 Data API instead. The mock stages trees and commits and applies them only when

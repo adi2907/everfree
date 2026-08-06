@@ -140,6 +140,12 @@
         const url = path.startsWith('http') ? path : 'https://api.github.com' + path;
         const opts = {
             method,
+            // GitHub sends `cache-control: private, max-age=60` on authenticated
+            // reads, so the default fetch policy would answer a contents listing
+            // from the browser cache for a minute after the previous one — long
+            // enough to hide a note that was just written. Revalidate instead;
+            // GitHub answers 304 when nothing changed, at no rate-limit cost.
+            cache: 'no-cache',
             headers: {
                 'Authorization': `Bearer ${token}`,
                 'Accept': 'application/vnd.github+json',

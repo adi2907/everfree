@@ -27,6 +27,7 @@ const LATENCY_MS = {
 };
 
 const JITTER_MS = 60;
+const LISTING_LAG_MS = 2500;
 const MAX_CONCURRENCY = 100;
 
 // Deterministic per-key jitter so run N and run N+1 are comparable.
@@ -110,6 +111,9 @@ function createMockGitHub(fixture, opts = {}) {
   const owner = opts.owner || "testuser";
   const repo = opts.repo || "everfree-notes";
   const repoFull = `${owner}/${repo}`;
+  // How far a directory listing lags a write. 0 disables it, for the perf
+  // harness, which never writes and wants the cheapest possible model.
+  const listingLagMs = opts.listingLagMs ?? LISTING_LAG_MS;
 
   const counts = {
     total: 0,
@@ -143,7 +147,17 @@ function createMockGitHub(fixture, opts = {}) {
     return i < 0 ? "" : p.slice(0, i);
   }
 
+  // A directory listing is the one endpoint GitHub serves from a cheap cache,
+  // and an authenticated response carries `cache-control: private, max-age=60`
+  // on top of that — so a listing fetched just after a write can answer without
+  // it, from the CDN or from the browser's own cache. A client that rebuilds its
+  // state from that listing loses whatever it just created. The mutation log
+  // below lets a listing be reconstructed as of `listingLagMs` ago; file reads
+  // are not lagged, matching which endpoint the caching actually applies to.
+  const mutations = []; // {t, add: bool, path, content}
+
   function addFile(p, content) {
+    mutations.push({ t: Date.now(), add: true, path: p, content });
     const nbName = dirOf(p);
     const name = p.slice(nbName.length + 1);
     fixture.files.set(p, {
@@ -161,6 +175,7 @@ function createMockGitHub(fixture, opts = {}) {
   }
 
   function removeFile(p) {
+    mutations.push({ t: Date.now(), add: false, path: p });
     fixture.files.delete(p);
     const nbName = dirOf(p);
     const name = p.slice(nbName.length + 1);
@@ -171,6 +186,21 @@ function createMockGitHub(fixture, opts = {}) {
     if (nb.notes.length === 0) {
       fixture.notebooks = fixture.notebooks.filter((x) => x.name !== nbName);
     }
+  }
+
+  // The set of paths a listing should show right now: current state with every
+  // mutation newer than the lag window undone, newest first.
+  function laggedPaths() {
+    const paths = new Set(fixture.files.keys());
+    if (!listingLagMs) return paths;
+    const cutoff = Date.now() - listingLagMs;
+    for (let i = mutations.length - 1; i >= 0; i--) {
+      const m = mutations[i];
+      if (m.t <= cutoff) break;
+      if (m.add) paths.delete(m.path);
+      else paths.add(m.path);
+    }
+    return paths;
   }
 
   let inFlight = 0;
@@ -343,21 +373,30 @@ function createMockGitHub(fixture, opts = {}) {
     const rest = decodeURIComponent(
       path.slice(`/repos/${repoFull}/contents`.length).replace(/^\//, "")
     );
+    const visible = laggedPaths();
     if (!rest) {
+      const dirs = [];
+      for (const p of visible) {
+        const d = dirOf(p);
+        if (d && !dirs.includes(d)) dirs.push(d);
+      }
       return {
         status: 200,
-        json: fixture.notebooks.map((nb) => ({ type: "dir", name: nb.name, path: nb.name })),
+        json: dirs.map((name) => ({ type: "dir", name, path: name })),
       };
     }
-    const nb = fixture.notebooks.find((x) => x.name === rest);
-    if (nb) {
+    const nbNotes = [...visible]
+      .filter((p) => dirOf(p) === rest)
+      .map((p) => p.slice(rest.length + 1));
+    if (nbNotes.length) {
       return {
         status: 200,
-        json: nb.notes.map((name) => ({
+        json: nbNotes.map((name) => ({
           type: "file",
           name,
           path: `${rest}/${name}`,
-          sha: fixture.files.get(`${rest}/${name}`).sha,
+          // A path can be visible in the lagged listing after its blob is gone.
+          sha: (fixture.files.get(`${rest}/${name}`) || { sha: "shastale000" }).sha,
         })),
       };
     }

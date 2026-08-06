@@ -313,6 +313,13 @@
         const url = path.startsWith("http") ? path : "https://api.github.com" + path;
         const opts = {
             method,
+            // GitHub sends `cache-control: private, max-age=60` on authenticated
+            // reads, so the default fetch policy will answer a contents listing
+            // from the browser cache for a minute after the previous one — long
+            // enough to hide a note the user just wrote. "no-cache" revalidates
+            // instead of skipping the network; GitHub answers 304 when nothing
+            // changed, and a 304 costs no rate limit.
+            cache: "no-cache",
             headers: {
                 "Authorization": `Bearer ${token}`,
                 "Accept": "application/vnd.github+json",
@@ -778,11 +785,34 @@
     }
 
     function createNoteIn(nb) {
-        showModal("New Note", `Create note in "${nb}"`, async (name) => {
-            const noteName = name.endsWith(".md") ? name : name + ".md";
+        showModal("New Note", `Create note in "${nb}"`, async (raw) => {
+            const base = raw.trim().replace(/\.md$/i, "");
+            if (!base) throw new Error("Note names cannot be empty.");
+            // A slash would write the note into a subfolder, and loadNotebooks()
+            // only lists one level down — the note would save and then be
+            // unreachable from the sidebar.
+            if (/[\/\\]/.test(base)) throw new Error("Note names cannot contain slashes.");
+            const noteName = `${base}.md`;
+            if ((notesByNotebook[nb] || []).some(n => n.toLowerCase() === noteName.toLowerCase())) {
+                throw new Error(`"${base}" already exists in ${nb}.`);
+            }
+
             setSyncStatus("syncing", "Creating…");
-            await putFile(`${nb}/${noteName}`, `# ${name.replace(/\.md$/, "")}\n\n`, `Create note ${nb}/${noteName}`);
-            await loadNotebooks();
+            await putFile(`${nb}/${noteName}`, `# ${base}\n\n`, `Create note ${nb}/${noteName}`);
+
+            // Insert locally rather than re-listing the repo, for the reason
+            // newNotebook() does. A re-list moments after a write can come back
+            // without the new file — GitHub's own listing lags a commit briefly
+            // — and it would overwrite good local state with that stale answer,
+            // taking a just-created notebook down with it.
+            notesByNotebook[nb] = [noteName, ...(notesByNotebook[nb] || [])];
+            selectedNotebook = nb;
+            $("search-input").value = "";
+            // Paint before opening: openNote() renders the sidebar itself, but
+            // only if the note loads, and a failure there must not also cost the
+            // user the row for a note that is already committed.
+            renderSidebar();
+            setSyncStatus("ok", repoFull);
             openNote(nb, noteName);
         });
     }
