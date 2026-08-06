@@ -14,3 +14,7 @@ design/
 
 # Agent worktrees live inside the repo; they are checkouts, not content.
 .claude/worktrees/
+
+# Playwright is installed on demand for tests/e2e and tests/perf.
+node_modules/
+package-lock.json

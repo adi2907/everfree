@@ -457,6 +457,53 @@
         delete noteContentCache[path];
     }
 
+    // Delete a whole folder in one commit. The Contents API deletes one file per
+    // request and has no recursive form, so a notebook with N notes would be N
+    // commits and would leave a half-deleted folder behind if any of them failed.
+    // The Git Data API builds a single tree with those paths removed instead, so
+    // the notebook disappears atomically and costs the same six requests whether
+    // it holds two notes or two hundred.
+    async function deleteFolder(prefix, message) {
+        const ref = await gh("GET", `/repos/${repoFull}/git/ref/heads/${encodeURIComponent(defaultBranch)}`);
+        const head = ref.object.sha;
+        const commit = await gh("GET", `/repos/${repoFull}/git/commits/${head}`);
+        const tree = await gh("GET", `/repos/${repoFull}/git/trees/${commit.tree.sha}?recursive=1`);
+
+        // Blobs only. Naming a tree with sha:null makes GitHub reject the write,
+        // and removing every blob under the folder removes the folder with them —
+        // Git has no empty directories.
+        const doomed = (tree.tree || []).filter(
+            (entry) => entry.type === "blob" && entry.path.startsWith(prefix + "/"));
+        if (!doomed.length) return;
+
+        const newTree = await gh("POST", `/repos/${repoFull}/git/trees`, {
+            base_tree: commit.tree.sha,
+            tree: doomed.map((entry) => ({
+                path: entry.path,
+                mode: entry.mode,
+                type: "blob",
+                sha: null,
+            })),
+        });
+        const newCommit = await gh("POST", `/repos/${repoFull}/git/commits`, {
+            message: message || `Delete ${prefix}`,
+            tree: newTree.sha,
+            parents: [head],
+        });
+        await gh("PATCH", `/repos/${repoFull}/git/refs/heads/${encodeURIComponent(defaultBranch)}`, {
+            sha: newCommit.sha,
+        });
+
+        for (const entry of doomed) {
+            if (fileShas[entry.path]) delete noteMeta[fileShas[entry.path]];
+            delete fileShas[entry.path];
+            delete noteContentCache[entry.path];
+            delete noteTitleCache[entry.path];
+        }
+        noteMetaDirty = true;
+        persistNoteMeta();
+    }
+
     // ── Base64 (UTF-8 safe) ─────────────────────────────────
     function b64EncodeUnicode(str) {
         return btoa(unescape(encodeURIComponent(str)));
@@ -673,6 +720,10 @@
                 e.stopPropagation();
                 createNoteIn(nb);
             });
+            bindContextMenu($header, () => [
+                { label: "New note…", action: () => createNoteIn(nb) },
+                { label: "Delete notebook", danger: true, action: () => deleteNotebook(nb) },
+            ]);
             $list.appendChild($header);
         }
 
@@ -719,6 +770,9 @@
         $note.innerHTML = `
             <span class="note-card-title">${escapeHtml(noteTitleCache[`${item.notebook}/${item.note}`] || (metaFor(`${item.notebook}/${item.note}`) || {}).ti || noteFilenameTitle(item.note))}</span>`;
         $note.addEventListener("click", () => openNote(item.notebook, item.note));
+        bindContextMenu($note, () => [
+            { label: "Delete note", danger: true, action: () => deleteNoteAt(item.notebook, item.note) },
+        ]);
         observeNoteCardTitle($note, item);
         return $note;
     }
@@ -731,6 +785,135 @@
             await loadNotebooks();
             openNote(nb, noteName);
         });
+    }
+
+    // ── Context menu (delete) ───────────────────────────────
+    function closeContextMenu() {
+        const existing = $("context-menu");
+        if (existing) existing.remove();
+    }
+
+    function showContextMenu(x, y, items) {
+        closeContextMenu();
+        const $menu = document.createElement("div");
+        $menu.id = "context-menu";
+        $menu.className = "context-menu";
+        for (const item of items) {
+            const $btn = document.createElement("button");
+            $btn.type = "button";
+            $btn.className = "context-menu-item" + (item.danger ? " danger" : "");
+            $btn.textContent = item.label;
+            $btn.addEventListener("click", () => {
+                closeContextMenu();
+                item.action();
+            });
+            $menu.appendChild($btn);
+        }
+        document.body.appendChild($menu);
+        const rect = $menu.getBoundingClientRect();
+        $menu.style.left = Math.max(8, Math.min(x, window.innerWidth - rect.width - 8)) + "px";
+        $menu.style.top = Math.max(8, Math.min(y, window.innerHeight - rect.height - 8)) + "px";
+    }
+
+    document.addEventListener("click", (e) => {
+        if (!e.target.closest("#context-menu")) closeContextMenu();
+    });
+    document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") closeContextMenu();
+    });
+    // A menu positioned against the viewport detaches from its row the moment
+    // the list moves underneath it.
+    window.addEventListener("resize", closeContextMenu);
+    document.addEventListener("scroll", closeContextMenu, true);
+
+    // Touch has no right-click, and the web app is served to tablets and to
+    // phones in the desktop view. Hold for half a second to get the same menu.
+    function bindLongPress($el, handler) {
+        let timer = null;
+        const cancel = () => { clearTimeout(timer); timer = null; };
+        $el.addEventListener("touchstart", (e) => {
+            const touch = e.touches[0];
+            timer = setTimeout(() => {
+                timer = null;
+                // touchend still synthesises a click, which would open the note
+                // behind the menu that just appeared. Swallow that one click.
+                $el.addEventListener("click", (click) => {
+                    click.preventDefault();
+                    click.stopPropagation();
+                }, { capture: true, once: true });
+                handler(touch.clientX, touch.clientY);
+            }, 500);
+        }, { passive: true });
+        $el.addEventListener("touchmove", cancel, { passive: true });
+        $el.addEventListener("touchend", cancel);
+        $el.addEventListener("touchcancel", cancel);
+    }
+
+    function bindContextMenu($el, build) {
+        $el.addEventListener("contextmenu", (e) => {
+            e.preventDefault();
+            showContextMenu(e.clientX, e.clientY, build());
+        });
+        bindLongPress($el, (x, y) => showContextMenu(x, y, build()));
+    }
+
+    // Closing the editor is shared by both delete paths: the open note is either
+    // the one being deleted or one of the notes inside the notebook being deleted.
+    function closeOpenNote() {
+        stopEditorDictation();
+        if (editor) { editor.destroy(); editor = null; }
+        currentNotebook = null;
+        currentNote = null;
+        isDirty = false;
+        $("editor-container").style.display = "none";
+        $("empty-state").style.display = "flex";
+        document.body.classList.remove("mobile-edit");
+    }
+
+    function deleteNotebook(nb) {
+        const count = (notesByNotebook[nb] || []).length;
+        const what = count === 1 ? "1 note" : `${count} notes`;
+        if (!confirm(`Delete notebook "${nb}" and ${what}? It stays recoverable in your Git history.`)) return;
+
+        (async () => {
+            try {
+                setSyncStatus("syncing", "Deleting notebook…");
+                if (currentNotebook === nb) closeOpenNote();
+                await deleteFolder(nb, `Delete notebook ${nb}`);
+
+                notebooks = notebooks.filter((name) => name !== nb);
+                delete notesByNotebook[nb];
+                if (selectedNotebook === nb) selectedNotebook = null;
+                renderSidebar($("search-input").value);
+                setSyncStatus("ok", repoFull);
+            } catch (err) {
+                console.error("Delete notebook failed:", err);
+                alert("Failed to delete notebook: " + err.message);
+                setSyncStatus("error", "Delete failed");
+            }
+        })();
+    }
+
+    // Delete a note that is not necessarily the open one — the note browser's
+    // context menu can target any row.
+    async function deleteNoteAt(nb, note) {
+        const base = note.replace(/\.md$/, "");
+        if (!confirm(`Delete "${base}"? It stays recoverable in your Git history.`)) return;
+
+        try {
+            setSyncStatus("syncing", "Deleting…");
+            if (currentNotebook === nb && currentNote === note) closeOpenNote();
+            const path = `${nb}/${note}`;
+            await deleteFile(path, `Delete ${path}`);
+
+            notesByNotebook[nb] = (notesByNotebook[nb] || []).filter((name) => name !== note);
+            renderSidebar($("search-input").value);
+            setSyncStatus("ok", repoFull);
+        } catch (err) {
+            console.error("Delete failed:", err);
+            alert("Failed to delete note: " + err.message);
+            setSyncStatus("error", "Delete failed");
+        }
     }
 
     async function renderSearchResults(query) {
@@ -767,6 +950,9 @@
                     <span class="note-card-preview">${result.snippet ? escapeHtml(result.snippet) : "Markdown note"}</span>
                     <span class="note-card-meta">${escapeHtml(result.notebook)}</span>`;
                 $note.addEventListener("click", () => openNote(result.notebook, result.note));
+                bindContextMenu($note, () => [
+                    { label: "Delete note", danger: true, action: () => deleteNoteAt(result.notebook, result.note) },
+                ]);
                 $list.appendChild($note);
             }
         } catch (err) {
@@ -1294,30 +1480,11 @@
     }
 
     // ── Delete Note ─────────────────────────────────────────
-    async function deleteNote() {
+    // The toolbar button acts on the open note; deleteNoteAt() handles the rest
+    // so the button and the note-browser context menu cannot drift apart.
+    function deleteNote() {
         if (!currentNotebook || !currentNote) return;
-        if (!confirm(`Delete "${currentNote}"? This cannot be undone.`)) return;
-        stopEditorDictation();
-
-        try {
-            setSyncStatus("syncing", "Deleting…");
-            const path = `${currentNotebook}/${currentNote}`;
-            await deleteFile(path, `Delete ${path}`);
-
-            if (editor) { editor.destroy(); editor = null; }
-            currentNote = null;
-            isDirty = false;
-            $("editor-container").style.display = "none";
-            $("empty-state").style.display = "flex";
-            document.body.classList.remove("mobile-edit");
-
-            setSyncStatus("ok", repoFull);
-            await loadNotebooks();
-        } catch (err) {
-            console.error("Delete failed:", err);
-            alert("Failed to delete note: " + err.message);
-            setSyncStatus("error", "Delete failed");
-        }
+        return deleteNoteAt(currentNotebook, currentNote);
     }
 
     // ── Sync Status UI ──────────────────────────────────────

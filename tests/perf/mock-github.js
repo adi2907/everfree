@@ -120,9 +120,58 @@ function createMockGitHub(fixture, opts = {}) {
     commitsBulk: 0,
     commitDetail: 0,
     user: 0,
+    contentsWrite: 0,
+    gitData: 0,
     other: 0,
   };
   const log = [];
+
+  // ── Mutable repo state ──────────────────────────────────────
+  // Writes are modelled because create/delete are user-visible operations that
+  // a read-only mock cannot check at all. Deletion of a whole notebook goes
+  // through the Git Data API, whose defining property is that nothing changes
+  // until the ref moves — so trees and commits are staged here, not applied,
+  // and only PATCH /git/refs makes them real.
+  let writeSeq = 0;
+  const stagedTrees = new Map(); // tree sha -> [paths deleted relative to base]
+  const stagedCommits = new Map(); // commit sha -> tree sha
+  let headSha = "commithead0000";
+  let headTreeSha = "tree00000000";
+
+  function dirOf(p) {
+    const i = p.indexOf("/");
+    return i < 0 ? "" : p.slice(0, i);
+  }
+
+  function addFile(p, content) {
+    const nbName = dirOf(p);
+    const name = p.slice(nbName.length + 1);
+    fixture.files.set(p, {
+      sha: `shaw${String(writeSeq++).padStart(7, "0")}`,
+      content,
+      committedAt: new Date().toISOString(),
+    });
+    let nb = fixture.notebooks.find((x) => x.name === nbName);
+    if (!nb) {
+      nb = { name: nbName, notes: [] };
+      fixture.notebooks.push(nb);
+    }
+    if (!nb.notes.includes(name)) nb.notes.push(name);
+    return fixture.files.get(p);
+  }
+
+  function removeFile(p) {
+    fixture.files.delete(p);
+    const nbName = dirOf(p);
+    const name = p.slice(nbName.length + 1);
+    const nb = fixture.notebooks.find((x) => x.name === nbName);
+    if (!nb) return;
+    nb.notes = nb.notes.filter((n) => n !== name);
+    // Git has no empty directories: a folder disappears with its last blob.
+    if (nb.notes.length === 0) {
+      fixture.notebooks = fixture.notebooks.filter((x) => x.name !== nbName);
+    }
+  }
 
   let inFlight = 0;
   const waiters = [];
@@ -141,10 +190,12 @@ function createMockGitHub(fixture, opts = {}) {
     if (next) next();
   }
 
-  function classify(u) {
+  function classify(u, method) {
     const path = u.pathname;
     if (path === "/user") return "user";
     if (path === `/repos/${repoFull}` || path === `/repos/${owner}/${repo}`) return "repoMeta";
+    if (path.startsWith(`/repos/${repoFull}/git/`)) return "gitData";
+    if (path.startsWith(`/repos/${repoFull}/contents`) && method !== "GET") return "contentsWrite";
     if (path.startsWith(`/repos/${repoFull}/commits`)) {
       const rest = path.slice(`/repos/${repoFull}/commits`.length).replace(/^\//, "");
       // A trailing SHA means the single-commit endpoint, which is the only one
@@ -159,9 +210,94 @@ function createMockGitHub(fixture, opts = {}) {
     return "other";
   }
 
-  function body(kind, u) {
+  function body(kind, u, method, req) {
     const path = u.pathname;
     if (kind === "user") return { status: 200, json: { login: owner } };
+
+    if (kind === "contentsWrite") {
+      const target = decodeURIComponent(
+        path.slice(`/repos/${repoFull}/contents`.length).replace(/^\//, "")
+      );
+      if (method === "PUT") {
+        const existing = fixture.files.get(target);
+        // GitHub rejects a write to an existing path that omits the current sha,
+        // and one that names a stale sha. Both are how a client finds out it is
+        // clobbering someone else's edit, so the mock enforces them.
+        if (existing && req.sha !== existing.sha) {
+          return { status: 409, json: { message: "sha does not match" } };
+        }
+        if (!existing && req.sha) {
+          return { status: 422, json: { message: "sha given for a new file" } };
+        }
+        const content = Buffer.from(req.content || "", "base64").toString("utf8");
+        const file = addFile(target, content);
+        return {
+          status: existing ? 200 : 201,
+          json: { content: { path: target, sha: file.sha }, commit: { sha: `commitw${writeSeq}` } },
+        };
+      }
+      if (method === "DELETE") {
+        const existing = fixture.files.get(target);
+        if (!existing) return { status: 404, json: { message: "Not Found" } };
+        if (req.sha !== existing.sha) return { status: 409, json: { message: "sha does not match" } };
+        removeFile(target);
+        return { status: 200, json: { commit: { sha: `commitw${writeSeq++}` } } };
+      }
+      return { status: 405, json: { message: "Method not allowed" } };
+    }
+
+    if (kind === "gitData") {
+      const rest = decodeURIComponent(path.slice(`/repos/${repoFull}/git/`.length));
+      if (method === "GET" && rest.startsWith("ref/heads/")) {
+        return { status: 200, json: { ref: `refs/${rest}`, object: { sha: headSha } } };
+      }
+      if (method === "GET" && rest.startsWith("commits/")) {
+        return { status: 200, json: { sha: headSha, tree: { sha: headTreeSha } } };
+      }
+      if (method === "GET" && rest.startsWith("trees/")) {
+        return {
+          status: 200,
+          json: {
+            sha: headTreeSha,
+            // Real trees list directories too; the client has to filter to
+            // blobs, so the mock gives it directories to filter out.
+            tree: [
+              ...fixture.notebooks.map((nb) => ({
+                path: nb.name, mode: "040000", type: "tree", sha: `tree${nb.name}`,
+              })),
+              ...[...fixture.files.entries()].map(([p, f]) => ({
+                path: p, mode: "100644", type: "blob", sha: f.sha,
+              })),
+            ],
+          },
+        };
+      }
+      if (method === "POST" && rest === "trees") {
+        const deletions = (req.tree || []).filter((e) => e.sha === null).map((e) => e.path);
+        const bad = (req.tree || []).find((e) => e.sha === null && e.type !== "blob");
+        // GitHub rejects a null sha on a tree entry. Getting this wrong is the
+        // most likely way a recursive delete breaks, so the mock refuses it too.
+        if (bad) return { status: 422, json: { message: "cannot null a tree entry" } };
+        const sha = `treew${writeSeq++}`;
+        stagedTrees.set(sha, deletions);
+        return { status: 201, json: { sha } };
+      }
+      if (method === "POST" && rest === "commits") {
+        const sha = `commitw${writeSeq++}`;
+        stagedCommits.set(sha, req.tree);
+        return { status: 201, json: { sha } };
+      }
+      if (method === "PATCH" && rest.startsWith("refs/heads/")) {
+        const treeSha = stagedCommits.get(req.sha);
+        if (treeSha === undefined) return { status: 422, json: { message: "unknown commit" } };
+        for (const p of stagedTrees.get(treeSha) || []) removeFile(p);
+        headSha = req.sha;
+        headTreeSha = treeSha;
+        return { status: 200, json: { object: { sha: headSha } } };
+      }
+      return { status: 404, json: { message: "Not Found" } };
+    }
+
     if (kind === "repoMeta") {
       return {
         status: 200,
@@ -242,25 +378,41 @@ function createMockGitHub(fixture, opts = {}) {
     return { status: 404, json: { message: "Not Found" } };
   }
 
-  async function handle(urlString) {
+  async function handle(urlString, method = "GET", requestBody = null) {
     const u = new URL(urlString);
-    const kind = classify(u);
+    const kind = classify(u, method);
     counts.total++;
     counts[kind]++;
     const started = Date.now();
-    log.push({ kind, url: urlString, t: started });
+    log.push({ kind, method, url: urlString, t: started });
+
+    let req = null;
+    if (requestBody) {
+      try { req = JSON.parse(requestBody); } catch { req = null; }
+    }
 
     await acquire();
     try {
       const base = LATENCY_MS[kind] ?? 120;
       await sleep(Math.max(20, base + hashJitter(u.pathname + u.search)));
-      return body(kind, u);
+      return body(kind, u, method, req || {});
     } finally {
       release();
     }
   }
 
-  return { handle, counts, log, repoFull, owner, repo };
+  // Snapshot of what the repo actually holds, for assertions after a write.
+  function state() {
+    const byNotebook = {};
+    for (const p of fixture.files.keys()) {
+      const nb = dirOf(p);
+      (byNotebook[nb] ||= []).push(p.slice(nb.length + 1));
+    }
+    for (const nb of Object.keys(byNotebook)) byNotebook[nb].sort();
+    return byNotebook;
+  }
+
+  return { handle, counts, log, repoFull, owner, repo, state };
 }
 
 module.exports = { buildFixture, createMockGitHub, LATENCY_MS, MAX_CONCURRENCY };

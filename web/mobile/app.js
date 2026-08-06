@@ -284,6 +284,62 @@
         return data;
     }
 
+    async function deleteFile(path, message) {
+        if (!fileShas[path]) {
+            const data = await gh('GET', `/repos/${repoFull}/contents/${encodeURI(path)}?ref=${defaultBranch}`);
+            fileShas[path] = data.sha;
+        }
+        await gh('DELETE', `/repos/${repoFull}/contents/${encodeURI(path)}`, {
+            message: message || `Delete ${path}`,
+            sha: fileShas[path],
+            branch: defaultBranch,
+        });
+        forgetPath(path);
+    }
+
+    // Delete a whole folder in one commit. The Contents API deletes one file per
+    // request and has no recursive form, so a notebook with N notes would be N
+    // commits and would strand a half-deleted folder if any of them failed. The
+    // Git Data API writes a single tree with those paths removed instead — six
+    // requests whether the notebook holds two notes or two hundred. web/app.js
+    // carries the same helper; the two clients share no module.
+    async function deleteFolder(prefix, message) {
+        const ref = await gh('GET', `/repos/${repoFull}/git/ref/heads/${encodeURIComponent(defaultBranch)}`);
+        const head = ref.object.sha;
+        const commit = await gh('GET', `/repos/${repoFull}/git/commits/${head}`);
+        const tree = await gh('GET', `/repos/${repoFull}/git/trees/${commit.tree.sha}?recursive=1`);
+
+        // Blobs only. Naming a tree with sha:null makes GitHub reject the write,
+        // and dropping every blob under the folder drops the folder with them —
+        // Git has no empty directories.
+        const doomed = (tree.tree || []).filter(
+            entry => entry.type === 'blob' && entry.path.startsWith(prefix + '/'));
+        if (!doomed.length) return;
+
+        const newTree = await gh('POST', `/repos/${repoFull}/git/trees`, {
+            base_tree: commit.tree.sha,
+            tree: doomed.map(entry => ({ path: entry.path, mode: entry.mode, type: 'blob', sha: null })),
+        });
+        const newCommit = await gh('POST', `/repos/${repoFull}/git/commits`, {
+            message: message || `Delete ${prefix}`,
+            tree: newTree.sha,
+            parents: [head],
+        });
+        await gh('PATCH', `/repos/${repoFull}/git/refs/heads/${encodeURIComponent(defaultBranch)}`, {
+            sha: newCommit.sha,
+        });
+
+        for (const entry of doomed) forgetPath(entry.path);
+    }
+
+    // Drop every cached trace of a path. A stale sha here would make the next
+    // write to a recreated note fail the sha check.
+    function forgetPath(path) {
+        delete fileShas[path];
+        delete noteContentCache[path];
+        delete noteModifiedCache[path];
+    }
+
     function b64Encode(str) { return btoa(unescape(encodeURIComponent(str))); }
     function b64Decode(str) { return decodeURIComponent(escape(atob(str))); }
 
@@ -487,30 +543,61 @@
 
         searchSeq += 1;
         $list.innerHTML = '';
-        let count = 0;
 
         for (const nb of notebooks) {
             const notes = notesByNotebook[nb] || [];
-            if (notes.length === 0) continue;
 
+            // Empty notebooks are listed too. Skipping them hid a notebook the
+            // moment it was created, and left no way to reach its delete action.
             const $header = document.createElement('div');
             $header.className = 'list-section-header';
-            $header.textContent = nb;
+            $header.innerHTML = `<span class="list-section-name">${esc(nb)}</span>`;
+            $header.appendChild(makeMoreButton(`Actions for ${nb}`, () => showActionSheet(nb, [
+                { label: 'New note in this notebook', action: () => newNote(nb) },
+                { label: 'Delete notebook', danger: true, action: () => deleteNotebook(nb) },
+            ])));
             $list.appendChild($header);
 
+            if (notes.length === 0) {
+                $list.insertAdjacentHTML('beforeend', '<div class="list-empty-section">No notes yet.</div>');
+                continue;
+            }
+
             for (const note of notes) {
-                const $row = document.createElement('div');
-                $row.className = 'note-row';
-                $row.innerHTML = `<span class="note-row-name">${esc(note.replace(/\.md$/, ''))}</span><svg class="note-row-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>`;
-                $row.addEventListener('click', () => openNoteEdit(nb, note));
-                $list.appendChild($row);
-                count++;
+                $list.appendChild(makeNoteRow(nb, note));
             }
         }
 
-        if (count === 0) {
-            $list.innerHTML = '<div class="list-empty">No notes yet.</div>';
+        if (notebooks.length === 0) {
+            $list.innerHTML = '<div class="list-empty">No notebooks yet. Tap + to create one.</div>';
         }
+    }
+
+    function makeMoreButton(label, onClick) {
+        const $btn = document.createElement('button');
+        $btn.type = 'button';
+        $btn.className = 'row-more';
+        $btn.setAttribute('aria-label', label);
+        $btn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>';
+        $btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            onClick();
+        });
+        return $btn;
+    }
+
+    function makeNoteRow(nb, note) {
+        const $row = document.createElement('div');
+        $row.className = 'note-row';
+        $row.innerHTML = `<span class="note-row-name">${esc(note.replace(/\.md$/, ''))}</span>`;
+        $row.appendChild(makeMoreButton(`Actions for ${note.replace(/\.md$/, '')}`, () =>
+            showActionSheet(note.replace(/\.md$/, ''), [
+                { label: 'Open', action: () => openNoteEdit(nb, note) },
+                { label: 'Delete note', danger: true, action: () => deleteNote(nb, note) },
+            ])));
+        $row.insertAdjacentHTML('beforeend', '<svg class="note-row-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>');
+        $row.addEventListener('click', () => openNoteEdit(nb, note));
+        return $row;
     }
 
     async function renderSearchResults(query) {
@@ -542,8 +629,13 @@
                         <span class="search-result-meta">${esc(result.notebook)}</span>
                         ${result.snippet ? `<span class="search-result-snippet">${esc(result.snippet)}</span>` : ''}
                     </span>
-                    <svg class="note-row-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
                 `;
+                $row.appendChild(makeMoreButton(`Actions for ${result.title}`, () =>
+                    showActionSheet(result.title, [
+                        { label: 'Open', action: () => openNoteEdit(result.notebook, result.note) },
+                        { label: 'Delete note', danger: true, action: () => deleteNote(result.notebook, result.note) },
+                    ])));
+                $row.insertAdjacentHTML('beforeend', '<svg class="note-row-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>');
                 $row.addEventListener('click', () => openNoteEdit(result.notebook, result.note));
                 $list.appendChild($row);
             }
@@ -750,15 +842,211 @@
         }
     }
 
-    function openTargetDrawer() {
-        renderTargetList();
-        $('target-drawer').classList.remove('hidden');
+    // ── Sheets ───────────────────────────────────────────────
+    // Three bottom sheets share one overlay, so opening any of them closes the
+    // others rather than stacking a second sheet behind the first.
+    const SHEETS = ['target-drawer', 'action-sheet', 'prompt-sheet'];
+
+    function openSheet(id) {
+        for (const sheet of SHEETS) $(sheet).classList.toggle('hidden', sheet !== id);
         $('drawer-overlay').classList.remove('hidden');
     }
 
-    function closeTargetDrawer() {
-        $('target-drawer').classList.add('hidden');
+    function closeSheets() {
+        for (const sheet of SHEETS) $(sheet).classList.add('hidden');
         $('drawer-overlay').classList.add('hidden');
+        promptConfirm = null;
+    }
+
+    function openTargetDrawer() {
+        renderTargetList();
+        openSheet('target-drawer');
+    }
+
+    function closeTargetDrawer() {
+        closeSheets();
+    }
+
+    function showActionSheet(title, items) {
+        $('action-sheet-title').textContent = title;
+        const $list = $('action-sheet-list');
+        $list.innerHTML = '';
+        for (const item of items) {
+            const $row = document.createElement('button');
+            $row.type = 'button';
+            $row.className = 'action-row' + (item.danger ? ' action-row-danger' : '');
+            $row.textContent = item.label;
+            $row.addEventListener('click', () => {
+                closeSheets();
+                item.action();
+            });
+            $list.appendChild($row);
+        }
+        openSheet('action-sheet');
+    }
+
+    let promptConfirm = null;
+
+    // A bottom sheet rather than window.prompt(): iOS Safari renders the native
+    // dialog above the keyboard and gives no control over the input's type or
+    // autocapitalisation, and it cannot carry the notebook picker a new note needs.
+    function showPromptSheet(opts) {
+        $('prompt-sheet-title').textContent = opts.title;
+        $('prompt-label').textContent = opts.label || 'Name';
+        $('btn-prompt-confirm').textContent = opts.confirmLabel || 'Create';
+        const $input = $('prompt-input');
+        $input.value = opts.value || '';
+        $input.placeholder = opts.placeholder || '';
+        $('prompt-error').classList.add('hidden');
+
+        const $field = $('prompt-select-field');
+        const $select = $('prompt-select');
+        if (opts.select && opts.select.length) {
+            $select.innerHTML = '';
+            for (const name of opts.select) {
+                const $option = document.createElement('option');
+                $option.value = name;
+                $option.textContent = name;
+                $select.appendChild($option);
+            }
+            $select.value = opts.selectValue || opts.select[0];
+            $field.hidden = false;
+        } else {
+            $field.hidden = true;
+        }
+
+        promptConfirm = opts.onConfirm;
+        openSheet('prompt-sheet');
+        setTimeout(() => $input.focus(), 80);
+    }
+
+    function showPromptError(message) {
+        const $error = $('prompt-error');
+        $error.textContent = message;
+        $error.classList.remove('hidden');
+    }
+
+    async function submitPrompt() {
+        if (!promptConfirm) return;
+        const value = $('prompt-input').value.trim();
+        if (!value) { showPromptError('Enter a name.'); return; }
+
+        const $btn = $('btn-prompt-confirm');
+        const label = $btn.textContent;
+        $btn.disabled = true;
+        $btn.textContent = 'Working…';
+        try {
+            await promptConfirm(value, $('prompt-select').value);
+            closeSheets();
+        } catch (err) {
+            showPromptError(err.message);
+        } finally {
+            $btn.disabled = false;
+            $btn.textContent = label;
+        }
+    }
+
+    // ── Create / delete ──────────────────────────────────────
+    function newNotebook() {
+        showPromptSheet({
+            title: 'New notebook',
+            label: 'Notebook name',
+            placeholder: 'Ideas',
+            onConfirm: async (raw) => {
+                const name = raw.replace(/\/+$/, '');
+                // A leading dot creates a notebook that loadAllContent() filters
+                // straight back out, so the user would see nothing at all.
+                if (name.startsWith('.')) throw new Error('Notebook names cannot start with a dot.');
+                if (/[\/\\]/.test(name)) throw new Error('Notebook names cannot contain slashes.');
+                if (notebooks.some(nb => nb.toLowerCase() === name.toLowerCase())) {
+                    throw new Error(`A notebook called "${name}" already exists.`);
+                }
+
+                // Git has no empty directories, so a new notebook needs a file in it.
+                await putFile(`${name}/.gitkeep`, '', `Create notebook ${name}`);
+                notebooks.unshift(name);
+                notesByNotebook[name] = [];
+                await renderNoteList($('browse-search').value);
+                showToast('Notebook created ✓');
+            },
+        });
+    }
+
+    function newNote(preferredNotebook) {
+        if (!notebooks.length) {
+            showToast('Create a notebook first', 'error');
+            newNotebook();
+            return;
+        }
+        showPromptSheet({
+            title: 'New note',
+            label: 'Note name',
+            placeholder: 'Meeting notes',
+            select: notebooks,
+            selectValue: preferredNotebook || notebooks[0],
+            onConfirm: async (raw, notebook) => {
+                const name = raw.replace(/\.md$/i, '');
+                if (/[\/\\]/.test(name)) throw new Error('Note names cannot contain slashes.');
+                const note = `${name}.md`;
+                if ((notesByNotebook[notebook] || []).some(n => n.toLowerCase() === note.toLowerCase())) {
+                    throw new Error(`"${name}" already exists in ${notebook}.`);
+                }
+
+                await putFile(`${notebook}/${note}`, `# ${name}\n\n`, `Create note ${notebook}/${note}`);
+                notesByNotebook[notebook] = [note, ...(notesByNotebook[notebook] || [])];
+                await renderNoteList($('browse-search').value);
+                openNoteEdit(notebook, note);
+            },
+        });
+    }
+
+    async function deleteNote(notebook, note) {
+        const base = note.replace(/\.md$/, '');
+        if (!confirm(`Delete "${base}"? It stays recoverable in your Git history.`)) return;
+        try {
+            await deleteFile(`${notebook}/${note}`, `Delete ${notebook}/${note}`);
+            notesByNotebook[notebook] = (notesByNotebook[notebook] || []).filter(n => n !== note);
+            releaseCaptureTarget(notebook, note);
+            if (editingNotebook === notebook && editingNote === note) {
+                editingNotebook = null;
+                editingNote = null;
+                showView('app');
+            }
+            await renderNoteList($('browse-search').value);
+            showToast('Deleted ✓');
+        } catch (err) {
+            showToast('Delete failed: ' + err.message, 'error');
+        }
+    }
+
+    async function deleteNotebook(notebook) {
+        const count = (notesByNotebook[notebook] || []).length;
+        const what = count === 1 ? '1 note' : `${count} notes`;
+        if (!confirm(`Delete notebook "${notebook}" and ${what}? It stays recoverable in your Git history.`)) return;
+        try {
+            await deleteFolder(notebook, `Delete notebook ${notebook}`);
+            for (const note of notesByNotebook[notebook] || []) releaseCaptureTarget(notebook, note);
+            if (editingNotebook === notebook) {
+                editingNotebook = null;
+                editingNote = null;
+                showView('app');
+            }
+            notebooks = notebooks.filter(nb => nb !== notebook);
+            delete notesByNotebook[notebook];
+            await renderNoteList($('browse-search').value);
+            showToast('Notebook deleted ✓');
+        } catch (err) {
+            showToast('Delete failed: ' + err.message, 'error');
+        }
+    }
+
+    // Capture would otherwise keep appending to a note that no longer exists,
+    // and every save would fail on a 404 the user cannot explain.
+    function releaseCaptureTarget(notebook, note) {
+        if (captureTarget.type !== 'note') return;
+        if (captureTarget.notebook !== notebook || captureTarget.note !== note) return;
+        captureTarget = { type: 'scratch' };
+        updateTargetLabel();
     }
 
     function renderTargetList() {
@@ -878,8 +1166,19 @@
     });
 
     $('btn-target').addEventListener('click', openTargetDrawer);
-    $('btn-close-drawer').addEventListener('click', closeTargetDrawer);
-    $('drawer-overlay').addEventListener('click', closeTargetDrawer);
+    $('btn-close-drawer').addEventListener('click', closeSheets);
+    $('btn-close-action-sheet').addEventListener('click', closeSheets);
+    $('btn-close-prompt-sheet').addEventListener('click', closeSheets);
+    $('drawer-overlay').addEventListener('click', closeSheets);
+
+    $('btn-browse-add').addEventListener('click', () => showActionSheet('New', [
+        { label: 'New note', action: () => newNote() },
+        { label: 'New notebook', action: () => newNotebook() },
+    ]));
+    $('btn-prompt-confirm').addEventListener('click', submitPrompt);
+    $('prompt-input').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); submitPrompt(); }
+    });
 
     $('browse-search').addEventListener('input', e => {
         clearTimeout(browseSearchTimer);

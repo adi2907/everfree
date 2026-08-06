@@ -343,6 +343,9 @@
                 <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
             </svg>
             <input type="search" id="browse-search" placeholder="Search notes…" autocomplete="off" autocorrect="off" spellcheck="false">
+            <button class="btn-browse-add" id="btn-browse-add" title="New" aria-label="New note or notebook">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+            </button>
         </div>
         <div id="note-list" class="note-list">
             <div class="list-loading">Loading notes…</div>
@@ -442,6 +445,45 @@
         </button>
     </div>
     <div id="target-list" class="target-list"></div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<!--  ACTION SHEET (new note / new notebook / delete)          -->
+<!-- ══════════════════════════════════════════════════════════ -->
+<div id="action-sheet" class="drawer hidden">
+    <div class="drawer-grip"></div>
+    <div class="drawer-header">
+        <h3 id="action-sheet-title">Actions</h3>
+        <button class="btn-drawer-close" id="btn-close-action-sheet" aria-label="Close">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+    </div>
+    <div id="action-sheet-list" class="action-list"></div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<!--  PROMPT SHEET (name a new note / notebook)                -->
+<!-- ══════════════════════════════════════════════════════════ -->
+<div id="prompt-sheet" class="drawer hidden">
+    <div class="drawer-grip"></div>
+    <div class="drawer-header">
+        <h3 id="prompt-sheet-title">Name</h3>
+        <button class="btn-drawer-close" id="btn-close-prompt-sheet" aria-label="Close">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+    </div>
+    <div class="prompt-body">
+        <label class="prompt-field" id="prompt-select-field" hidden>
+            <span class="prompt-label">Notebook</span>
+            <select id="prompt-select"></select>
+        </label>
+        <label class="prompt-field">
+            <span class="prompt-label" id="prompt-label">Name</span>
+            <input type="text" id="prompt-input" autocomplete="off" autocapitalize="sentences" spellcheck="false">
+        </label>
+        <div class="prompt-error hidden" id="prompt-error"></div>
+        <button class="btn-prompt-confirm" id="btn-prompt-confirm">Create</button>
+    </div>
 </div>
 
 <!-- ══════════════════════════════════════════════════════════ -->

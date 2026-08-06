@@ -2221,3 +2221,32 @@ body.resizing-panes .note-browser {
     body.mobile-edit .main { display: flex; flex: 1; }
     .editor-back-mobile { display: inline-flex; }
 }
+
+/* ── Context menu (right-click / long-press: delete) ───────── */
+.context-menu {
+    position: fixed;
+    z-index: 1000;
+    min-width: 170px;
+    padding: 4px;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-modal);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-sm);
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+}
+[data-theme="dark"] .context-menu { box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45); }
+.context-menu-item {
+    padding: 9px 10px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.15s ease;
+}
+.context-menu-item:hover { background: var(--bg-sidebar-hover); }
+.context-menu-item.danger { color: var(--danger); }

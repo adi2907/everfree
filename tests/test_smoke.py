@@ -98,6 +98,27 @@ class SmokeTests(unittest.TestCase):
         again = self.client.post("/api/notebooks", json={"name": "Dup"})
         self.assertEqual(again.status_code, 409)
 
+    def test_deleting_a_notebook_takes_its_notes_and_leaves_the_rest(self):
+        for notebook in ("Doomed", "Keeper"):
+            self.client.post("/api/notebooks", json={"name": notebook})
+            self.client.post(f"/api/notebooks/{notebook}/notes", json={"name": "One"})
+            self.client.post(f"/api/notebooks/{notebook}/notes", json={"name": "Two"})
+
+        deleted = self.client.delete("/api/notebooks/Doomed")
+        self.assertEqual(deleted.status_code, 200, deleted.text)
+
+        library = self.client.get("/api/library").json()
+        self.assertNotIn("Doomed", library["notebooks"])
+        self.assertEqual(self.client.get("/api/notebooks/Doomed/notes/One.md").status_code, 404)
+
+        # A neighbour must survive: the delete removes one directory, not a
+        # prefix match across the notes tree.
+        self.assertIn("Keeper", library["notebooks"])
+        self.assertEqual(self.client.get("/api/notebooks/Keeper/notes/One.md").status_code, 200)
+
+    def test_deleting_an_unknown_notebook_is_a_404(self):
+        self.assertEqual(self.client.delete("/api/notebooks/NoSuchThing").status_code, 404)
+
     # ── Sign-out ────────────────────────────────────────────
     def test_sign_out_clears_credentials_without_touching_notes(self):
         # The real endpoint deletes the OS keyring entry and the auth file, so
