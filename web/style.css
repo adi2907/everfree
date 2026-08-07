@@ -656,7 +656,8 @@ body.resizing-panes .note-browser {
 .toastui-editor-mode-switch { display: none !important; }
 
 .toastui-editor-defaultUI .toastui-editor-toolbar {
-    display: none !important;
+    background: var(--bg-surface) !important;
+    border-bottom: 1px solid var(--border) !important;
 }
 .toastui-editor-defaultUI .toastui-editor-toolbar-icons {
     background-color: transparent !important;

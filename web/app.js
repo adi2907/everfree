@@ -813,7 +813,7 @@
             // user the row for a note that is already committed.
             renderSidebar();
             setSyncStatus("ok", repoFull);
-            openNote(nb, noteName);
+            openNote(nb, noteName, { startInBody: true });
         });
     }
 
@@ -1330,7 +1330,7 @@
     }
 
     // ── Open Note ───────────────────────────────────────────
-    async function openNote(notebook, note) {
+    async function openNote(notebook, note, { startInBody = false } = {}) {
         if (isDirty && !confirm("You have unsaved changes. Discard?")) return;
         stopEditorDictation();
 
@@ -1352,7 +1352,7 @@
             $("save-status").textContent = "";
 
             if (editor) { editor.destroy(); editor = null; }
-            initEditor(content);
+            initEditor(content, { startInBody });
             renderSidebar($("search-input").value);
             setSyncStatus("ok", repoFull);
             window.dispatchEvent(new CustomEvent("everfree:note-changed", { detail: { notebook, note } }));
@@ -1363,7 +1363,7 @@
         }
     }
 
-    function initEditor(content = "") {
+    function initEditor(content = "", { startInBody = false } = {}) {
         editor = new toastui.Editor({
             el: $("editor"),
             height: "100%",
@@ -1409,6 +1409,17 @@
         const isDark = (localStorage.getItem(LS_THEME) || "light") === "dark";
         const tuiWrapper = document.querySelector(".toastui-editor-defaultUI");
         if (tuiWrapper) tuiWrapper.classList.toggle("toastui-editor-dark", isDark);
+
+        // Markdown parsers discard trailing blank lines, so the `# title\n\n`
+        // used for a new note otherwise becomes a document containing only an
+        // H1. Toast UI then puts the first typed text in that heading. Create a
+        // real empty paragraph and place the cursor there before change tracking
+        // is attached; the first edit now starts as ordinary body text.
+        if (startInBody) {
+            editor.moveCursorToEnd();
+            editor.insertText("\n");
+            editor.focus();
+        }
 
         editor.on("change", () => {
             updateOpenNoteTitle(editor.getMarkdown());

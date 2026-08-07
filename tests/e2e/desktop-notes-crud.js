@@ -112,11 +112,12 @@ const listNotes = (sandbox, nb) => {
           contentType: "text/javascript",
           body: `window.toastui = { Editor: function (o) {
             window.__editorValue = (o && o.initialValue) || "";
+            if (o && o.el) o.el.innerHTML = '<div class="toastui-editor-defaultUI"><div class="toastui-editor-toolbar"><button class="toastui-editor-toolbar-icons">Bold</button></div></div>';
             this.getMarkdown = function () { return window.__editorValue; };
             this.setMarkdown = function (v) { window.__editorValue = v; };
             this.getSelection = function () { return [0, 0]; };
             this.setSelection = function () {};
-            this.insertText = function (t) { window.__editorValue += t; };
+            this.insertText = function (t) { window.__lastEditorInsertion = t; window.__editorValue += t; };
             this.moveCursorToEnd = function () {};
             this.focus = function () {};
             this.on = function () {};
@@ -158,6 +159,17 @@ const listNotes = (sandbox, nb) => {
     check("desktop: new note exists on disk",
       (listNotes(sandbox, "Recipes") || []).includes("Bread.md"),
       JSON.stringify(listNotes(sandbox, "Recipes")));
+    const editorStart = await page.evaluate(() => {
+      const toolbar = document.querySelector(".toastui-editor-toolbar");
+      return {
+        bodyInsertion: window.__lastEditorInsertion,
+        toolbarVisible: Boolean(toolbar) && getComputedStyle(toolbar).display !== "none",
+      };
+    });
+    check("desktop: a new note starts in a body paragraph",
+      editorStart.bodyInsertion === "\n", JSON.stringify(editorStart));
+    check("desktop: formatting toolbar is visible",
+      editorStart.toolbarVisible, JSON.stringify(editorStart));
 
     // ── Delete a note from its context menu ──
     await page.click('.note-card:has(.note-card-title:text-is("Bread"))', { button: "right" });

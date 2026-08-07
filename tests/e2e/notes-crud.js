@@ -57,11 +57,12 @@ function check(name, ok, detail) {
 const TOAST_STUB = `window.toastui = { Editor: function (o) {
   var md = (o && o.initialValue) || "";
   window.__editorValue = md;
+  if (o && o.el) o.el.innerHTML = '<div class="toastui-editor-defaultUI"><div class="toastui-editor-toolbar"><button class="toastui-editor-toolbar-icons">Bold</button></div></div>';
   this.getMarkdown = function () { return window.__editorValue; };
   this.setMarkdown = function (v) { window.__editorValue = v; };
   this.getSelection = function () { return [0, 0]; };
   this.setSelection = function () {};
-  this.insertText = function (t) { window.__editorValue += t; };
+  this.insertText = function (t) { window.__lastEditorInsertion = t; window.__editorValue += t; };
   this.moveCursorToEnd = function () {};
   this.focus = function () {};
   this.on = function () {};
@@ -150,6 +151,17 @@ async function testWeb(browser, mock, port, pageErrors) {
   check("web: new note is committed",
     (mock.state()["Field Notes"] || []).includes("First entry.md"),
     JSON.stringify(mock.state()["Field Notes"] || null));
+  const editorStart = await page.evaluate(() => {
+    const toolbar = document.querySelector(".toastui-editor-toolbar");
+    return {
+      bodyInsertion: window.__lastEditorInsertion,
+      toolbarVisible: Boolean(toolbar) && getComputedStyle(toolbar).display !== "none",
+    };
+  });
+  check("web: a new note starts in a body paragraph",
+    editorStart.bodyInsertion === "\n", JSON.stringify(editorStart));
+  check("web: formatting toolbar is visible",
+    editorStart.toolbarVisible, JSON.stringify(editorStart));
 
   // Committing it is not enough: the note has to be reachable afterwards. A
   // client that re-lists the repo here gets a listing that can still predate

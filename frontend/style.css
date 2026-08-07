@@ -486,9 +486,10 @@ body.resizing-panes .note-browser {
     display: none !important;
 }
 
-/* Toast UI's built-in toolbar duplicates EverFree's own top controls. */
+/* Formatting controls; EverFree's top bar contains note actions instead. */
 .toastui-editor-defaultUI .toastui-editor-toolbar {
-    display: none !important;
+    background: var(--bg-surface) !important;
+    border-bottom: 1px solid var(--border) !important;
 }
 
 .toastui-editor-defaultUI .toastui-editor-toolbar-icons {
@@ -1241,7 +1242,18 @@ body {
 }
 
 .toastui-editor-defaultUI .toastui-editor-toolbar {
-    display: none !important;
+    position: absolute !important;
+    z-index: 5;
+    bottom: 18px;
+    left: 50%;
+    width: max-content;
+    max-width: calc(100% - 40px);
+    padding: 4px 8px !important;
+    transform: translateX(-50%);
+    border: 1px solid var(--border) !important;
+    border-radius: 9px;
+    background: color-mix(in srgb, var(--bg-surface) 94%, transparent) !important;
+    box-shadow: 0 8px 24px rgba(32, 36, 30, 0.08);
 }
 
 .toastui-editor-defaultUI .toastui-editor-toolbar-group {
