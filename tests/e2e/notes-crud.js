@@ -58,14 +58,21 @@ const TOAST_STUB = `window.toastui = { Editor: function (o) {
   var md = (o && o.initialValue) || "";
   window.__editorValue = md;
   if (o && o.el) o.el.innerHTML = '<div class="toastui-editor-defaultUI"><div class="toastui-editor-toolbar"><button class="toastui-editor-toolbar-icons">Bold</button></div></div>';
+  var handlers = {};
   this.getMarkdown = function () { return window.__editorValue; };
-  this.setMarkdown = function (v) { window.__editorValue = v; };
+  // The real editor fires change when its content is replaced, which is what
+  // makes a rename look like an unsaved edit unless the client clears the flag.
+  // A stub that stayed silent would let that regression through.
+  this.setMarkdown = function (v) {
+    window.__editorValue = v;
+    (handlers.change || []).forEach(function (fn) { fn(); });
+  };
   this.getSelection = function () { return [0, 0]; };
   this.setSelection = function () {};
   this.insertText = function (t) { window.__lastEditorInsertion = t; window.__editorValue += t; };
   this.moveCursorToEnd = function () {};
   this.focus = function () {};
-  this.on = function () {};
+  this.on = function (name, fn) { (handlers[name] = handlers[name] || []).push(fn); };
   this.isMarkdownMode = function () { return true; };
   this.destroy = function () {};
 } };
@@ -176,6 +183,78 @@ async function testWeb(browser, mock, port, pageErrors) {
   check("web: new note is listed in the sidebar", visible.note && visible.notebook,
     JSON.stringify(visible));
 
+  // ── Rename that note from the browser's context menu ──
+  // The rename box opens on the current name, so a typo is a small edit.
+  await page.click("#note-browser-list .note-card", { button: "right" });
+  await page.click('#context-menu .context-menu-item:text-is("Rename…")');
+  await page.waitForSelector("#modal-overlay >> visible=true");
+  const prefill = await page.inputValue("#modal-input");
+  check("web: rename opens on the current name", prefill === "First entry", prefill);
+  await page.fill("#modal-input", "Second entry");
+  await page.click("#modal-confirm");
+  await page.waitForTimeout(1500);
+  check("web: renamed note is committed under its new name",
+    (mock.state()["Field Notes"] || []).includes("Second entry.md")
+      && !(mock.state()["Field Notes"] || []).includes("First entry.md"),
+    JSON.stringify(mock.state()["Field Notes"] || null));
+
+  // The file name is half of it: the note is displayed by its H1, so a rename
+  // that left the heading alone would show the old name everywhere it counts.
+  const renamedBody = mock.contentAt("Field Notes/Second entry.md");
+  check("web: the renamed note's heading is committed too",
+    (renamedBody || "").startsWith("# Second entry"), JSON.stringify(renamedBody));
+  const shownTitle = await page.evaluate(() =>
+    (document.querySelector("#note-browser-list .note-card-title") || {}).textContent);
+  check("web: the sidebar shows the new title", shownTitle === "Second entry", shownTitle);
+  const breadcrumb = await page.textContent("#note-breadcrumb");
+  check("web: the open note's breadcrumb shows the new title",
+    breadcrumb === "Field Notes / Second entry", breadcrumb);
+
+  // The editor holds what the next save writes. Left on the old heading, the
+  // very next save would put the old title back.
+  const editorAfterRename = await page.evaluate(() => ({
+    markdown: window.__editorValue,
+    saveStatus: (document.getElementById("save-status") || {}).textContent,
+  }));
+  check("web: the editor picked up the retitled body",
+    (editorAfterRename.markdown || "").startsWith("# Second entry"),
+    JSON.stringify(editorAfterRename));
+  // Reloading the editor must not leave the note looking unsaved over a write
+  // the client itself just pushed.
+  check("web: a rename leaves no phantom unsaved state",
+    !editorAfterRename.saveStatus, JSON.stringify(editorAfterRename));
+
+  // ── Rename the notebook, with the note still open in it ──
+  await page.click('.notebook-header:has(.notebook-name:text-is("Field Notes"))', { button: "right" });
+  await page.click('#context-menu .context-menu-item:text-is("Rename notebook…")');
+  await page.waitForSelector("#modal-overlay >> visible=true");
+  await page.fill("#modal-input", "Fieldwork");
+  await page.click("#modal-confirm");
+  await page.waitForFunction(
+    () => [...document.querySelectorAll(".notebook-name")].some((n) => n.textContent === "Fieldwork"),
+    { timeout: 20000 }
+  );
+  await page.waitForTimeout(1000);
+  check("web: renamed notebook takes its notes with it",
+    (mock.state()["Fieldwork"] || []).includes("Second entry.md") && !mock.state()["Field Notes"],
+    JSON.stringify(mock.state()["Fieldwork"] || null));
+  // Only a note rename retitles. A notebook rename moves files and must leave
+  // the notes themselves byte for byte as they were.
+  const movedBody = mock.contentAt("Fieldwork/Second entry.md");
+  check("web: renaming a notebook leaves its notes' contents alone",
+    movedBody === renamedBody, JSON.stringify(movedBody));
+  check("web: renaming a notebook leaves its siblings alone",
+    Boolean(mock.state()["Notebook 01"]) && Boolean(mock.state()["Notebook 02"]),
+    JSON.stringify(Object.keys(mock.state())));
+
+  // A rename changes the file name, not the note's heading, so the card still
+  // reads "First entry" — the path it points at is what has to have moved. If
+  // the client only committed the rename and never updated its own state, the
+  // card is still bound to the old path and every later save 404s.
+  const rebound = await page.evaluate(() =>
+    Boolean(document.querySelector('#note-browser-list .note-card[data-note-path="Fieldwork/Second entry.md"]')));
+  check("web: the sidebar card points at the new path", rebound);
+
   // ── Delete a note from the browser's context menu ──
   await page.waitForSelector("#note-browser-list .note-card");
   await page.click("#note-browser-list .note-card", { button: "right" });
@@ -185,8 +264,8 @@ async function testWeb(browser, mock, port, pageErrors) {
     () => !document.getElementById("context-menu"), { timeout: 15000 });
   await page.waitForTimeout(1500);
   check("web: deleted note is gone from the repo",
-    !(mock.state()["Field Notes"] || []).includes("First entry.md"),
-    JSON.stringify(mock.state()["Field Notes"] || null));
+    !(mock.state()["Fieldwork"] || []).includes("Second entry.md"),
+    JSON.stringify(mock.state()["Fieldwork"] || null));
 
   // ── Delete a whole notebook, notes and all ──
   const before = mock.state();
@@ -254,18 +333,62 @@ async function testMobile(browser, mock, port, pageErrors) {
     (mock.state()["Travel"] || []).includes("Packing list.md"),
     JSON.stringify(mock.state()["Travel"] || null));
 
-  // ── Delete that note from the browse list ──
+  // ── Rename that note from the browse list ──
   await page.click("#btn-back-browse");
   await page.waitForSelector("#view-app.active");
   const noteRow = '.note-row:has(.note-row-name:text-is("Packing list")) .row-more';
   await page.waitForSelector(noteRow);
   await page.click(noteRow);
   await page.waitForSelector("#action-sheet:not(.hidden)");
+  await page.click('#action-sheet-list .action-row:text-is("Rename note")');
+  await page.waitForSelector("#prompt-sheet:not(.hidden)");
+  const mobilePrefill = await page.inputValue("#prompt-input");
+  check("mobile: rename opens on the current name", mobilePrefill === "Packing list", mobilePrefill);
+  await page.fill("#prompt-input", "Kit list");
+  await page.click("#btn-prompt-confirm");
+  await page.waitForFunction(
+    () => [...document.querySelectorAll(".note-row-name")].some((n) => n.textContent === "Kit list"),
+    { timeout: 20000 }
+  );
+  check("mobile: renamed note is committed under its new name",
+    (mock.state()["Travel"] || []).includes("Kit list.md")
+      && !(mock.state()["Travel"] || []).includes("Packing list.md"),
+    JSON.stringify(mock.state()["Travel"] || null));
+
+  // This client lists notes by file name, but the note is shared: the web
+  // client titles it by its H1, so a rename here has to move that heading too
+  // or the same note reads differently on the two clients.
+  const mobileBody = mock.contentAt("Travel/Kit list.md");
+  check("mobile: the renamed note's heading is committed too",
+    (mobileBody || "").startsWith("# Kit list"), JSON.stringify(mobileBody));
+
+  // ── Rename the notebook it lives in ──
+  const travelMore = '.list-section-header:has(.list-section-name:text-is("Travel")) .row-more';
+  await page.click(travelMore);
+  await page.waitForSelector("#action-sheet:not(.hidden)");
+  await page.click('#action-sheet-list .action-row:text-is("Rename notebook")');
+  await page.waitForSelector("#prompt-sheet:not(.hidden)");
+  await page.fill("#prompt-input", "Trips");
+  await page.click("#btn-prompt-confirm");
+  await page.waitForFunction(
+    () => [...document.querySelectorAll(".list-section-name")].some((n) => n.textContent === "Trips"),
+    { timeout: 20000 }
+  );
+  await page.waitForTimeout(1000);
+  check("mobile: renamed notebook takes its notes with it",
+    (mock.state()["Trips"] || []).includes("Kit list.md") && !mock.state()["Travel"],
+    JSON.stringify(mock.state()["Trips"] || null));
+
+  // ── Delete that note from the browse list ──
+  const renamedRow = '.note-row:has(.note-row-name:text-is("Kit list")) .row-more';
+  await page.waitForSelector(renamedRow);
+  await page.click(renamedRow);
+  await page.waitForSelector("#action-sheet:not(.hidden)");
   await page.click('#action-sheet-list .action-row:text-is("Delete note")');
   await page.waitForTimeout(2000);
   check("mobile: deleted note is gone from the repo",
-    !(mock.state()["Travel"] || []).includes("Packing list.md"),
-    JSON.stringify(mock.state()["Travel"] || null));
+    !(mock.state()["Trips"] || []).includes("Kit list.md"),
+    JSON.stringify(mock.state()["Trips"] || null));
 
   // ── Delete a whole notebook ──
   const victim = "Notebook 02";

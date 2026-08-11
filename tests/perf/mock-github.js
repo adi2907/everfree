@@ -137,7 +137,8 @@ function createMockGitHub(fixture, opts = {}) {
   // until the ref moves — so trees and commits are staged here, not applied,
   // and only PATCH /git/refs makes them real.
   let writeSeq = 0;
-  const stagedTrees = new Map(); // tree sha -> [paths deleted relative to base]
+  const stagedTrees = new Map(); // tree sha -> [{path, sha, content}] edits vs base; sha null deletes
+  const stagedBlobs = new Map(); // blob sha -> content, uploaded ahead of the tree that names it
   const stagedCommits = new Map(); // commit sha -> tree sha
   let headSha = "commithead0000";
   let headTreeSha = "tree00000000";
@@ -156,12 +157,16 @@ function createMockGitHub(fixture, opts = {}) {
   // are not lagged, matching which endpoint the caching actually applies to.
   const mutations = []; // {t, add: bool, path, content}
 
-  function addFile(p, content) {
+  // `sha` is supplied when a tree write moves an existing blob. Git identifies a
+  // blob by its content, so a move keeps the sha it had — and the client carries
+  // its cached sha across to the new path, so minting a fresh one here would
+  // fail the very next write to the renamed note for a reason GitHub would not.
+  function addFile(p, content, sha) {
     mutations.push({ t: Date.now(), add: true, path: p, content });
     const nbName = dirOf(p);
     const name = p.slice(nbName.length + 1);
     fixture.files.set(p, {
-      sha: `shaw${String(writeSeq++).padStart(7, "0")}`,
+      sha: sha || `shaw${String(writeSeq++).padStart(7, "0")}`,
       content,
       committedAt: new Date().toISOString(),
     });
@@ -302,14 +307,40 @@ function createMockGitHub(fixture, opts = {}) {
           },
         };
       }
+      // A rename that also rewrites the note's heading needs a blob that no
+      // path holds yet, so it is uploaded on its own and the tree names the sha
+      // that came back. Like a tree, it changes nothing until the ref moves.
+      if (method === "POST" && rest === "blobs") {
+        const sha = `blobw${writeSeq++}`;
+        const raw = req.encoding === "base64"
+          ? Buffer.from(req.content || "", "base64").toString("utf8")
+          : String(req.content || "");
+        stagedBlobs.set(sha, raw);
+        return { status: 201, json: { sha } };
+      }
       if (method === "POST" && rest === "trees") {
-        const deletions = (req.tree || []).filter((e) => e.sha === null).map((e) => e.path);
         const bad = (req.tree || []).find((e) => e.sha === null && e.type !== "blob");
         // GitHub rejects a null sha on a tree entry. Getting this wrong is the
         // most likely way a recursive delete breaks, so the mock refuses it too.
         if (bad) return { status: 422, json: { message: "cannot null a tree entry" } };
+        // Entries apply in order against the base tree, which is what lets a
+        // rename drop a path and add another in one request. An add names a blob
+        // by sha and carries no content of its own — the point of a move — so
+        // the mock resolves it against a blob the repo holds or one just
+        // uploaded, and refuses any other sha rather than inventing a file.
+        const edits = [];
+        for (const entry of req.tree || []) {
+          if (entry.sha === null) { edits.push({ path: entry.path, sha: null }); continue; }
+          const content = stagedBlobs.has(entry.sha)
+            ? stagedBlobs.get(entry.sha)
+            : ([...fixture.files.values()].find((f) => f.sha === entry.sha) || {}).content;
+          if (content === undefined) {
+            return { status: 422, json: { message: `unknown blob sha ${entry.sha}` } };
+          }
+          edits.push({ path: entry.path, sha: entry.sha, content });
+        }
         const sha = `treew${writeSeq++}`;
-        stagedTrees.set(sha, deletions);
+        stagedTrees.set(sha, edits);
         return { status: 201, json: { sha } };
       }
       if (method === "POST" && rest === "commits") {
@@ -320,7 +351,10 @@ function createMockGitHub(fixture, opts = {}) {
       if (method === "PATCH" && rest.startsWith("refs/heads/")) {
         const treeSha = stagedCommits.get(req.sha);
         if (treeSha === undefined) return { status: 422, json: { message: "unknown commit" } };
-        for (const p of stagedTrees.get(treeSha) || []) removeFile(p);
+        for (const edit of stagedTrees.get(treeSha) || []) {
+          if (edit.sha === null) removeFile(edit.path);
+          else addFile(edit.path, edit.content, edit.sha);
+        }
         headSha = req.sha;
         headTreeSha = treeSha;
         return { status: 200, json: { object: { sha: headSha } } };
@@ -451,7 +485,13 @@ function createMockGitHub(fixture, opts = {}) {
     return byNotebook;
   }
 
-  return { handle, counts, log, repoFull, owner, repo, state };
+  // What a path actually holds, for assertions about content a write rewrote.
+  function contentAt(p) {
+    const f = fixture.files.get(p);
+    return f ? f.content : undefined;
+  }
+
+  return { handle, counts, log, repoFull, owner, repo, state, contentAt };
 }
 
 module.exports = { buildFixture, createMockGitHub, LATENCY_MS, MAX_CONCURRENCY };

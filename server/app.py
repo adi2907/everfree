@@ -2092,6 +2092,30 @@ async def delete_note(notebook: str, note: str):
     return {"status": "deleted", "notebook": notebook, "note": note}
 
 
+_H1_RE = re.compile(r"^#\s+(.+?)\s*#*\s*$")
+
+
+def _retitle_content(content: str, title: str) -> str:
+    """Rewrite the heading a note's title comes from.
+
+    Renaming the file has to rename the note everywhere it is shown, not only in
+    the repository: the web client titles a note by its first H1. The scan
+    mirrors getNoteTitle() in web/app.js, so the rewrite lands on the line that
+    is actually on display. A note with no H1 already falls back to its file name
+    and needs nothing — inserting a heading would put content in the note that
+    the user never wrote.
+    """
+    lines = content.split("\n")
+    for i, line in enumerate(lines):
+        match = _H1_RE.match(line.strip())
+        if not match or not match.group(1).strip():
+            continue
+        indent = line[: len(line) - len(line.lstrip())]
+        lines[i] = f"{indent}# {title}"
+        return "\n".join(lines)
+    return content
+
+
 def _normalize_note_name(name: str) -> str:
     name = name.strip()
     if not name:
@@ -2113,6 +2137,16 @@ async def rename_note(notebook: str, note: str, request: Request):
         raise HTTPException(status_code=409, detail="A note with that name already exists")
     with _repo_lock:
         src.rename(dst)
+        # Retitle after the move, so a failure to read or write the body leaves
+        # the note renamed rather than half-renamed under a name nothing holds.
+        try:
+            content = dst.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            content = None
+        if content is not None:
+            retitled = _retitle_content(content, new_name[:-3])
+            if retitled != content:
+                _atomic_write_text(dst, retitled)
     request_sync()
     return {"status": "renamed", "notebook": notebook, "note": new_name}
 

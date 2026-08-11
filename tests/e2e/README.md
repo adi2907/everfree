@@ -10,11 +10,11 @@ for the subdirectory, so keep the split when adding scripts.
 | --- | --- | --- |
 | `device-flow.js` | none (fixtures) | what the web and mobile clients do with every answer the poll can give |
 | `desktop-setup.js` | none (local server) | where the Evernote import is in the wizard, and whether it stays reachable |
-| `notes-crud.js` | none (fixtures) | creating and deleting notes and notebooks in the web and mobile clients |
+| `notes-crud.js` | none (fixtures) | creating, renaming and deleting notes and notebooks in the web and mobile clients |
 | `desktop-notes-crud.js` | none (local server) | the same, in the desktop app |
 | `live/device-flow.js` | **real GitHub + production** | a code is issued and the poll is answered, right now, in production |
 
-## Create and delete
+## Create, rename and delete
 
 The feature has three implementations — the web and mobile clients commit to
 GitHub, the desktop app writes to a directory and lets the sync worker push —
@@ -40,6 +40,22 @@ the ref moves, which is the real API's defining property and the one a client
 can most easily get wrong. Both scripts also check that a sibling notebook
 survives, since a prefix match on the wrong boundary would take `Notebook 010`
 out along with `Notebook 01`.
+
+Renaming goes through the same tree write, adding paths as well as dropping
+them. The mock resolves an added entry's `sha` against a blob the repo already
+holds or one just uploaded, and refuses any other — a move carries no content
+of its own. A moved blob keeps its sha, as Git does, so a client whose caches
+did not follow the file to its new path fails on the next write rather than
+silently passing.
+
+Renaming a *note* also rewrites its `#` heading, since that is what the web
+client titles a note by, and a heading left behind would show the old name on
+every client that reads it. That makes the rename a content write too, so the
+scripts assert the committed body, the title on screen, and — for the two
+clients that keep the note open — that the editor picked up the new body. An
+editor left on the old heading would put the old title straight back on the
+next save. Renaming a *notebook* moves files and nothing else, so there is a
+check that the notes come through byte for byte.
 
 `desktop-notes-crud.js` loads the UI from `/static/index.html` rather than `/`.
 `/` serves the setup wizard until a GitHub token is in the OS keyring, and a

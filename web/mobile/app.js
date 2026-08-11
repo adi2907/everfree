@@ -338,6 +338,77 @@
         for (const entry of doomed) forgetPath(entry.path);
     }
 
+    // Move blobs to new paths in one commit, and return how many moved. The
+    // Contents API has no rename: a move would be a create plus a delete, which
+    // is two commits and leaves the note in both places — or in neither — if the
+    // second one fails. One tree write reuses the existing blob SHAs, so nothing
+    // is re-uploaded and renaming a notebook costs the same six requests whether
+    // it holds two notes or two hundred. `rewrite` returns a blob's new path, or
+    // `{to, content}` to rewrite it on the way, or null to leave it where it is.
+    // web/app.js carries the same helper; the two clients share no module.
+    //
+    // A rewritten blob is a new object, so it is uploaded first and the tree
+    // names the sha that came back. The sha cannot be read off the create-tree
+    // response instead: that lists the root tree, and a note lives one level
+    // down inside its notebook.
+    async function movePaths(rewrite, message) {
+        const ref = await gh('GET', `/repos/${repoFull}/git/ref/heads/${encodeURIComponent(defaultBranch)}`);
+        const head = ref.object.sha;
+        const commit = await gh('GET', `/repos/${repoFull}/git/commits/${head}`);
+        const tree = await gh('GET', `/repos/${repoFull}/git/trees/${commit.tree.sha}?recursive=1`);
+
+        const moves = [];
+        for (const entry of tree.tree || []) {
+            if (entry.type !== 'blob') continue;
+            const target = rewrite(entry.path);
+            if (!target) continue;
+            const { to, content } = typeof target === 'string' ? { to: target } : target;
+            if (to === entry.path && content === undefined) continue;
+            moves.push({ from: entry.path, to, content, mode: entry.mode, sha: entry.sha });
+        }
+        if (!moves.length) return 0;
+
+        for (const move of moves) {
+            if (move.content === undefined) continue;
+            const blob = await gh('POST', `/repos/${repoFull}/git/blobs`, {
+                content: b64Encode(move.content),
+                encoding: 'base64',
+            });
+            move.sha = blob.sha;
+        }
+
+        const newTree = await gh('POST', `/repos/${repoFull}/git/trees`, {
+            base_tree: commit.tree.sha,
+            tree: [
+                ...moves.map(m => ({ path: m.from, mode: m.mode, type: 'blob', sha: null })),
+                ...moves.map(m => ({ path: m.to, mode: m.mode, type: 'blob', sha: m.sha })),
+            ],
+        });
+        const newCommit = await gh('POST', `/repos/${repoFull}/git/commits`, {
+            message: message || `Move ${moves.length} file(s)`,
+            tree: newTree.sha,
+            parents: [head],
+        });
+        await gh('PATCH', `/repos/${repoFull}/git/refs/heads/${encodeURIComponent(defaultBranch)}`, {
+            sha: newCommit.sha,
+        });
+
+        // The caches are keyed by path, so carry each entry across to its new
+        // one rather than dropping it — a plain move leaves the blob itself
+        // alone. A rewritten one carries its new sha and content instead.
+        for (const m of moves) {
+            if (m.from in fileShas) fileShas[m.to] = fileShas[m.from];
+            if (m.from in noteContentCache) noteContentCache[m.to] = noteContentCache[m.from];
+            if (m.from in noteModifiedCache) noteModifiedCache[m.to] = noteModifiedCache[m.from];
+            forgetPath(m.from);
+            if (m.content === undefined) continue;
+            fileShas[m.to] = m.sha;
+            noteContentCache[m.to] = m.content;
+            noteModifiedCache[m.to] = Date.now();
+        }
+        return moves.length;
+    }
+
     // Drop every cached trace of a path. A stale sha here would make the next
     // write to a recreated note fail the sha check.
     function forgetPath(path) {
@@ -560,6 +631,7 @@
             $header.innerHTML = `<span class="list-section-name">${esc(nb)}</span>`;
             $header.appendChild(makeMoreButton(`Actions for ${nb}`, () => showActionSheet(nb, [
                 { label: 'New note in this notebook', action: () => newNote(nb) },
+                { label: 'Rename notebook', action: () => renameNotebook(nb) },
                 { label: 'Delete notebook', danger: true, action: () => deleteNotebook(nb) },
             ])));
             $list.appendChild($header);
@@ -599,6 +671,7 @@
         $row.appendChild(makeMoreButton(`Actions for ${note.replace(/\.md$/, '')}`, () =>
             showActionSheet(note.replace(/\.md$/, ''), [
                 { label: 'Open', action: () => openNoteEdit(nb, note) },
+                { label: 'Rename note', action: () => renameNote(nb, note) },
                 { label: 'Delete note', danger: true, action: () => deleteNote(nb, note) },
             ])));
         $row.insertAdjacentHTML('beforeend', '<svg class="note-row-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>');
@@ -639,6 +712,7 @@
                 $row.appendChild(makeMoreButton(`Actions for ${result.title}`, () =>
                     showActionSheet(result.title, [
                         { label: 'Open', action: () => openNoteEdit(result.notebook, result.note) },
+                        { label: 'Rename note', action: () => renameNote(result.notebook, result.note) },
                         { label: 'Delete note', danger: true, action: () => deleteNote(result.notebook, result.note) },
                     ])));
                 $row.insertAdjacentHTML('beforeend', '<svg class="note-row-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>');
@@ -702,6 +776,25 @@
         if (start > 0) snippet = '...' + snippet;
         if (end < content.length) snippet += '...';
         return snippet;
+    }
+
+    // Rewrite the heading a note's title comes from, so renaming the file
+    // renames the note everywhere it is shown rather than only in the repo.
+    // This client lists notes by file name, but the note itself is shared: the
+    // web client titles it by its first H1, so the rename has to move that too.
+    // The scan mirrors getNoteTitle() in web/app.js. A note with no H1 already
+    // falls back to its file name and needs nothing — inserting a heading would
+    // put content in the note that the user never wrote.
+    function retitleContent(content, title) {
+        const lines = String(content || '').split(/\r?\n/);
+        for (let i = 0; i < lines.length; i++) {
+            const match = lines[i].trim().match(/^#\s+(.+?)\s*#*\s*$/);
+            if (!match || !match[1].trim()) continue;
+            // Keep whatever the line was indented by, and the BOM if it had one.
+            lines[i] = `${lines[i].match(/^\s*/)[0]}# ${title}`;
+            return lines.join('\n');
+        }
+        return content;
     }
 
     // ── Note Editor ──────────────────────────────────────────
@@ -1044,6 +1137,99 @@
         } catch (err) {
             showToast('Delete failed: ' + err.message, 'error');
         }
+    }
+
+    // ── Rename ───────────────────────────────────────────────
+    function renameNote(notebook, note) {
+        const base = note.replace(/\.md$/i, '');
+        showPromptSheet({
+            title: 'Rename note',
+            label: 'Note name',
+            confirmLabel: 'Rename',
+            value: base,
+            onConfirm: async (raw) => {
+                const next = raw.replace(/\.md$/i, '');
+                if (/[\/\\]/.test(next)) throw new Error('Note names cannot contain slashes.');
+                const renamed = `${next}.md`;
+                if (renamed === note) return;
+                // A case-only rename is a real rename, so the note itself is not
+                // a collision — anything else in the notebook is.
+                if ((notesByNotebook[notebook] || []).some(n => n !== note && n.toLowerCase() === renamed.toLowerCase())) {
+                    throw new Error(`"${next}" already exists in ${notebook}.`);
+                }
+
+                const from = `${notebook}/${note}`;
+                const to = `${notebook}/${renamed}`;
+                // The heading the web client titles the note by moves with the
+                // file, so read the note first — from the cache when it has been
+                // opened this session, and off GitHub when it has not.
+                const before = noteContentCache[from] !== undefined
+                    ? noteContentCache[from]
+                    : (await getFile(from)).content;
+                const moved = await movePaths(
+                    (path) => (path === from ? { to, content: retitleContent(before, next) } : null),
+                    `Rename ${from} to ${to}`);
+                if (!moved) throw new Error('The note is no longer in the repository.');
+
+                notesByNotebook[notebook] = (notesByNotebook[notebook] || []).map(n => (n === note ? renamed : n));
+                retargetCapture(notebook, note, notebook, renamed);
+                // The editor saves to editingNote, so it has to follow the note
+                // rather than keep writing to the path that no longer exists.
+                // Its heading is retitled in place rather than reloaded, because
+                // the box may hold edits that were never saved.
+                if (editingNotebook === notebook && editingNote === note) {
+                    editingNote = renamed;
+                    $('editor-title').textContent = next;
+                    $('note-edit-area').value = retitleContent($('note-edit-area').value, next);
+                }
+                await renderNoteList($('browse-search').value);
+                showToast('Renamed ✓');
+            },
+        });
+    }
+
+    function renameNotebook(notebook) {
+        showPromptSheet({
+            title: 'Rename notebook',
+            label: 'Notebook name',
+            confirmLabel: 'Rename',
+            value: notebook,
+            onConfirm: async (raw) => {
+                const name = raw.replace(/\/+$/, '');
+                // A leading dot creates a notebook that loadAllContent() filters
+                // straight back out, so the user would see it vanish.
+                if (name.startsWith('.')) throw new Error('Notebook names cannot start with a dot.');
+                if (/[\/\\]/.test(name)) throw new Error('Notebook names cannot contain slashes.');
+                if (name === notebook) return;
+                if (notebooks.some(nb => nb !== notebook && nb.toLowerCase() === name.toLowerCase())) {
+                    throw new Error(`A notebook called "${name}" already exists.`);
+                }
+
+                // Every blob under the folder, not just the .md files: a notebook
+                // also carries .gitkeep and the assets/ images its notes link to.
+                const moved = await movePaths(
+                    (path) => (path.startsWith(notebook + '/') ? name + path.slice(notebook.length) : null),
+                    `Rename notebook ${notebook} to ${name}`);
+                if (!moved) throw new Error('The notebook is no longer in the repository.');
+
+                notebooks = notebooks.map(nb => (nb === notebook ? name : nb));
+                notesByNotebook[name] = notesByNotebook[notebook] || [];
+                delete notesByNotebook[notebook];
+                for (const note of notesByNotebook[name]) retargetCapture(notebook, note, name, note);
+                if (editingNotebook === notebook) editingNotebook = name;
+                await renderNoteList($('browse-search').value);
+                showToast('Notebook renamed ✓');
+            },
+        });
+    }
+
+    // Capture keeps appending to whatever note it is aimed at, so the aim has to
+    // follow the note across a rename or the next save fails on a 404.
+    function retargetCapture(notebook, note, toNotebook, toNote) {
+        if (captureTarget.type !== 'note') return;
+        if (captureTarget.notebook !== notebook || captureTarget.note !== note) return;
+        captureTarget = { type: 'note', notebook: toNotebook, note: toNote };
+        updateTargetLabel();
     }
 
     // Capture would otherwise keep appending to a note that no longer exists,

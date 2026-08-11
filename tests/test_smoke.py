@@ -119,6 +119,100 @@ class SmokeTests(unittest.TestCase):
     def test_deleting_an_unknown_notebook_is_a_404(self):
         self.assertEqual(self.client.delete("/api/notebooks/NoSuchThing").status_code, 404)
 
+    # ── Rename ──────────────────────────────────────────────
+    def test_renaming_a_note_retitles_it_and_frees_the_old_name(self):
+        self.client.post("/api/notebooks", json={"name": "Renames"})
+        self.client.post("/api/notebooks/Renames/notes", json={"name": "Before"})
+        self.client.put(
+            "/api/notebooks/Renames/notes/Before.md",
+            json={"content": "# Before\n\nBody that must survive.\n"})
+
+        renamed = self.client.post(
+            "/api/notebooks/Renames/notes/Before.md/rename", json={"new_name": "After"})
+        self.assertEqual(renamed.status_code, 200, renamed.text)
+        self.assertEqual(renamed.json()["note"], "After.md")
+
+        read = self.client.get("/api/notebooks/Renames/notes/After.md")
+        self.assertEqual(read.status_code, 200, read.text)
+        # The web client titles a note by its H1, so the rename has to move the
+        # heading too or the note reads by its old name on every other client.
+        self.assertEqual(read.json()["content"], "# After\n\nBody that must survive.\n")
+        self.assertEqual(self.client.get("/api/notebooks/Renames/notes/Before.md").status_code, 404)
+
+    def test_renaming_a_note_without_a_heading_adds_none(self):
+        self.client.post("/api/notebooks", json={"name": "Headless"})
+        self.client.post("/api/notebooks/Headless/notes", json={"name": "Plain"})
+        self.client.put(
+            "/api/notebooks/Headless/notes/Plain.md", json={"content": "just a line\n"})
+
+        self.client.post(
+            "/api/notebooks/Headless/notes/Plain.md/rename", json={"new_name": "Renamed"})
+
+        # Such a note already displays as its file name, so there is nothing to
+        # rewrite — and inserting a heading would put content in the note that
+        # the user never wrote.
+        read = self.client.get("/api/notebooks/Headless/notes/Renamed.md")
+        self.assertEqual(read.json()["content"], "just a line\n")
+
+    def test_renaming_a_notebook_leaves_its_notes_untouched(self):
+        self.client.post("/api/notebooks", json={"name": "Before"})
+        self.client.post("/api/notebooks/Before/notes", json={"name": "Note"})
+        self.client.put(
+            "/api/notebooks/Before/notes/Note.md", json={"content": "# Note\n\nBody.\n"})
+
+        self.client.post("/api/notebooks/Before/rename", json={"new_name": "After"})
+
+        # Only a note rename retitles: a note's heading is its own name, not its
+        # notebook's, so moving the folder must not rewrite a byte of it.
+        read = self.client.get("/api/notebooks/After/notes/Note.md")
+        self.assertEqual(read.status_code, 200, read.text)
+        self.assertEqual(read.json()["content"], "# Note\n\nBody.\n")
+
+    def test_renaming_a_note_onto_an_existing_one_is_rejected(self):
+        self.client.post("/api/notebooks", json={"name": "Clash"})
+        self.client.post("/api/notebooks/Clash/notes", json={"name": "One"})
+        self.client.post("/api/notebooks/Clash/notes", json={"name": "Two"})
+
+        # Silently overwriting here would destroy a note the user never named.
+        clash = self.client.post(
+            "/api/notebooks/Clash/notes/One.md/rename", json={"new_name": "Two"})
+        self.assertEqual(clash.status_code, 409)
+        self.assertEqual(self.client.get("/api/notebooks/Clash/notes/One.md").status_code, 200)
+
+    def test_renaming_a_note_out_of_its_notebook_is_rejected(self):
+        self.client.post("/api/notebooks", json={"name": "Fenced"})
+        self.client.post("/api/notebooks/Fenced/notes", json={"name": "Inside"})
+
+        escaped = self.client.post(
+            "/api/notebooks/Fenced/notes/Inside.md/rename", json={"new_name": "../Outside"})
+        self.assertEqual(escaped.status_code, 400)
+        self.assertEqual(self.client.get("/api/notebooks/Fenced/notes/Inside.md").status_code, 200)
+
+    def test_renaming_a_notebook_takes_its_notes_and_leaves_the_rest(self):
+        for notebook in ("Old", "Bystander"):
+            self.client.post("/api/notebooks", json={"name": notebook})
+            self.client.post(f"/api/notebooks/{notebook}/notes", json={"name": "One"})
+
+        renamed = self.client.post("/api/notebooks/Old/rename", json={"new_name": "New"})
+        self.assertEqual(renamed.status_code, 200, renamed.text)
+
+        library = self.client.get("/api/library").json()
+        self.assertIn("New", library["notebooks"])
+        self.assertNotIn("Old", library["notebooks"])
+        self.assertEqual(self.client.get("/api/notebooks/New/notes/One.md").status_code, 200)
+
+        # A neighbour must survive: the rename moves one directory, not a prefix
+        # match across the notes tree.
+        self.assertIn("Bystander", library["notebooks"])
+        self.assertEqual(self.client.get("/api/notebooks/Bystander/notes/One.md").status_code, 200)
+
+    def test_renaming_a_notebook_onto_an_existing_one_is_rejected(self):
+        for notebook in ("Source", "Target"):
+            self.client.post("/api/notebooks", json={"name": notebook})
+        clash = self.client.post("/api/notebooks/Source/rename", json={"new_name": "Target"})
+        self.assertEqual(clash.status_code, 409)
+        self.assertIn("Source", self.client.get("/api/library").json()["notebooks"])
+
     # ── Sign-out ────────────────────────────────────────────
     def test_sign_out_clears_credentials_without_touching_notes(self):
         # The real endpoint deletes the OS keyring entry and the auth file, so

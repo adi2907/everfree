@@ -439,6 +439,12 @@
                     </span>
                 `;
                 $item.addEventListener("click", () => openNote(result.notebook, result.note));
+                // Same menu as a note card: a search hit is the fastest way to
+                // reach a note, so rename/move/delete have to be reachable here too.
+                $item.addEventListener("contextmenu", (e) => {
+                    e.preventDefault();
+                    showNoteMenu(e, result.notebook, result.note);
+                });
                 $noteBrowserList.appendChild($item);
             }
         } catch (err) {

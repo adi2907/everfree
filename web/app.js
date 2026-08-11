@@ -511,6 +511,82 @@
         persistNoteMeta();
     }
 
+    // Move blobs to new paths in one commit, and return how many moved. The
+    // Contents API has no rename: a move would be a create plus a delete, which
+    // is two commits and leaves the note in both places — or in neither — if the
+    // second one fails. One tree write reuses the existing blob SHAs, so nothing
+    // is re-uploaded and renaming a notebook costs the same six requests whether
+    // it holds two notes or two hundred. `rewrite` returns a blob's new path, or
+    // `{to, content}` to rewrite it on the way, or null to leave it where it is.
+    //
+    // A rewritten blob is a new object, so it is uploaded first and the tree
+    // names the sha that came back. The sha cannot be read off the create-tree
+    // response instead: that lists the root tree, and a note lives one level
+    // down inside its notebook.
+    async function movePaths(rewrite, message) {
+        const ref = await gh("GET", `/repos/${repoFull}/git/ref/heads/${encodeURIComponent(defaultBranch)}`);
+        const head = ref.object.sha;
+        const commit = await gh("GET", `/repos/${repoFull}/git/commits/${head}`);
+        const tree = await gh("GET", `/repos/${repoFull}/git/trees/${commit.tree.sha}?recursive=1`);
+
+        const moves = [];
+        for (const entry of tree.tree || []) {
+            if (entry.type !== "blob") continue;
+            const target = rewrite(entry.path);
+            if (!target) continue;
+            const { to, content } = typeof target === "string" ? { to: target } : target;
+            if (to === entry.path && content === undefined) continue;
+            moves.push({ from: entry.path, to, content, mode: entry.mode, sha: entry.sha });
+        }
+        if (!moves.length) return 0;
+
+        for (const move of moves) {
+            if (move.content === undefined) continue;
+            const blob = await gh("POST", `/repos/${repoFull}/git/blobs`, {
+                content: b64EncodeUnicode(move.content),
+                encoding: "base64",
+            });
+            move.sha = blob.sha;
+        }
+
+        // Drops before adds. Both orders work here because a rename never lands
+        // on a path it also vacates, but reading it this way keeps it obvious
+        // that the old paths are gone rather than copied.
+        const newTree = await gh("POST", `/repos/${repoFull}/git/trees`, {
+            base_tree: commit.tree.sha,
+            tree: [
+                ...moves.map((m) => ({ path: m.from, mode: m.mode, type: "blob", sha: null })),
+                ...moves.map((m) => ({ path: m.to, mode: m.mode, type: "blob", sha: m.sha })),
+            ],
+        });
+        const newCommit = await gh("POST", `/repos/${repoFull}/git/commits`, {
+            message: message || `Move ${moves.length} file(s)`,
+            tree: newTree.sha,
+            parents: [head],
+        });
+        await gh("PATCH", `/repos/${repoFull}/git/refs/heads/${encodeURIComponent(defaultBranch)}`, {
+            sha: newCommit.sha,
+        });
+
+        // The caches are keyed by path, so carry each entry across to its new
+        // one rather than dropping it. noteMeta is keyed by blob SHA, which a
+        // plain move leaves untouched, so the recorded save times survive on
+        // their own; a rewritten blob gets a new SHA, so its entry is dropped
+        // and the caller records the save against the version it just wrote.
+        for (const m of moves) {
+            const oldSha = fileShas[m.from];
+            if (m.from in fileShas) { fileShas[m.to] = fileShas[m.from]; delete fileShas[m.from]; }
+            if (m.from in noteContentCache) { noteContentCache[m.to] = noteContentCache[m.from]; delete noteContentCache[m.from]; }
+            if (m.from in noteTitleCache) { noteTitleCache[m.to] = noteTitleCache[m.from]; delete noteTitleCache[m.from]; }
+            if (m.content === undefined) continue;
+            fileShas[m.to] = m.sha;
+            noteContentCache[m.to] = m.content;
+            if (oldSha && oldSha !== m.sha) { delete noteMeta[oldSha]; noteMetaDirty = true; }
+        }
+        persistNoteMeta();
+        return moves.length;
+    }
+
     // ── Base64 (UTF-8 safe) ─────────────────────────────────
     function b64EncodeUnicode(str) {
         return btoa(unescape(encodeURIComponent(str)));
@@ -729,6 +805,7 @@
             });
             bindContextMenu($header, () => [
                 { label: "New note…", action: () => createNoteIn(nb) },
+                { label: "Rename notebook…", action: () => renameNotebook(nb) },
                 { label: "Delete notebook", danger: true, action: () => deleteNotebook(nb) },
             ]);
             $list.appendChild($header);
@@ -778,6 +855,7 @@
             <span class="note-card-title">${escapeHtml(noteTitleCache[`${item.notebook}/${item.note}`] || (metaFor(`${item.notebook}/${item.note}`) || {}).ti || noteFilenameTitle(item.note))}</span>`;
         $note.addEventListener("click", () => openNote(item.notebook, item.note));
         bindContextMenu($note, () => [
+            { label: "Rename…", action: () => renameNoteAt(item.notebook, item.note) },
             { label: "Delete note", danger: true, action: () => deleteNoteAt(item.notebook, item.note) },
         ]);
         observeNoteCardTitle($note, item);
@@ -946,6 +1024,117 @@
         }
     }
 
+    // ── Rename ──────────────────────────────────────────────
+    // A rename moves the blob the editor saves into. An unsaved edit would be
+    // written back to the old path afterwards and resurrect the note under its
+    // old name, so settle the open note first and abort if that save fails —
+    // saveNote() clears isDirty only when the push succeeded.
+    async function settleOpenNoteBefore(what) {
+        if (!isDirty) return;
+        await saveNote();
+        if (isDirty) throw new Error(`Save the open note before renaming ${what}.`);
+    }
+
+    function updateBreadcrumb() {
+        if (!currentNotebook || !currentNote) return;
+        const path = `${currentNotebook}/${currentNote}`;
+        const title = noteTitleCache[path] || (metaFor(path) || {}).ti || noteFilenameTitle(currentNote);
+        $("note-breadcrumb").textContent = `${currentNotebook} / ${title}`;
+    }
+
+    function renameNoteAt(nb, note) {
+        const base = note.replace(/\.md$/i, "");
+        showModal("Rename Note", "New name…", async (raw) => {
+            const next = raw.trim().replace(/\.md$/i, "");
+            if (!next) throw new Error("Note names cannot be empty.");
+            if (/[\/\\]/.test(next)) throw new Error("Note names cannot contain slashes.");
+            const noteName = `${next}.md`;
+            if (noteName === note) return;
+            // A case-only rename is a real rename, so the note itself is not a
+            // collision — anything else in the notebook is.
+            if ((notesByNotebook[nb] || []).some((n) => n !== note && n.toLowerCase() === noteName.toLowerCase())) {
+                throw new Error(`"${next}" already exists in ${nb}.`);
+            }
+
+            const isOpen = currentNotebook === nb && currentNote === note;
+            if (isOpen) await settleOpenNoteBefore("it");
+
+            const from = `${nb}/${note}`;
+            const to = `${nb}/${noteName}`;
+            setSyncStatus("syncing", "Renaming…");
+            try {
+                // The heading moves with the file, so the note's own title has
+                // to be read first — from the cache when the note has been
+                // opened this session, and off GitHub when it has not.
+                const before = noteContentCache[from] !== undefined
+                    ? noteContentCache[from]
+                    : (await getFile(from)).content;
+                const after = retitleContent(before, next);
+                const moved = await movePaths(
+                    (path) => (path === from ? { to, content: after } : null),
+                    `Rename ${from} to ${to}`);
+                if (!moved) throw new Error("The note is no longer in the repository.");
+
+                notesByNotebook[nb] = (notesByNotebook[nb] || []).map((n) => (n === note ? noteName : n));
+                cacheNoteTitle(nb, noteName, after);
+                setMeta(to, { t: Date.now() });
+                persistNoteMeta();
+                if (isOpen) {
+                    currentNote = noteName;
+                    // The editor still holds the old heading, and it is what the
+                    // next save writes — leaving it would undo the rename.
+                    setEditorContent(after);
+                    updateBreadcrumb();
+                }
+            } catch (err) {
+                setSyncStatus("error", "Rename failed");
+                throw err;
+            }
+
+            renderSidebar($("search-input").value);
+            setSyncStatus("ok", repoFull);
+        }, { value: base, confirmLabel: "Rename" });
+    }
+
+    function renameNotebook(nb) {
+        showModal("Rename Notebook", "New name…", async (raw) => {
+            const name = raw.trim().replace(/\/+$/, "");
+            // A leading dot would create a notebook that loadNotebooks() filters
+            // straight back out, so the user would see it vanish.
+            if (!name || name.startsWith(".")) throw new Error("Notebook names cannot start with a dot.");
+            if (/[\/\\]/.test(name)) throw new Error("Notebook names cannot contain slashes.");
+            if (name === nb) return;
+            if (notebooks.some((other) => other !== nb && other.toLowerCase() === name.toLowerCase())) {
+                throw new Error(`A notebook called "${name}" already exists.`);
+            }
+
+            const holdsOpenNote = currentNotebook === nb && currentNote;
+            if (holdsOpenNote) await settleOpenNoteBefore("its notebook");
+
+            setSyncStatus("syncing", "Renaming notebook…");
+            try {
+                // Every blob under the folder, not just the .md files: a
+                // notebook also carries .gitkeep and the assets/ images its
+                // notes link to by relative path.
+                const moved = await movePaths(
+                    (path) => (path.startsWith(nb + "/") ? name + path.slice(nb.length) : null),
+                    `Rename notebook ${nb} to ${name}`);
+                if (!moved) throw new Error("The notebook is no longer in the repository.");
+            } catch (err) {
+                setSyncStatus("error", "Rename failed");
+                throw err;
+            }
+
+            notebooks = notebooks.map((other) => (other === nb ? name : other));
+            notesByNotebook[name] = notesByNotebook[nb] || [];
+            delete notesByNotebook[nb];
+            if (selectedNotebook === nb) selectedNotebook = name;
+            if (currentNotebook === nb) { currentNotebook = name; updateBreadcrumb(); }
+            renderSidebar($("search-input").value);
+            setSyncStatus("ok", repoFull);
+        }, { value: nb, confirmLabel: "Rename" });
+    }
+
     async function renderSearchResults(query) {
         const seq = ++searchSeq;
         $("note-browser-title").textContent = "Search";
@@ -981,6 +1170,7 @@
                     <span class="note-card-meta">${escapeHtml(result.notebook)}</span>`;
                 $note.addEventListener("click", () => openNote(result.notebook, result.note));
                 bindContextMenu($note, () => [
+                    { label: "Rename…", action: () => renameNoteAt(result.notebook, result.note) },
                     { label: "Delete note", danger: true, action: () => deleteNoteAt(result.notebook, result.note) },
                 ]);
                 $list.appendChild($note);
@@ -1074,6 +1264,24 @@
             if (match && match[1].trim()) return match[1].trim();
         }
         return fallback;
+    }
+
+    // Rewrite the heading a note's title comes from, so renaming the file
+    // renames the note everywhere it is shown rather than only in the repo.
+    // The scan has to stay identical to getNoteTitle()'s or the rewrite lands on
+    // a different line than the one on display. A note with no H1 already falls
+    // back to its file name and needs nothing — inserting a heading would put
+    // content in the note that the user never wrote.
+    function retitleContent(content, title) {
+        const lines = String(content || "").split(/\r?\n/);
+        for (let i = 0; i < lines.length; i++) {
+            const match = lines[i].trim().match(/^#\s+(.+?)\s*#*\s*$/);
+            if (!match || !match[1].trim()) continue;
+            // Keep whatever the line was indented by, and the BOM if it had one.
+            lines[i] = `${lines[i].match(/^\s*/)[0]}# ${title}`;
+            return lines.join("\n");
+        }
+        return content;
     }
 
     function cacheNoteTitle(notebook, note, content) {
@@ -1492,6 +1700,16 @@
         });
     }
 
+    // Replace what the editor holds with content that is already committed.
+    // setMarkdown fires the change handler, which would flag the note unsaved
+    // over a write the client itself just pushed, so the flag is cleared after.
+    function setEditorContent(content) {
+        if (!editor) return;
+        editor.setMarkdown(content);
+        isDirty = false;
+        $("save-status").textContent = "";
+    }
+
     // ── Save Note ───────────────────────────────────────────
     async function saveNote() {
         if (!currentNotebook || !currentNote || !editor) return;
@@ -1659,13 +1877,17 @@
 
     // ── Modal ───────────────────────────────────────────────
     let modalCallback = null;
-    function showModal(title, placeholder, callback) {
+    // `opts.value` prefills the input — a rename starts from the current name,
+    // selected, so a small edit is a small edit and replacing it outright is
+    // still one keystroke away.
+    function showModal(title, placeholder, callback, opts = {}) {
         $("modal-title").textContent = title;
         $("modal-input").placeholder = placeholder;
-        $("modal-input").value = "";
+        $("modal-input").value = opts.value || "";
+        $("modal-confirm").textContent = opts.confirmLabel || "Create";
         modalCallback = callback;
         $("modal-overlay").style.display = "flex";
-        setTimeout(() => $("modal-input").focus(), 50);
+        setTimeout(() => { $("modal-input").focus(); $("modal-input").select(); }, 50);
     }
     function hideModal() {
         $("modal-overlay").style.display = "none";

@@ -85,6 +85,11 @@ const listNotes = (sandbox, nb) => {
   return fs.existsSync(dir) ? fs.readdirSync(dir).sort() : null;
 };
 
+const readNote = (sandbox, nb, note) => {
+  const file = path.join(sandbox.notes, nb, note);
+  return fs.existsSync(file) ? fs.readFileSync(file, "utf8") : null;
+};
+
 // ══════════════════════════════════════════════════════════
 (async () => {
   const deps = spawnSync(PYTHON, ["-c", "import fastapi, uvicorn"], { cwd: REPO_ROOT });
@@ -171,14 +176,65 @@ const listNotes = (sandbox, nb) => {
     check("desktop: formatting toolbar is visible",
       editorStart.toolbarVisible, JSON.stringify(editorStart));
 
-    // ── Delete a note from its context menu ──
+    // ── Rename that note from its context menu ──
+    // The desktop cards title themselves from the file name, so the row itself
+    // shows whether the client rebound to the new path.
     await page.click('.note-card:has(.note-card-title:text-is("Bread"))', { button: "right" });
+    await page.click('#context-menu .context-menu-item:text-is("Rename…")');
+    await page.waitForSelector("#modal-overlay >> visible=true");
+    const prefill = await page.inputValue("#modal-input");
+    check("desktop: rename opens on the current name", prefill === "Bread", prefill);
+    await page.fill("#modal-input", "Sourdough");
+    await page.click("#modal-confirm");
+    await page.waitForTimeout(2000);
+    check("desktop: renamed note is on disk under its new name",
+      (listNotes(sandbox, "Recipes") || []).includes("Sourdough.md")
+        && !(listNotes(sandbox, "Recipes") || []).includes("Bread.md"),
+      JSON.stringify(listNotes(sandbox, "Recipes")));
+
+    // The desktop lists notes by file name, but the note syncs to the same repo
+    // the web client reads, and that one titles a note by its H1.
+    const renamedBody = readNote(sandbox, "Recipes", "Sourdough.md");
+    check("desktop: the renamed note's heading follows on disk",
+      (renamedBody || "").startsWith("# Sourdough"), JSON.stringify(renamedBody));
+
+    // The desktop reopens the note after a rename, so the editor has to be
+    // showing the retitled body — otherwise its next autosave undoes the rename.
+    const editorBody = await page.evaluate(() => window.__editorValue);
+    check("desktop: the editor reopened on the retitled body",
+      (editorBody || "").startsWith("# Sourdough"), JSON.stringify(editorBody));
+
+    // ── Rename the notebook, with the note still open in it ──
+    await page.click('.notebook-header:has(.notebook-name:text-is("Recipes"))', { button: "right" });
+    await page.click('#context-menu .context-menu-item:text-is("Rename…")');
+    await page.waitForSelector("#modal-overlay >> visible=true");
+    await page.fill("#modal-input", "Baking");
+    await page.click("#modal-confirm");
+    await page.waitForFunction(
+      () => [...document.querySelectorAll(".notebook-name")].some((n) => n.textContent === "Baking"),
+      { timeout: 20000 }
+    );
+    check("desktop: renamed notebook takes its notes with it",
+      (listNotes(sandbox, "Baking") || []).includes("Sourdough.md")
+        && !fs.existsSync(path.join(sandbox.notes, "Recipes")),
+      JSON.stringify(listNotes(sandbox, "Baking")));
+    // Only a note rename retitles: a note's heading is its own name, not its
+    // notebook's, so moving the folder must not rewrite a byte of it.
+    const movedBody = readNote(sandbox, "Baking", "Sourdough.md");
+    check("desktop: renaming a notebook leaves its notes' contents alone",
+      movedBody === renamedBody, JSON.stringify(movedBody));
+    check("desktop: renaming a notebook leaves its siblings alone",
+      (listNotes(sandbox, "Journal") || []).length === 2,
+      JSON.stringify(listNotes(sandbox, "Journal")));
+
+    // ── Delete a note from its context menu ──
+    await page.click('.note-card:has(.note-card-title:text-is("Sourdough"))', { button: "right" });
     await page.waitForSelector("#context-menu .context-menu-item.danger");
     await page.click("#context-menu .context-menu-item.danger");
     await page.waitForTimeout(2000);
     check("desktop: deleted note is gone from disk",
-      !(listNotes(sandbox, "Recipes") || []).includes("Bread.md"),
-      JSON.stringify(listNotes(sandbox, "Recipes")));
+      !(listNotes(sandbox, "Baking") || []).includes("Sourdough.md"),
+      JSON.stringify(listNotes(sandbox, "Baking")));
 
     // ── Delete a whole notebook, notes and all ──
     check("desktop: target notebook starts populated",
