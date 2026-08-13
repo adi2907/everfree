@@ -79,7 +79,7 @@
                 </p>
 
                 <div id="signin-idle" class="landing-actions">
-                    <a class="btn landing-download" href="https://github.com/adi2907/everfree/releases/download/v1.5/EverFree.dmg">
+                    <a class="btn landing-download" href="https://github.com/adi2907/everfree/releases/download/v1.6/EverFree.dmg">
                         Get EverFree for Mac - DMG file
                     </a>
                     <button class="btn landing-web-cta" id="btn-github-signin-hero">
@@ -150,6 +150,11 @@
                         <span class="feature-number">04</span>
                         <h4>Keep the exit door open forever</h4>
                         <p>Your notes are plain files in a private repo you control</p>
+                    </article>
+                    <article class="feature-card">
+                        <span class="feature-number">05</span>
+                        <h4>Give your coding agents memory</h4>
+                        <p>The Mac app ships an MCP server. Claude Code and anything else that speaks MCP can search your notes and write back to them.</p>
                     </article>
                 </div>
             </section>
@@ -287,6 +292,32 @@
     &#9492;&#9472;&#9472; header-sketch.png</pre>
             </section>
 
+            <section class="landing-section landing-agents" id="agents">
+                <div class="storage-copy">
+                    <p class="section-eyebrow">Memory for coding agents</p>
+                    <h3>EverFree is the disk. The agent is the mind.</h3>
+                    <p>
+                        The Mac app ships an MCP server. Point Claude Code at it and your agent can
+                        search everything you have written, read a note, and write back what it
+                        worked out. One command, no account, no extra install.
+                    </p>
+                    <p>
+                        EverFree keeps the Markdown and gets out of the way. Nothing is summarised
+                        and nothing is scored for importance. What the agent writes is a normal
+                        note, so it shows up on your phone like anything else.
+                    </p>
+                </div>
+                <pre class="repo-tree" aria-label="Connecting a coding agent to EverFree">$ claude mcp add everfree -- \
+    /Applications/EverFree.app/Contents/MacOS/everfree-mcp
+
+&gt; search_notes("pricing decision")
+Research/renewal-note.md &mdash; Renewal note
+    &hellip;settled on leaving before the $100 renewal&hellip;
+
+&gt; append_note("Drafts/worklog.md", "Shipped the importer.")
+Appended to Drafts/worklog.md &mdash; delivered</pre>
+            </section>
+
             <section class="landing-section landing-start" id="get-started">
                 <p class="section-eyebrow">From Evernote to EverFree</p>
                 <h3>Out in three steps.</h3>
@@ -362,7 +393,7 @@
                     <a href="https://github.com/adi2907/everfree" target="_blank" rel="noopener">GitHub</a>
                     <a href="https://github.com/adi2907/everfree/releases" target="_blank" rel="noopener">Releases</a>
                     <a href="https://github.com/adi2907/everfree/issues" target="_blank" rel="noopener">Report an issue</a>
-                    <a href="https://github.com/adi2907/everfree/releases/download/v1.5/EverFree.dmg">Mac DMG</a>
+                    <a href="https://github.com/adi2907/everfree/releases/download/v1.6/EverFree.dmg">Mac DMG</a>
                     <a href="/mobile/">Mobile</a>
                 </nav>
             </footer>

@@ -10,17 +10,20 @@ It is fully featured, syncs across devices and your backend stays the same. Your
 
 I am a compulsive note taker. When Bending Spoons (the owner of Evernote) hiked my annual renewal to $100 for a tiny bit of cloud storage, I needed to get out.
 
+My coding agents read and write these notes too. The Mac app ships an MCP server,
+so Claude Code can look things up in my notes instead of asking me again.
+
 It's free, MIT-licensed, and the Mac app ships as a signed and notarized DMG.
 
 - Web app: [everfree.vercel.app](https://everfree.vercel.app)
 - Mobile: [everfree.vercel.app/mobile](https://everfree.vercel.app/mobile/)
-- Mac DMG: [EverFree.dmg](https://github.com/adi2907/everfree/releases/download/v1.5/EverFree.dmg)
+- Mac DMG: [EverFree.dmg](https://github.com/adi2907/everfree/releases/download/v1.6/EverFree.dmg)
 
 
 ## Getting started
 
 **On the Mac:** download the
-[DMG](https://github.com/adi2907/everfree/releases/download/v1.5/EverFree.dmg)
+[DMG](https://github.com/adi2907/everfree/releases/download/v1.6/EverFree.dmg)
 and open it — it's signed and notarized, so no Gatekeeper workarounds. The
 setup wizard walks you through allowing Documents access, optionally
 connecting Evernote to import your old notebooks as Markdown, and connecting
@@ -38,29 +41,22 @@ GitHub API.
 
 ## Notes as memory for coding agents
 
-EverFree exposes your notes to coding agents over MCP, so an agent can search
-what you already wrote and record what it decided. EverFree is the disk here,
-not the mind: it stores, syncs and versions Markdown and offers list, search,
-read, write, append, move and delete. It does not summarise your notes, extract
-"facts", or decide what matters — the agent does that.
+I spend all day in Claude Code, and it kept forgetting things I had already
+written down. So the Mac app now ships an MCP server. Your agent can search
+your notes, read them, and write back what it decided.
 
-The MCP server ships inside the app, so there is nothing extra to install. With
-EverFree running:
+With EverFree running:
 
 ```bash
 claude mcp add everfree -- /Applications/EverFree.app/Contents/MacOS/everfree-mcp
 ```
 
-EverFree will print the exact command for your install at
-`http://127.0.0.1:52321/api/agent/mcp`.
+It is my disk, not my second brain. EverFree keeps the Markdown and gets out of
+the way. No summarising, no extracted "facts", no embeddings deciding what is
+relevant. The agent works that out. Whatever it writes is a normal note, so it
+shows up on my phone like anything else.
 
-Appends are safe from several machines at once, reads are checked against the
-remote before they are served, and overwriting an existing note requires the
-revision it was read at. Notes an agent writes are ordinary Markdown, so they
-appear in the web and mobile clients like anything else.
-
-Setup, the full tool list, and the cross-machine behaviour are in
-[`docs/agent-access.md`](docs/agent-access.md).
+Mac only. The details are in [`docs/agent-access.md`](docs/agent-access.md).
 
 Maintainers configuring authentication should read
 [`docs/github-oauth-setup.md`](docs/github-oauth-setup.md). The security and

@@ -1670,7 +1670,8 @@ body.resizing-panes .note-browser {
 }
 
 /* ── Storage section ── */
-.landing-storage {
+.landing-storage,
+.landing-agents {
     display: grid;
     grid-template-columns: minmax(0, 1.1fr) minmax(280px, 0.9fr);
     gap: 48px;
@@ -1920,7 +1921,8 @@ body.resizing-panes .note-browser {
 /* ── Landing responsive ── */
 @media (max-width: 860px) {
     .landing-problem,
-    .landing-storage {
+    .landing-storage,
+    .landing-agents {
         grid-template-columns: 1fr;
         gap: 28px;
         align-items: start;
@@ -1987,7 +1989,8 @@ body.resizing-panes .note-browser {
         gap: 14px;
     }
 
-    .landing-storage {
+    .landing-storage,
+    .landing-agents {
         padding: 30px 22px;
     }
 
