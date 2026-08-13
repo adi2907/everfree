@@ -29,6 +29,10 @@ DATA_FILES = [
 
 OPTIONS = {
     "argv_emulation": False,
+    # Builds Contents/MacOS/everfree-mcp next to the app binary, sharing the
+    # bundled interpreter. Agent access has to be usable from the DMG alone —
+    # `python3 -m server.mcp_server` only works in a source checkout.
+    "extra_scripts": ["packaging/everfree-mcp.py"],
     "packages": [
         # FastAPI and its dependencies — all need explicit inclusion
         # because they rely on dynamic imports that py2app can't trace.

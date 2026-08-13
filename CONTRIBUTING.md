@@ -23,6 +23,10 @@ files, and private GitHub-backed sync.
 - Keep mobile and web behavior aligned with the desktop data model.
 - Treat migration code carefully: avoid destructive deletes or irreversible
   transforms without explicit user confirmation.
+- Keep EverFree a store, not an interpreter. Agent access exposes list, search,
+  read, write, append, move and delete over the same Markdown. Do not add fact
+  extraction, memory consolidation, embeddings, or relevance judgements — those
+  belong to the agent. See [`docs/agent-access.md`](docs/agent-access.md).
 
 ## Development Setup
 
@@ -44,7 +48,9 @@ http://127.0.0.1:52321
 Run the checks relevant to the files you changed:
 
 ```bash
-python3 -m py_compile run.py server/app.py packaging/setup_py2app.py
+python3 -m unittest discover -s tests -p "test_*.py"
+python3 -m py_compile run.py server/app.py server/agent.py server/memory.py \
+    server/mcp_server.py packaging/setup_py2app.py
 node --check frontend/app.js
 node --check frontend/setup.js
 node --check web/app.js

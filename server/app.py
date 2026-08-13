@@ -34,7 +34,7 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from server import assistant
+from server import agent, assistant, memory
 from server.github_auth import (
     CredentialStoreError,
     REPOSITORY_NAME,
@@ -606,6 +606,17 @@ def _resolve_merge_conflicts() -> list[str]:
     return saved
 
 
+def _incoming_remote_paths() -> set[str]:
+    """Paths a merge of FETCH_HEAD would bring in, relative to the repo root."""
+    result = _git(
+        "-c", "core.quotepath=false",
+        "diff", "--name-only", "HEAD...FETCH_HEAD", check=False,
+    )
+    if result.returncode != 0:
+        return set()
+    return {line.strip() for line in result.stdout.splitlines() if line.strip()}
+
+
 def _classify_git_failure(stderr: str) -> tuple[str, str] | None:
     """Map git stderr to a ("action", "message") pair when the fault is terminal."""
     if _is_rate_limit_error(stderr):
@@ -666,6 +677,30 @@ def _sync_cycle(push: bool) -> None:
         with _repo_lock:
             has_local = bool(_git("status", "--porcelain", check=True).stdout.strip())
             if has_local and not push:
+                # A dirty note blocks only the paths it actually touches.
+                # Bailing on any local change at all made staleness unbounded:
+                # an unsaved edit to one note stopped every other device's
+                # notes from arriving, indefinitely and silently. That is
+                # tolerable when a human is watching the sync badge and not
+                # when an agent is reading the repository as memory.
+                incoming = _incoming_remote_paths()
+                # `-z` so a non-ASCII note name is compared raw against the
+                # raw paths `_incoming_remote_paths` returns. C-quoted output
+                # would never match and the overlap would be missed.
+                dirty = agent.parse_porcelain(
+                    _git(*agent.STATUS_ARGS, check=False).stdout
+                )
+                if incoming & dirty:
+                    _set_sync_state(
+                        status="idle",
+                        online=True,
+                        pending=True,
+                        detail="Saved locally",
+                    )
+                    return
+                merge = _git("merge", "--no-edit", "FETCH_HEAD", check=False)
+                if merge.returncode != 0:
+                    _git("merge", "--abort", check=False)
                 _set_sync_state(
                     status="idle",
                     online=True,
@@ -1895,12 +1930,35 @@ def _run_search(query: str) -> list[dict]:
     return results[:100]
 
 
+def _indexed_search(query: str) -> list[dict]:
+    """Ranked search through the FTS index, falling back to the scan.
+
+    BM25 is what lets a result list be short and still right, which the old
+    substring scan could not do — it could tell you a word occurred but not
+    which note it mattered in. The scan stays as the fallback because FTS5
+    matches whole tokens with a trailing prefix, so a query typed into the
+    middle of a word ("verfre") still has to find something.
+    """
+    try:
+        index = _note_index()
+        index.refresh()
+        results = index.search(query, limit=100)
+    except Exception:
+        logger.exception("Indexed search failed; falling back to scan")
+        return _run_search(query)
+    if results:
+        for result in results:
+            result.pop("path", None)
+        return results
+    return _run_search(query)
+
+
 @app.get("/api/search")
 async def search_notes(q: str = ""):
     query = q.strip()
     if not query:
         return []
-    return await asyncio.to_thread(_run_search, query)
+    return await asyncio.to_thread(_indexed_search, query)
 
 
 # ── API: Notebooks ───────────────────────────────────────────
@@ -2264,6 +2322,390 @@ async def serve_note_asset(file_path: str):
     if not resolved.is_file():
         raise HTTPException(status_code=404, detail="Not found")
     return FileResponse(resolved)
+
+
+# ══════════════════════════════════════════════════════════════
+#  AGENT ACCESS
+#  EverFree is the disk; the coding agent is the mind. These routes expose the
+#  repository as durable storage — list, search, read, write, append, move,
+#  delete — and nothing else. No extraction, no ranking by "importance", no
+#  synthesised context. The agent decides what matters.
+#
+#  Every mutation is a single resident process (this one) touching the working
+#  tree, which is what makes `_repo_lock` sufficient. The MCP server is a thin
+#  client of these routes precisely so that stays true when several agents run
+#  at once.
+# ══════════════════════════════════════════════════════════════
+_agent_lock = threading.Lock()
+_agent_state: tuple[Path, memory.NoteIndex, agent.AgentRepo] | None = None
+
+
+def _agent_repo() -> agent.AgentRepo:
+    """The AgentRepo bound to the current NOTES_DIR, rebuilt if it changes."""
+    global _agent_state
+    with _agent_lock:
+        current = NOTES_DIR
+        if _agent_state is not None and _agent_state[0] == current:
+            return _agent_state[2]
+        if _agent_state is not None:
+            _agent_state[1].close()
+        index = memory.NoteIndex(current)
+        repo = agent.AgentRepo(
+            notes_dir=current,
+            index=index,
+            git=_git,
+            repo_lock=_repo_lock,
+            is_git_repo=_is_git_repo,
+            branch=SYNC_BRANCH,
+            classify_failure=_classify_git_failure,
+            is_network_error=_is_network_error,
+            request_sync=lambda: request_sync(immediate=True),
+            atomic_write_text=_atomic_write_text,
+        )
+        _agent_state = (current, index, repo)
+        return repo
+
+
+def _note_index() -> memory.NoteIndex:
+    _agent_repo()
+    assert _agent_state is not None
+    return _agent_state[1]
+
+
+@app.exception_handler(memory.NotePathError)
+async def _handle_note_path_error(request: Request, exc: memory.NotePathError):
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+
+@app.exception_handler(agent.AgentConflict)
+async def _handle_agent_conflict(request: Request, exc: agent.AgentConflict):
+    return JSONResponse(
+        status_code=409,
+        content={"detail": exc.message, "paths": exc.paths},
+    )
+
+
+@app.exception_handler(agent.AgentOffline)
+async def _handle_agent_offline(request: Request, exc: agent.AgentOffline):
+    return JSONResponse(status_code=503, content={"detail": str(exc)})
+
+
+def _apply_freshness(repo: agent.AgentRepo, fresh: str, *, for_write: bool = False) -> dict:
+    """Run the read barrier in the mode the caller asked for.
+
+    `strict` fails rather than serve content it could not check against the
+    remote; `auto` serves it with the freshness record attached so the caller
+    can see it was not verified; `skip` reindexes from disk only.
+
+    A mutation always forces a real barrier. Reads coalesce checks within a few
+    seconds so opening five results costs one fetch, but reusing that verdict
+    to authorise a write means acting on a view of the remote that is up to
+    that window old — long enough for the revision a compare-and-swap just
+    approved to have been superseded.
+    """
+    if for_write:
+        return repo.require_fresh(strict=False, force=True).as_dict()
+    mode = (fresh or "auto").strip().lower()
+    if mode == "skip":
+        repo.refresh_index()
+        return {"fresh": False, "checked_remote": False, "detail": "Skipped"}
+    return repo.require_fresh(strict=(mode == "strict")).as_dict()
+
+
+def _require_writable(freshness: dict, paths: list[str]) -> None:
+    """Refuse a mutation whose target could not be integrated with the remote.
+
+    A read may reasonably return unverified content with a flag on it, because
+    the caller can still judge it. A write cannot: mutating a path that is
+    already diverged commits the divergence, and the failure only surfaces
+    later at delivery, by which point the local change is written and
+    committed and the endpoint's error no longer describes the state on disk.
+    """
+    blocked = set(freshness.get("blocked_paths") or [])
+    clash = sorted(blocked.intersection(paths))
+    if clash:
+        raise agent.AgentConflict(
+            "Cannot write while these notes conflict with the remote; "
+            "save or sync in EverFree first",
+            paths=clash,
+        )
+
+
+@app.get("/api/agent/health")
+async def agent_health():
+    repo = _agent_repo()
+    index = _note_index()
+    return await asyncio.to_thread(
+        lambda: {
+            "ok": True,
+            "notes_dir": str(NOTES_DIR),
+            "git": _is_git_repo(),
+            "indexed": (repo.refresh_index(), index.count())[1],
+        }
+    )
+
+
+def _mcp_command() -> list[str]:
+    """How to launch the MCP server for this install.
+
+    py2app sets RESOURCEPATH inside the bundle, so a packaged EverFree points
+    at its own executable and needs no Python, no checkout and no working
+    directory. A source checkout falls back to the module form.
+    """
+    resource_path = os.environ.get("RESOURCEPATH")
+    if resource_path:
+        bundled = Path(resource_path).parent / "MacOS" / "everfree-mcp"
+        if bundled.exists():
+            return [str(bundled)]
+    return [sys.executable, "-m", "server.mcp_server"]
+
+
+@app.get("/api/agent/mcp")
+async def agent_mcp_config():
+    """The exact command to register EverFree with an MCP client."""
+    command = _mcp_command()
+    entry = {"command": command[0]}
+    if len(command) > 1:
+        entry["args"] = command[1:]
+    if not os.environ.get("RESOURCEPATH"):
+        entry["cwd"] = str(Path(__file__).resolve().parent.parent)
+    return {
+        "command": command,
+        "claude_code": "claude mcp add everfree -- " + " ".join(command),
+        "mcp_servers": {"everfree": entry},
+    }
+
+
+@app.get("/api/agent/search")
+async def agent_search(q: str = "", limit: int = 20, fresh: str = "auto"):
+    repo = _agent_repo()
+
+    def run():
+        freshness = _apply_freshness(repo, fresh)
+        return {
+            "results": _note_index().search(q, limit=limit),
+            "freshness": freshness,
+        }
+
+    return await asyncio.to_thread(run)
+
+
+@app.get("/api/agent/recent")
+async def agent_recent(limit: int = 20, notebook: str = "", fresh: str = "auto"):
+    repo = _agent_repo()
+
+    def run():
+        freshness = _apply_freshness(repo, fresh)
+        return {
+            "results": _note_index().recent(limit=limit, notebook=notebook or None),
+            "freshness": freshness,
+        }
+
+    return await asyncio.to_thread(run)
+
+
+@app.get("/api/agent/notes")
+async def agent_list_notes(notebook: str = "", fresh: str = "auto"):
+    repo = _agent_repo()
+
+    def run():
+        freshness = _apply_freshness(repo, fresh)
+        index = _note_index()
+        return {
+            "notebooks": index.notebooks(),
+            "notes": index.list_notes(notebook or None),
+            "freshness": freshness,
+        }
+
+    return await asyncio.to_thread(run)
+
+
+@app.get("/api/agent/note")
+async def agent_read_note(path: str, fresh: str = "auto"):
+    repo = _agent_repo()
+
+    def run():
+        freshness = _apply_freshness(repo, fresh)
+        notebook, note, absolute = repo.resolve(path)
+        try:
+            content = absolute.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail=f"Note not found: {path}")
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+        return {
+            "path": memory.note_path_of(notebook, note),
+            "notebook": notebook,
+            "note": note,
+            "content": content,
+            "revision": memory.revision_of_bytes(content.encode("utf-8")),
+            "freshness": freshness,
+        }
+
+    return await asyncio.to_thread(run)
+
+
+@app.put("/api/agent/note")
+async def agent_write_note(request: Request):
+    """Write a note, with compare-and-swap against the revision that was read.
+
+    Overwriting an existing note requires the revision it was read at, or an
+    explicit `force`. Git makes a clobbered note recoverable, but nothing makes
+    it *noticeable* — this is the cheap check that turns a silent overwrite
+    into a conflict the caller has to handle.
+    """
+    body = await request.json()
+    path = body.get("path") or ""
+    content = body.get("content")
+    if not isinstance(content, str):
+        raise HTTPException(status_code=400, detail="content must be a string")
+    expected = body.get("expected_revision")
+    force = bool(body.get("force"))
+    repo = _agent_repo()
+
+    def run():
+        freshness = _apply_freshness(repo, body.get("fresh") or "auto", for_write=True)
+        notebook, note, absolute = repo.resolve(path)
+        rel = memory.note_path_of(notebook, note)
+        _require_writable(freshness, [rel])
+        with _repo_lock:
+            existed = absolute.exists()
+            if existed:
+                current = repo.revision(absolute)
+                if expected is None and not force:
+                    raise agent.AgentConflict(
+                        f"{rel} already exists. Pass expected_revision from a "
+                        "read, or force=true to overwrite.",
+                        paths=[rel],
+                    )
+                if expected is not None and expected != current:
+                    raise agent.AgentConflict(
+                        f"{rel} changed since it was read "
+                        f"(expected {expected}, found {current}).",
+                        paths=[rel],
+                    )
+            else:
+                absolute.parent.mkdir(parents=True, exist_ok=True)
+            _atomic_write_text(absolute, content)
+        delivery = repo.deliver(
+            [rel], f"EverFree: {'update' if existed else 'create'} {rel}"
+        )
+        return {
+            "path": rel,
+            "created": not existed,
+            "revision": repo.revision(absolute),
+            **delivery,
+        }
+
+    return await asyncio.to_thread(run)
+
+
+@app.post("/api/agent/note/append")
+async def agent_append_note(request: Request):
+    """Append to a note, exactly once, even from two machines at the same time.
+
+    Pass the same `operation_id` when retrying a call whose response was lost;
+    the append will not be applied twice.
+    """
+    body = await request.json()
+    path = body.get("path") or ""
+    text = body.get("text")
+    if not isinstance(text, str) or not text.strip():
+        raise HTTPException(status_code=400, detail="text is required")
+    operation_id = body.get("operation_id") or None
+    repo = _agent_repo()
+    return await asyncio.to_thread(
+        lambda: repo.append(path, text, operation_id=operation_id)
+    )
+
+
+@app.post("/api/agent/note/move")
+async def agent_move_note(request: Request):
+    body = await request.json()
+    path = body.get("path") or ""
+    target = (body.get("target_notebook") or "").strip()
+    if not target or "/" in target or "\\" in target:
+        raise HTTPException(status_code=400, detail="target_notebook is required")
+    repo = _agent_repo()
+
+    def run():
+        freshness = _apply_freshness(repo, body.get("fresh") or "auto", for_write=True)
+        notebook, note, source = repo.resolve(path)
+        _, _, destination = repo.resolve(memory.note_path_of(target, note))
+        if not source.exists():
+            raise HTTPException(status_code=404, detail=f"Note not found: {path}")
+        if not destination.parent.is_dir():
+            raise HTTPException(status_code=404, detail=f"Notebook not found: {target}")
+        if destination.exists():
+            raise agent.AgentConflict(f"{target}/{note} already exists")
+        _require_writable(freshness, [
+            memory.note_path_of(notebook, note),
+            memory.note_path_of(target, note),
+        ])
+        with _repo_lock:
+            source.rename(destination)
+        source_rel = memory.note_path_of(notebook, note)
+        target_rel = memory.note_path_of(target, note)
+        delivery = repo.deliver(
+            [source_rel, target_rel], f"EverFree: move {source_rel} to {target_rel}"
+        )
+        return {"path": target_rel, "moved_from": source_rel, **delivery}
+
+    return await asyncio.to_thread(run)
+
+
+@app.delete("/api/agent/note")
+async def agent_delete_note(path: str, expected_revision: str = "", force: bool = False):
+    repo = _agent_repo()
+
+    def run():
+        freshness = _apply_freshness(repo, "auto", for_write=True)
+        notebook, note, absolute = repo.resolve(path)
+        rel = memory.note_path_of(notebook, note)
+        _require_writable(freshness, [rel])
+        with _repo_lock:
+            if not absolute.exists():
+                raise HTTPException(status_code=404, detail=f"Note not found: {path}")
+            current = repo.revision(absolute)
+            if not expected_revision and not force:
+                raise agent.AgentConflict(
+                    f"Deleting {rel} requires expected_revision from a read, "
+                    "or force=true.",
+                    paths=[rel],
+                )
+            if expected_revision and expected_revision != current:
+                raise agent.AgentConflict(
+                    f"{rel} changed since it was read "
+                    f"(expected {expected_revision}, found {current}).",
+                    paths=[rel],
+                )
+            absolute.unlink()
+        delivery = repo.deliver([rel], f"EverFree: delete {rel}")
+        return {"path": rel, "deleted": True, **delivery}
+
+    return await asyncio.to_thread(run)
+
+
+@app.post("/api/agent/notebooks")
+async def agent_create_notebook(request: Request):
+    body = await request.json()
+    name = (body.get("name") or "").strip()
+    if not name or "/" in name or "\\" in name or name.startswith("."):
+        raise HTTPException(status_code=400, detail="Invalid notebook name")
+    nb_path = _safe_notebook_path(name)
+
+    def run():
+        repo = _agent_repo()
+        with _repo_lock:
+            created = not nb_path.exists()
+            nb_path.mkdir(parents=True, exist_ok=True)
+            keep = nb_path / ".gitkeep"
+            if not any(nb_path.iterdir()):
+                keep.touch()
+        delivery = repo.deliver([name], f"EverFree: create notebook {name}")
+        return {"name": name, "created": created, **delivery}
+
+    return await asyncio.to_thread(run)
 
 
 # ── Static assets ────────────────────────────────────────────

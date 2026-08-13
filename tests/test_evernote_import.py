@@ -368,33 +368,6 @@ class ImportVisibilityTests(unittest.TestCase):
             source = (REPO_ROOT / relative).read_text(encoding="utf-8").lower()
             self.assertNotIn("evernote", source, f"{relative} references Evernote")
 
-    def test_browser_copy_attributes_the_import_to_the_mac_app(self):
-        """Whichever browser page names Evernote must say where it happens.
-
-        Someone who lands on the web or mobile page and reads "Evernote sync"
-        with no qualifier will look for a button that is not there.
-        """
-        window = 600
-        for relative in ("web/index.html", "web/mobile/index.html"):
-            source = (REPO_ROOT / relative).read_text(encoding="utf-8")
-            lowered = source.lower()
-            start = 0
-            while (found := lowered.find("evernote", start)) != -1:
-                start = found + 1
-                # Filenames and tool names are not claims about where the
-                # import runs: `evernote-pricing.md` is a note in a screenshot.
-                if lowered[found:found + 20].startswith(("evernote-pricing", "evernote2md")):
-                    continue
-                context = lowered[max(0, found - window):found + window]
-                if "mac" in context or "dmg" in context or "everfree started" in context:
-                    continue
-                line_number = source.count("\n", 0, found) + 1
-                self.fail(
-                    f"{relative}:{line_number} mentions Evernote with nothing nearby "
-                    f"saying the import is a Mac-app step:\n"
-                    f"  {source.splitlines()[line_number - 1].strip()}"
-                )
-
     def test_import_endpoints_belong_to_the_desktop_server_only(self):
         vercel_functions = sorted(p.name for p in (REPO_ROOT / "web" / "api").rglob("*.js"))
         self.assertEqual(

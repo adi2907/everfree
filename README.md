@@ -36,6 +36,32 @@ creates a differently named repository. There is no EverFree account and no
 EverFree database — the web editor commits directly to your repo through the
 GitHub API.
 
+## Notes as memory for coding agents
+
+EverFree exposes your notes to coding agents over MCP, so an agent can search
+what you already wrote and record what it decided. EverFree is the disk here,
+not the mind: it stores, syncs and versions Markdown and offers list, search,
+read, write, append, move and delete. It does not summarise your notes, extract
+"facts", or decide what matters — the agent does that.
+
+The MCP server ships inside the app, so there is nothing extra to install. With
+EverFree running:
+
+```bash
+claude mcp add everfree -- /Applications/EverFree.app/Contents/MacOS/everfree-mcp
+```
+
+EverFree will print the exact command for your install at
+`http://127.0.0.1:52321/api/agent/mcp`.
+
+Appends are safe from several machines at once, reads are checked against the
+remote before they are served, and overwriting an existing note requires the
+revision it was read at. Notes an agent writes are ordinary Markdown, so they
+appear in the web and mobile clients like anything else.
+
+Setup, the full tool list, and the cross-machine behaviour are in
+[`docs/agent-access.md`](docs/agent-access.md).
+
 Maintainers configuring authentication should read
 [`docs/github-oauth-setup.md`](docs/github-oauth-setup.md). The security and
 cross-platform credential-storage decision is recorded in
