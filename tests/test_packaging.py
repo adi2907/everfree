@@ -27,6 +27,17 @@ def _py2app_options() -> dict:
     raise AssertionError("packaging/setup_py2app.py no longer defines OPTIONS")
 
 
+def _data_files() -> list[tuple[str, list[str]]]:
+    """Read DATA_FILES without importing the setuptools build script."""
+    tree = ast.parse(SETUP.read_text(encoding="utf-8"))
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == "DATA_FILES" for t in node.targets
+        ):
+            return ast.literal_eval(node.value)
+    raise AssertionError("packaging/setup_py2app.py no longer defines DATA_FILES")
+
+
 class BundledMcpTests(unittest.TestCase):
     def setUp(self):
         self.options = _py2app_options()
@@ -59,6 +70,14 @@ class BundledMcpTests(unittest.TestCase):
                     "for a source checkout",
                 )
             self.assertIn("everfree-mcp", text, f"{relative}")
+
+    def test_assistant_ui_is_not_copied_into_the_desktop_frontend(self):
+        """Desktop and web must serve the same assistant source file."""
+        destinations = {destination: files for destination, files in _data_files()}
+        self.assertIn("web", destinations)
+        self.assertIn("web/assistant.js", destinations["web"])
+        self.assertNotIn("web/assistant.js", destinations.get("frontend", []))
+        self.assertIn("web/lib/assistant-config.json", destinations["frontend"])
 
 
 if __name__ == "__main__":

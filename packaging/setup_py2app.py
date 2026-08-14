@@ -19,8 +19,13 @@ DATA_FILES = [
         'frontend/setup.html',
         'frontend/setup.css',
         'frontend/setup.js',
-        'web/assistant.js',
         'web/lib/assistant-config.json',
+    ]),
+    # assistant.js is shared by the desktop and web shells. Ship it at the
+    # same path it has in a source checkout instead of copying it into the
+    # desktop frontend.
+    ('web', [
+        'web/assistant.js',
     ]),
     ('frontend/assets', [
         'frontend/assets/everfree-logo.svg',

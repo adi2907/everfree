@@ -26,7 +26,7 @@
     document.head.insertAdjacentHTML("beforeend", `<style>
         /* The panel is a flex sibling of the note panes, so opening it shrinks
            the editor instead of covering it. */
-        .ef-ai-panel{position:relative;flex:0 0 var(--ef-ai-width,370px);width:var(--ef-ai-width,370px);max-width:100vw;height:100vh;z-index:3;display:flex;flex-direction:column;background:var(--bg-surface,#fff);color:var(--text-primary,#222);border-left:1px solid var(--border,#ddd);font-family:var(--font-sans,var(--font,system-ui,sans-serif))}
+        .ef-ai-panel{position:relative;flex:0 0 var(--ef-ai-width,370px);width:var(--ef-ai-width,370px);max-width:min(640px,100vw);height:100vh;z-index:3;display:flex;flex-direction:column;background:var(--bg-surface,#fff);color:var(--text-primary,#222);border-left:1px solid var(--border,#ddd);font-family:var(--font-sans,var(--font,system-ui,sans-serif))}
         .ef-ai-panel[hidden],.ef-ai-view[hidden],.ef-ai-selection[hidden]{display:none!important}
         .ef-ai-resizer{position:absolute;top:0;bottom:0;left:-4px;width:8px;z-index:4;cursor:col-resize;touch-action:none}
         .ef-ai-resizer::after{content:"";position:absolute;inset:0 3px;background:var(--border,#ddd);opacity:0;transition:opacity 120ms ease,background 120ms ease}
@@ -736,8 +736,9 @@
         let startWidth = 0;
         let dragging = false;
 
+        // Establish a bounded initial value even without a saved preference.
         const saved = Number(localStorage.getItem(WIDTH_KEY));
-        if (Number.isFinite(saved) && saved > 0) setPanelWidth(saved);
+        setPanelWidth(Number.isFinite(saved) && saved > 0 ? saved : 370);
 
         // The panel is docked on the right, so dragging left widens it.
         handle.addEventListener("pointerdown", (event) => {

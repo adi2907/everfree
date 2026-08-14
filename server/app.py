@@ -64,7 +64,10 @@ EVERNOTE_SYNC_MAX_DOWNLOAD_WORKERS = int(
 )
 if os.environ.get("RESOURCEPATH"):
     FRONTEND_DIR = Path(os.environ["RESOURCEPATH"]) / "frontend"
-    ASSISTANT_UI_FILE = FRONTEND_DIR / "assistant.js"
+    # Keep this shared UI separate from the desktop-only frontend. The py2app
+    # build used to copy it into frontend/, creating a second source that could
+    # drift from the web client.
+    ASSISTANT_UI_FILE = Path(os.environ["RESOURCEPATH"]) / "web" / "assistant.js"
 else:
     FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
     ASSISTANT_UI_FILE = Path(__file__).resolve().parent.parent / "web" / "assistant.js"
