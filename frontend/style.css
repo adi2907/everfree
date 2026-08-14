@@ -486,12 +486,9 @@ body.resizing-panes .note-browser {
     display: none !important;
 }
 
-/* Formatting controls; EverFree's top bar contains note actions instead. */
-.toastui-editor-defaultUI .toastui-editor-toolbar {
-    background: var(--bg-surface) !important;
-    border-bottom: 1px solid var(--border) !important;
-}
-
+/* Formatting controls; EverFree's top bar contains note actions instead.
+   The docked look is set once, further down with the rest of the editor
+   chrome. */
 .toastui-editor-defaultUI .toastui-editor-toolbar-icons {
     background-color: transparent !important;
     border: none !important;
@@ -1241,19 +1238,23 @@ body {
     position: relative;
 }
 
+/* The controls dock under the note header. Toast UI already renders the
+   toolbar as the first child of .toastui-editor-defaultUI, so leaving it in
+   the flex column puts it there; floating it over the text instead put it
+   under the note body, which carries `z-index: 20` on a relatively
+   positioned .ProseMirror. */
 .toastui-editor-defaultUI .toastui-editor-toolbar {
-    position: absolute !important;
-    z-index: 5;
-    bottom: 18px;
-    left: 50%;
-    width: max-content;
-    max-width: calc(100% - 40px);
-    padding: 4px 8px !important;
-    transform: translateX(-50%);
-    border: 1px solid var(--border) !important;
-    border-radius: 9px;
-    background: color-mix(in srgb, var(--bg-surface) 94%, transparent) !important;
-    box-shadow: 0 8px 24px rgba(32, 36, 30, 0.08);
+    padding: 2px 16px !important;
+    border: none !important;
+    border-bottom: 1px solid var(--border) !important;
+    background: var(--bg-editor) !important;
+}
+
+/* The row Toast UI fills with #f7f9fc would otherwise be the one light strip
+   across the top in dark mode. */
+.toastui-editor-defaultUI .toastui-editor-toolbar .toastui-editor-defaultUI-toolbar {
+    background: transparent !important;
+    border: none !important;
 }
 
 .toastui-editor-defaultUI .toastui-editor-toolbar-group {
