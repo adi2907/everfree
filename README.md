@@ -17,13 +17,13 @@ It's free, MIT-licensed, and the Mac app ships as a signed and notarized DMG.
 
 - Web app: [everfree.vercel.app](https://everfree.vercel.app)
 - Mobile: [everfree.vercel.app/mobile](https://everfree.vercel.app/mobile/)
-- Mac DMG: [EverFree.dmg](https://github.com/adi2907/everfree/releases/download/v1.6/EverFree.dmg)
+- Mac DMG: [EverFree.dmg](https://github.com/adi2907/everfree/releases/download/v1.6.1/EverFree.dmg)
 
 
 ## Getting started
 
 **On the Mac:** download the
-[DMG](https://github.com/adi2907/everfree/releases/download/v1.6/EverFree.dmg)
+[DMG](https://github.com/adi2907/everfree/releases/download/v1.6.1/EverFree.dmg)
 and open it — it's signed and notarized, so no Gatekeeper workarounds. The
 setup wizard walks you through allowing Documents access, optionally
 connecting Evernote to import your old notebooks as Markdown, and connecting
